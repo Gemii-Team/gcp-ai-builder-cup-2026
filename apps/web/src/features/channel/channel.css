@@ -139,6 +139,11 @@
   color: var(--color-returned-ink);
 }
 
+.notice-close {
+  margin-left: auto;
+  color: var(--color-returned-ink);
+}
+
 .notice-page {
   padding: 16px var(--pad);
 }

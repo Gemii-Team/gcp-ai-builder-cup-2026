@@ -19,6 +19,8 @@ export const keys = {
   channelTasks: (channelId: string) => ['tasks', { channelId }] as const,
   meeting: (id: string) => ['meeting', id] as const,
   file: (id: string) => ['file', id] as const,
+  /** The meeting a recording this session uploaded became: the id the file's pending and failed slips follow. */
+  recording: (fileId: string) => ['recording', fileId] as const,
 };
 
 /** The latest page, and every page `Load earlier` adds. */

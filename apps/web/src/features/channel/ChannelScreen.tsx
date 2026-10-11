@@ -9,11 +9,14 @@ import type { ChannelView, ChatMessage } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { useUiStore } from '../../state/ui';
 import { AppLink } from '../shell/AppLink';
+import { AttachButton, UploadNotice } from './Attach';
 import { ChannelHeader } from './ChannelHeader';
 import { Composer, type MentionTarget } from './Composer';
+import { MessageFiles } from './MessageFiles';
 import { MessageRow } from './MessageRow';
 import { Stream } from './Stream';
 import { useChannelMessages } from './useChannelMessages';
+import { useUpload } from './useUpload';
 
 /** The agent's mention: the one agent there is, called by its constant label. */
 const ASSISTANT: MentionTarget = { kind: 'agent', id: 'assistant', name: 'assistant' };
@@ -39,6 +42,7 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
   const members = useMembers(channel.id);
   const tasks = useChannelTasks(channel.id);
   const stream = useChannelMessages(channel.id);
+  const upload = useUpload(channel.id);
   const load = useMemo(() => createExcerptLoader(api, queryClient, lang), [api, queryClient, lang]);
 
   // The stream shows every message the channel has, so the channel is read up to its head while it is open.
@@ -89,13 +93,21 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
                 message={message}
                 authorName={names.get(message.authorId) ?? ''}
                 draftCount={draftsOf(message)}
+                below={<MessageFiles message={message} />}
                 onRetry={() => {
                   void stream.retry(message.clientMsgId);
                 }}
               />
             )}
           />
-          <Composer channelName={channel.name} people={people} canSend={stream.messages !== undefined} onSend={stream.send} />
+          <Composer
+            channelName={channel.name}
+            people={people}
+            canSend={stream.messages !== undefined}
+            onSend={stream.send}
+            attach={<AttachButton onPick={(file) => void upload.upload(file)} />}
+            notice={<UploadNotice state={upload.state} onDismiss={upload.dismiss} />}
+          />
         </main>
       </div>
     </ExcerptProvider>
