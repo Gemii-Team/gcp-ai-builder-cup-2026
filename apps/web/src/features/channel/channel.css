@@ -445,3 +445,121 @@
     padding-bottom: 6px;
   }
 }
+
+/* ===== Make a task: a small secondary button at the row's top right, left of the time ===== */
+.mact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-slip-paper);
+  color: var(--color-ledger-ink);
+  font-size: var(--text-label);
+  font-weight: var(--text-button--font-weight);
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, opacity .15s;
+}
+
+.mact:hover {
+  background: var(--color-counter-hover);
+  border-color: var(--color-control-line-hover);
+}
+
+.mact:active,
+.mact[aria-expanded="true"] {
+  background: var(--color-citation-wash);
+  border-color: var(--color-control-line-hover);
+}
+
+.head-notice {
+  flex: none;
+  padding: 8px var(--pad) 0;
+}
+
+/* From 1024px the action floats at the row's right and the text keeps clear of it. */
+@media (min-width: 1024px) {
+  .msg-h[data-action] {
+    position: relative;
+  }
+
+  .msg-h[data-action] .mact {
+    position: absolute;
+    top: -4px;
+    right: 64px;
+  }
+
+  .msg-h[data-action] .txt {
+    padding-right: 148px;
+  }
+}
+
+/* With a mouse it is invisible until the row is hovered or focused, and while its form is open. */
+@media (min-width: 1024px) and (hover: hover) {
+  .mact {
+    opacity: 0;
+  }
+
+  .msg:hover .mact,
+  .msg:focus-within .mact,
+  .mact[aria-expanded="true"] {
+    opacity: 1;
+  }
+}
+
+/* With touch, and on phones, it is always there, and it is the icon alone: 32px with a hit area of about 46px. */
+@media (max-width: 1023px) {
+  .mact {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    margin: -4px 0 -4px auto;
+    padding: 0;
+    border-color: transparent;
+    background: none;
+    color: var(--color-primary);
+  }
+
+  .mact .lbl {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .mact::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+  }
+
+  .mact:hover {
+    background: var(--color-citation-wash);
+    border-color: transparent;
+  }
+
+  .mact:active,
+  .mact[aria-expanded="true"] {
+    background: var(--color-mint-press);
+    border-color: transparent;
+  }
+
+  .mact + .msg-time {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .msg-h[data-has-chip] {
+    grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  }
+}

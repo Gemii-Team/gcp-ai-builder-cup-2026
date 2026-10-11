@@ -1,5 +1,5 @@
 import './channel.css';
-import { ExcerptProvider, Pending } from '@kiwi/ui';
+import { ExcerptProvider, formatClock, Pending } from '@kiwi/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, type ReactNode } from 'react';
 import { useApi } from '../../api/client';
@@ -12,10 +12,14 @@ import { AppLink } from '../shell/AppLink';
 import { AttachButton, UploadNotice } from './Attach';
 import { ChannelHeader } from './ChannelHeader';
 import { Composer, type MentionTarget } from './Composer';
+import { MadeTasks, MakeTask } from './MakeTask';
+import { MessageAction } from './MessageAction';
 import { MessageFiles } from './MessageFiles';
 import { MessageRow } from './MessageRow';
 import { Stream } from './Stream';
 import { useChannelMessages } from './useChannelMessages';
+import { useMakeTask } from './useMakeTask';
+import { useStartMeeting } from './useStartMeeting';
 import { useUpload } from './useUpload';
 
 /** The agent's mention: the one agent there is, called by its constant label. */
@@ -34,7 +38,7 @@ function Notice({ children }: { children: ReactNode }) {
 function ChannelContent({ channel }: { channel: ChannelView }) {
   const api = useApi();
   const queryClient = useQueryClient();
-  const { lang } = useI18n();
+  const { lang, plain } = useI18n();
   const markRead = useUiStore((state) => state.markRead);
   const setLastChannel = useUiStore((state) => state.setLastChannel);
   const me = useMe();
@@ -43,6 +47,8 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
   const tasks = useChannelTasks(channel.id);
   const stream = useChannelMessages(channel.id);
   const upload = useUpload(channel.id);
+  const make = useMakeTask();
+  const meeting = useStartMeeting(channel.id);
   const load = useMemo(() => createExcerptLoader(api, queryClient, lang), [api, queryClient, lang]);
 
   // The stream shows every message the channel has, so the channel is read up to its head while it is open.
@@ -74,7 +80,12 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
     <ExcerptProvider load={load}>
       <div className="chan">
         <main className="main">
-          <ChannelHeader channel={channel} memberCount={members.data?.length} />
+          <ChannelHeader channel={channel} memberCount={members.data?.length} onStartMeeting={() => void meeting.start()} starting={meeting.starting} />
+          {meeting.failed && (
+            <p className="notice head-notice" role="alert">
+              <T k="startMeetingFailed" />
+            </p>
+          )}
           <Stream
             channel={channel}
             messages={stream.messages}
@@ -88,17 +99,56 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
             onLoadEarlier={() => {
               void stream.loadEarlier();
             }}
-            renderRow={(message) => (
-              <MessageRow
-                message={message}
-                authorName={names.get(message.authorId) ?? ''}
-                draftCount={draftsOf(message)}
-                below={<MessageFiles message={message} />}
-                onRetry={() => {
-                  void stream.retry(message.clientMsgId);
-                }}
-              />
-            )}
+            renderRow={(message) => {
+              const authorName = names.get(message.authorId) ?? '';
+              const human = message.authorKind === 'user' && message.delivery === undefined;
+              const formId = `make-task-${message.id}`;
+              return (
+                <MessageRow
+                  message={message}
+                  authorName={authorName}
+                  draftCount={draftsOf(message)}
+                  action={
+                    human ? (
+                      <MessageAction
+                        authorName={authorName}
+                        time={formatClock(message.createdAt)}
+                        expanded={make.openId === message.id}
+                        controls={formId}
+                        onPress={() => {
+                          make.toggle(message.id);
+                        }}
+                      />
+                    ) : undefined
+                  }
+                  below={
+                    <>
+                      <MessageFiles message={message} />
+                      {human && make.openId === message.id && (
+                        <MakeTask
+                          id={formId}
+                          message={message}
+                          channel={channel}
+                          authorName={authorName}
+                          onCreated={(task) => {
+                            make.made(task.id, plain('taskMadeAnnouncement', { code: task.ref, title: task.title }));
+                          }}
+                          onCancel={() => {
+                            make.cancel(message.id);
+                          }}
+                        />
+                      )}
+                      {human && (
+                        <MadeTasks message={message} channel={channel} authorName={authorName} ownerNameOf={(id) => names.get(id)} focusTaskId={make.focusTaskId} />
+                      )}
+                    </>
+                  }
+                  onRetry={() => {
+                    void stream.retry(message.clientMsgId);
+                  }}
+                />
+              );
+            }}
           />
           <Composer
             channelName={channel.name}
@@ -108,6 +158,9 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
             attach={<AttachButton onPick={(file) => void upload.upload(file)} />}
             notice={<UploadNotice state={upload.state} onDismiss={upload.dismiss} />}
           />
+          <p role="status" className="sr-only">
+            {make.announcement}
+          </p>
         </main>
       </div>
     </ExcerptProvider>

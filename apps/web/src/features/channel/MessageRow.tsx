@@ -87,7 +87,7 @@ export function MessageRow({ message, authorName, draftCount, action, below, onR
 
   return (
     <article className="msg" data-message-id={message.id}>
-      <div className="msg-h" data-human={human || undefined} data-has-chip={message.files.length > 0 || undefined}>
+      <div className="msg-h" data-human={human || undefined} data-action={action !== undefined || undefined} data-has-chip={message.files.length > 0 || undefined}>
         {human ? (
           <span className="av" aria-hidden="true">
             {initialOf(authorName)}
