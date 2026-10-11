@@ -32,8 +32,10 @@ SELECT * FROM meetings.meetings WHERE id = sqlc.arg(id) FOR UPDATE;
 
 -- name: ListPollableMeetings :many
 -- The meetings the poll asks Meet about: a space, still waiting for its summary, made
--- since the cut-off. It reads every workspace, so it runs through db.System.
-SELECT id, workspace_id, owner_user_id, meet_space
+-- since the cut-off. It reads every workspace, so it runs through db.System. It
+-- carries what the poll has recorded so far, so a tick that learns nothing new needs
+-- no transaction at all.
+SELECT id, workspace_id, owner_user_id, meet_space, status, conference_record, started_at, ended_at
 FROM meetings.meetings
 WHERE meet_space IS NOT NULL
   AND status IN ('pending', 'ingesting')

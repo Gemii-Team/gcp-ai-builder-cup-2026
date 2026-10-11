@@ -179,7 +179,7 @@ func (q *Queries) InsertTranscriptEntries(ctx context.Context, arg InsertTranscr
 }
 
 const listPollableMeetings = `-- name: ListPollableMeetings :many
-SELECT id, workspace_id, owner_user_id, meet_space
+SELECT id, workspace_id, owner_user_id, meet_space, status, conference_record, started_at, ended_at
 FROM meetings.meetings
 WHERE meet_space IS NOT NULL
   AND status IN ('pending', 'ingesting')
@@ -188,14 +188,20 @@ ORDER BY created_at, id
 `
 
 type ListPollableMeetingsRow struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	OwnerUserID uuid.UUID
-	MeetSpace   *string
+	ID               uuid.UUID
+	WorkspaceID      uuid.UUID
+	OwnerUserID      uuid.UUID
+	MeetSpace        *string
+	Status           string
+	ConferenceRecord *string
+	StartedAt        pgtype.Timestamptz
+	EndedAt          pgtype.Timestamptz
 }
 
 // The meetings the poll asks Meet about: a space, still waiting for its summary, made
-// since the cut-off. It reads every workspace, so it runs through db.System.
+// since the cut-off. It reads every workspace, so it runs through db.System. It
+// carries what the poll has recorded so far, so a tick that learns nothing new needs
+// no transaction at all.
 func (q *Queries) ListPollableMeetings(ctx context.Context, since pgtype.Timestamptz) ([]ListPollableMeetingsRow, error) {
 	rows, err := q.db.Query(ctx, listPollableMeetings, since)
 	if err != nil {
@@ -210,6 +216,10 @@ func (q *Queries) ListPollableMeetings(ctx context.Context, since pgtype.Timesta
 			&i.WorkspaceID,
 			&i.OwnerUserID,
 			&i.MeetSpace,
+			&i.Status,
+			&i.ConferenceRecord,
+			&i.StartedAt,
+			&i.EndedAt,
 		); err != nil {
 			return nil, err
 		}

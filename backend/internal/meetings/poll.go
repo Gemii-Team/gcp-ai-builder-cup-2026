@@ -78,6 +78,17 @@ func pollOne(ctx context.Context, d *db.DB, g google.Client, m store.ListPollabl
 	if !ok {
 		return nil // nobody has joined yet
 	}
+	// Postgres keeps microseconds; comparing and storing the same truncated value is
+	// what lets a later tick see that nothing changed.
+	start := conf.StartTime.UTC().Truncate(time.Microsecond)
+	var end *time.Time
+	if conf.EndTime != nil {
+		end = new(conf.EndTime.UTC().Truncate(time.Microsecond))
+	}
+	transcript, generated := earliestGenerated(conf)
+	if !learnsSomething(m, conf.Name, start, end, generated) {
+		return nil
+	}
 
 	return d.InWorkspace(ctx, m.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
@@ -89,29 +100,25 @@ func pollOne(ctx context.Context, d *db.DB, g google.Client, m store.ListPollabl
 			return nil // it settled while Meet was being asked
 		}
 		var ended pgtype.Timestamptz
-		if conf.EndTime != nil {
-			ended = timestamp(*conf.EndTime)
+		if end != nil {
+			ended = timestamp(*end)
 		}
 		row, err := q.RecordConference(ctx, store.RecordConferenceParams{
-			ID: m.ID, ConferenceRecord: &conf.Name, StartedAt: timestamp(conf.StartTime), EndedAt: ended,
+			ID: m.ID, ConferenceRecord: &conf.Name, StartedAt: timestamp(start), EndedAt: ended,
 		})
 		if err != nil {
 			return fmt.Errorf("record conference: %w", err)
 		}
 
-		if !cur.EndedAt.Valid && conf.EndTime != nil {
-			if err := enqueue(ctx, tx, events.TopicMeetingTranscriptCheck, row, conf.EndTime.Add(transcriptCheckDelay), &eventsv1.MeetingTranscriptCheck{
+		if !cur.EndedAt.Valid && end != nil {
+			if err := enqueue(ctx, tx, events.TopicMeetingTranscriptCheck, row, end.Add(transcriptCheckDelay), &eventsv1.MeetingTranscriptCheck{
 				WorkspaceId: row.WorkspaceID.String(), MeetingId: row.ID.String(),
 			}); err != nil {
 				return err
 			}
 		}
 
-		if row.Status != statusPending {
-			return nil
-		}
-		name, ok := earliestGenerated(conf)
-		if !ok {
+		if row.Status != statusPending || !generated {
 			return nil
 		}
 		started, err := q.StartIngest(ctx, row.ID)
@@ -119,9 +126,21 @@ func pollOne(ctx context.Context, d *db.DB, g google.Client, m store.ListPollabl
 			return fmt.Errorf("start ingest: %w", err)
 		}
 		return enqueue(ctx, tx, events.TopicMeetingIngest, started, time.Time{}, &eventsv1.MeetingIngest{
-			WorkspaceId: started.WorkspaceID.String(), MeetingId: started.ID.String(), TranscriptName: name, Attempt: 1,
+			WorkspaceId: started.WorkspaceID.String(), MeetingId: started.ID.String(), TranscriptName: transcript, Attempt: 1,
 		})
 	})
+}
+
+// learnsSomething reports whether what Meet says differs from what the poll enumerated
+// for the meeting: another conference, another start, an end not yet recorded, or a
+// generated transcript a pending meeting has not started to ingest. A tick that learns
+// nothing writes nothing, not even a row lock, so a meeting that waits for its
+// transcript costs one Meet call per tick and no database write.
+func learnsSomething(m store.ListPollableMeetingsRow, conference string, start time.Time, end *time.Time, generated bool) bool {
+	return deref(m.ConferenceRecord) != conference ||
+		!m.StartedAt.Valid || !m.StartedAt.Time.Equal(start) ||
+		(end != nil && !m.EndedAt.Valid) ||
+		(generated && m.Status == statusPending)
 }
 
 // latestConference is the conference of a space that started last; the second result

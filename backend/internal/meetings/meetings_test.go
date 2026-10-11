@@ -82,6 +82,22 @@ func (s *fakeSummarizer) asked() []SummarizeInput {
 	return slices.Clone(s.calls)
 }
 
+// hookedChat is the real chat service whose transactional post can be made to fail,
+// which is how the tests break the write a job makes in its one transaction.
+type hookedChat struct {
+	chat.Service
+	hook *func(ctx context.Context) error
+}
+
+func (c hookedChat) PostMessageTx(ctx context.Context, tx pgx.Tx, a authz.Actor, req *chatv1.SendMessageRequest) (*chatv1.Message, error) {
+	if h := *c.hook; h != nil {
+		if err := h(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return c.Service.PostMessageTx(ctx, tx, a, req)
+}
+
 // fixture is one migrated database, the real chat service, a scripted Meet and a
 // scripted summarizer, with a workspace holding Alice, Bob and Carol.
 type fixture struct {
@@ -97,6 +113,9 @@ type fixture struct {
 	ingest, check bus.Handler
 	// logs holds what the meetings code logged during the test.
 	logs *bytes.Buffer
+	// chatHook, when set, runs before every post the meetings code makes inside a
+	// transaction; an error from it fails the post.
+	chatHook func(ctx context.Context) error
 	// now is the clock the code under test reads.
 	now time.Time
 
@@ -124,7 +143,10 @@ func newFixture(t *testing.T) *fixture {
 	az := authz.New(sqlMembership{db: d})
 	f := &fixture{t: t, env: env, db: d, g: fakegoogle.New(), summ: &fakeSummarizer{reply: defaultSummary()}, logs: logs, now: base}
 	f.chat = chat.New(chat.Deps{DB: d, Authz: az})
-	f.deps = Deps{DB: d, Authz: az, Google: f.g, Chat: f.chat, Summarizer: f.summ, Clock: func() time.Time { return f.now }}
+	f.deps = Deps{
+		DB: d, Authz: az, Google: f.g, Chat: hookedChat{Service: f.chat, hook: &f.chatHook},
+		Summarizer: f.summ, Clock: func() time.Time { return f.now },
+	}
 	f.svc = New(f.deps)
 	jobs := Jobs(f.deps)
 	if len(jobs) != 2 || jobs[0].Consumer != "meeting.ingest" || jobs[1].Consumer != "meeting.transcript_check" {
@@ -1248,8 +1270,9 @@ func TestIngest_ReferencesToMissingEntriesAreIgnored(t *testing.T) {
 	var td eventsv1.TaskDraftRequested
 	f.payload(f.outbox(events.TopicTaskDraft)[0], &td)
 	for _, it := range td.GetItems() {
-		if it.GetEntryIdx() != 0 || it.OffsetMs != nil {
-			t.Errorf("draft item %q = %v, want entry 0 and no offset when no cited entry exists", it.GetTitle(), it)
+		// -1 says "no source": 0 would be indistinguishable from a real entry 0.
+		if it.GetEntryIdx() != -1 || it.OffsetMs != nil {
+			t.Errorf("draft item %q = %v, want entry_idx -1 and no offset when no cited entry exists", it.GetTitle(), it)
 		}
 	}
 }
@@ -1711,7 +1734,7 @@ func TestRetrySummary_OnlyFailedMeetings(t *testing.T) {
 	ch := f.channel("public", f.alice, f.bob)
 	file := uuid.New()
 	meet := f.seedMeeting(seed{channel: ch, space: space, status: statusFailed, last: new(int32(4))})
-	f.exec(`UPDATE meetings.meetings SET failure_reason = 'model_unavailable' WHERE id = $1`, meet)
+	f.exec(`UPDATE meetings.meetings SET failure_reason = 'model_unavailable', conference_record = 'conferenceRecords/c1' WHERE id = $1`, meet)
 	recording := f.seedMeeting(seed{channel: ch, recording: file, status: statusFailed})
 	f.exec(`UPDATE meetings.meetings SET failure_reason = 'no_speech' WHERE id = $1`, recording)
 
@@ -2060,6 +2083,457 @@ func TestPipeline_StartToReady_ThroughRelayAndMemoryBus(t *testing.T) {
 	if n := f.topicCount(events.TopicMeetingTranscriptCheck); n != 1 {
 		t.Errorf("%d transcript checks, want 1", n)
 	}
+}
+
+// ---- review fixes -----------------------------------------------------------
+
+// rowVersion identifies the physical version of a meeting row and who locked it: an
+// UPDATE moves xmin and SELECT ... FOR UPDATE sets xmax, so it changes whenever the
+// code wrote to, or even only locked, the row.
+func (f *fixture) rowVersion(id uuid.UUID) string {
+	f.t.Helper()
+	var v string
+	f.scalar(&v, `SELECT xmin::text || '/' || xmax::text FROM meetings.meetings WHERE id = $1`, id)
+	return v
+}
+
+func TestIngest_ModelOutputIsSanitisedBeforeItIsStored(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space, status: statusIngesting, last: new(int32(3))})
+	// A NUL (Postgres text and jsonb refuse it), an invalid byte (protojson refuses it),
+	// a bidi override and a bidi isolate (they reorder what a reader sees).
+	const dirty = "a\x00b\xffc\u202ed\u2066e"
+	const clean = "ab\uFFFDcde"
+	f.summ.reply = Summary{
+		Summary:       "S" + dirty,
+		Decisions:     []Item{{Text: "D" + dirty, EntryRefs: []int{1}}},
+		OpenQuestions: []Item{{Text: "Q" + dirty, EntryRefs: []int{0}}},
+		ActionItems:   []ActionItem{{Title: "T" + dirty, OwnerHint: "O" + dirty, DueHint: "H" + dirty, EntryRefs: []int{1}}},
+	}
+	f.g.QueueListTranscriptEntries(entriesReply(3))
+
+	if err := f.deliver(f.ingest, f.ingestEvent(id, t1, 2), 1); err != nil {
+		t.Fatalf("ingest = %v, want nil: the model's text must not make the one transaction fail for ever", err)
+	}
+
+	if got := f.status(id); got != statusReady {
+		t.Fatalf("status = %q, want ready", got)
+	}
+	got, err := f.svc.GetMeeting(t.Context(), f.user(f.alice), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetSummary() != "S"+clean || got.GetDecisions()[0].GetText() != "D"+clean || got.GetOpenQuestions()[0].GetText() != "Q"+clean {
+		t.Errorf("stored summary = %q %q %q, want the model's text without NUL, bad bytes and bidi controls",
+			got.GetSummary(), got.GetDecisions()[0].GetText(), got.GetOpenQuestions()[0].GetText())
+	}
+	a := f.messages(ch)[0].GetArtifact()
+	if a.GetBodyMarkdown() != "S"+clean || a.GetTracks()[0].GetText() != "D"+clean || a.GetTracks()[1].GetText() != "Q"+clean {
+		t.Errorf("slip = %q %q %q, want the same clean text", a.GetBodyMarkdown(), a.GetTracks()[0].GetText(), a.GetTracks()[1].GetText())
+	}
+	var td eventsv1.TaskDraftRequested
+	f.payload(f.outbox(events.TopicTaskDraft)[0], &td)
+	if it := td.GetItems()[0]; it.GetTitle() != "T"+clean || it.GetOwnerHint() != "O"+clean || it.GetDueHint() != "H"+clean {
+		t.Errorf("task.draft item = %v, want the same clean text", it)
+	}
+}
+
+func TestIngest_FailingApply_NacksThenEndsFailedOnTheFinalDelivery(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space, status: statusIngesting, last: new(int32(3))})
+	f.g.HandleListTranscriptEntries(func(context.Context, uuid.UUID, string) ([]google.Entry, error) {
+		return entriesOf(3, true, true), nil
+	})
+	boom := errors.New("chat is down")
+	f.chatHook = func(context.Context) error { return boom }
+	msg := f.ingestEvent(id, t1, 2)
+
+	for attempt := 1; attempt < finalAttempt; attempt++ {
+		if err := f.deliver(f.ingest, msg, attempt); !errors.Is(err, boom) {
+			t.Fatalf("delivery %d: ingest = %v, want the write's error so the bus redelivers", attempt, err)
+		}
+		if got := f.status(id); got != statusIngesting {
+			t.Fatalf("delivery %d: status = %q, want ingesting", attempt, got)
+		}
+		if n := f.count(`SELECT count(*) FROM meetings.transcript_entries`) + f.count(`SELECT count(*) FROM meetings.summaries`) +
+			f.count(`SELECT count(*) FROM platform.processed_events`) + len(f.topics()); n != 0 {
+			t.Fatalf("delivery %d left %d rows behind, want the failed transaction rolled back whole", attempt, n)
+		}
+	}
+
+	if err := f.deliver(f.ingest, msg, finalAttempt); err != nil {
+		t.Fatalf("final delivery: ingest = %v, want nil: nothing delivers it again, so the meeting must be settled", err)
+	}
+	row := f.meeting(id)
+	if row.Status != statusFailed || row.Reason == nil || *row.Reason != "internal" {
+		t.Fatalf("meeting = %q (%v), want failed with internal", row.Status, row.Reason)
+	}
+	if msgs := f.messages(ch); len(msgs) != 0 {
+		t.Errorf("%d messages posted for a failed meeting", len(msgs))
+	}
+	ready := f.outbox(events.TopicMeetingSummaryReady)
+	if len(ready) != 1 {
+		t.Fatalf("%d meeting.summary_ready events, want 1", len(ready))
+	}
+	var sr eventsv1.MeetingSummaryReady
+	f.payload(ready[0], &sr)
+	if sr.GetStatus() != meetingsv1.MeetingStatus_MEETING_STATUS_FAILED || sr.GetFailureReason() != "internal" || sr.GetMeetingId() != id.String() {
+		t.Errorf("summary_ready = %v, want FAILED internal", &sr)
+	}
+
+	// The message is settled: a late redelivery (the cause gone) changes nothing.
+	f.chatHook = nil
+	if err := f.deliver(f.ingest, msg, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.status(id); got != statusFailed {
+		t.Errorf("status after a late redelivery = %q, want it still failed", got)
+	}
+}
+
+func TestIngest_FailingApplyOnTheFinalDeliveryWhileStopping_LeavesTheMeeting(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space, status: statusIngesting, last: new(int32(3))})
+	f.g.HandleListTranscriptEntries(func(context.Context, uuid.UUID, string) ([]google.Entry, error) {
+		return entriesOf(3, true, true), nil
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	f.chatHook = func(context.Context) error {
+		cancel() // the process is stopping while the transaction runs
+		return errors.New("chat is down")
+	}
+	msg := f.ingestEvent(id, t1, 2)
+	msg.Attempt = finalAttempt
+
+	if err := f.ingest(ctx, msg); err == nil {
+		t.Fatal("ingest returned nil, want the error so the message is redelivered")
+	}
+
+	if got := f.status(id); got != statusIngesting {
+		t.Errorf("status = %q, want ingesting: a process that is stopping must not fail the meeting", got)
+	}
+	if n := f.topicCount(events.TopicMeetingSummaryReady); n != 0 {
+		t.Errorf("%d meeting.summary_ready events, want none", n)
+	}
+}
+
+func TestTranscriptCheck_FailingApply_NacksThenEndsFailedOnTheFinalDelivery(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space})
+	boom := errors.New("chat is down")
+	f.chatHook = func(context.Context) error { return boom }
+	msg := f.checkEvent(id)
+
+	for attempt := 1; attempt < finalAttempt; attempt++ {
+		if err := f.deliver(f.check, msg, attempt); !errors.Is(err, boom) {
+			t.Fatalf("delivery %d: check = %v, want the write's error", attempt, err)
+		}
+		if got := f.status(id); got != statusPending {
+			t.Fatalf("delivery %d: status = %q, want pending", attempt, got)
+		}
+	}
+	if err := f.deliver(f.check, msg, finalAttempt); err != nil {
+		t.Fatalf("final delivery: check = %v, want nil", err)
+	}
+	row := f.meeting(id)
+	if row.Status != statusFailed || row.Reason == nil || *row.Reason != "internal" {
+		t.Errorf("meeting = %q (%v), want failed with internal", row.Status, row.Reason)
+	}
+}
+
+func TestIngest_RereadLoopIsBounded(t *testing.T) {
+	// The cap is 10 reads: one per link of the chain of re-reads, counted by the
+	// event's attempt.
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space, status: statusIngesting, last: new(int32(1))})
+	n := 1
+	f.g.HandleListTranscriptEntries(func(context.Context, uuid.UUID, string) ([]google.Entry, error) {
+		n++ // a transcript that never settles: every read differs from the last
+		return entriesOf(n, true, true), nil
+	})
+
+	if err := f.deliver(f.ingest, f.ingestEvent(id, t1, 9), 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.status(id); got != statusIngesting {
+		t.Fatalf("status after read 9 = %q, want ingesting", got)
+	}
+	rows := f.outbox(events.TopicMeetingIngest)
+	if len(rows) != 1 {
+		t.Fatalf("%d re-reads after read 9, want 1", len(rows))
+	}
+	var ev eventsv1.MeetingIngest
+	f.payload(rows[0], &ev)
+	if ev.GetAttempt() != 10 {
+		t.Fatalf("re-read attempt = %d, want 10", ev.GetAttempt())
+	}
+
+	if err := f.deliver(f.ingest, f.message(rows[0]), 1); err != nil {
+		t.Fatalf("read 10: %v", err)
+	}
+	row := f.meeting(id)
+	if row.Status != statusFailed || row.Reason == nil || *row.Reason != "meet_unavailable" {
+		t.Fatalf("meeting = %q (%v), want failed with meet_unavailable once the 10th read still disagrees", row.Status, row.Reason)
+	}
+	if n := f.topicCount(events.TopicMeetingIngest); n != 1 {
+		t.Errorf("%d meeting.ingest events, want no re-read after the cap", n)
+	}
+	var sr eventsv1.MeetingSummaryReady
+	f.payload(f.outbox(events.TopicMeetingSummaryReady)[0], &sr)
+	if sr.GetStatus() != meetingsv1.MeetingStatus_MEETING_STATUS_FAILED || sr.GetFailureReason() != "meet_unavailable" {
+		t.Errorf("summary_ready = %v, want FAILED meet_unavailable", &sr)
+	}
+	if n := f.count(`SELECT count(*) FROM meetings.transcript_entries`); n != 0 {
+		t.Errorf("%d entries written for a transcript that never settled", n)
+	}
+}
+
+func TestPoll_UnchangedTickWritesNothing(t *testing.T) {
+	// Nanoseconds that Postgres cannot keep: the stored value must still compare equal.
+	start := time.Date(2026, 10, 11, 9, 0, 0, 123456789, time.UTC)
+	end := time.Date(2026, 10, 11, 9, 40, 0, 987654321, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		status string
+		conf   google.Conference
+	}{
+		{"running conference", statusPending, conference("conferenceRecords/c1", start, nil)},
+		{"ended conference without a transcript", statusPending, conference("conferenceRecords/c1", start, &end)},
+		{"transcript still being generated", statusPending, conference("conferenceRecords/c1", start, &end, transcript(t1, google.StateEnded, &end))},
+		{"transcript read has started", statusPending, conference("conferenceRecords/c1", start, &end, transcript(t1, google.StateFileGenerated, &end))},
+		{"ingesting meeting", statusIngesting, conference("conferenceRecords/c1", start, &end, transcript(t1, google.StateFileGenerated, &end))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			ch := f.channel("public", f.alice)
+			id := f.seedMeeting(seed{channel: ch, space: space, status: tc.status})
+			f.g.HandleListConferences(func(context.Context, uuid.UUID, string) ([]google.Conference, error) {
+				return []google.Conference{tc.conf}, nil
+			})
+			if err := f.poll(); err != nil {
+				t.Fatal(err)
+			}
+			version, outbox := f.rowVersion(id), len(f.topics())
+
+			for i := range 3 {
+				if err := f.poll(); err != nil {
+					t.Fatal(err)
+				}
+				if got := f.rowVersion(id); got != version {
+					t.Fatalf("tick %d wrote to (or locked) a meeting nothing changed for: row version %s, was %s", i+2, got, version)
+				}
+			}
+			if got := len(f.topics()); got != outbox {
+				t.Errorf("%d outbox rows after the unchanged ticks, want still %d", got, outbox)
+			}
+			if calls := len(f.g.Calls()); calls != 4 {
+				t.Errorf("%d Meet calls, want one per tick", calls)
+			}
+		})
+	}
+}
+
+func TestPoll_ChangeAfterAnUnchangedTick_IsStillRecorded(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space})
+	running := conference("conferenceRecords/c1", at(9, 0), nil)
+	ended := conference("conferenceRecords/c1", at(9, 0), new(at(9, 40)))
+	generated := conference("conferenceRecords/c1", at(9, 0), new(at(9, 40)), transcript(t1, google.StateFileGenerated, new(at(9, 41))))
+	f.g.QueueListConferences(conferences(running), conferences(running), conferences(ended), conferences(ended), conferences(generated))
+
+	for range 2 {
+		if err := f.poll(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if row := f.meeting(id); row.Ended != nil {
+		t.Fatalf("ended_at = %v while the conference runs", row.Ended)
+	}
+	for range 2 {
+		if err := f.poll(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if row := f.meeting(id); row.Ended == nil || !row.Ended.Equal(at(9, 40)) || f.topicCount(events.TopicMeetingTranscriptCheck) != 1 {
+		t.Fatalf("after the end: ended_at %v with %d checks, want 09:40 and one check", row.Ended, f.topicCount(events.TopicMeetingTranscriptCheck))
+	}
+	if err := f.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.status(id); got != statusIngesting || f.topicCount(events.TopicMeetingIngest) != 1 {
+		t.Errorf("status %q with %d ingest events after the transcript was generated, want ingesting and one", got, f.topicCount(events.TopicMeetingIngest))
+	}
+}
+
+func TestRetrySummary_MeetMeetingThatNeverHadAConference_ReturnsToPending(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id := f.seedMeeting(seed{channel: ch, space: space})
+	f.g.QueueListConferences(fakegoogle.ConferencesReply{Err: &google.ConsentRequiredError{URL: "/api/auth/meet-consent"}})
+	if err := f.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if row := f.meeting(id); row.Status != statusFailed || row.Reason == nil || *row.Reason != "meet_access" || row.Conference != nil {
+		t.Fatalf("meeting = %+v, want failed with meet_access before any conference was seen", row)
+	}
+
+	if err := f.svc.RetrySummary(t.Context(), f.user(f.alice), id); err != nil {
+		t.Fatal(err)
+	}
+
+	row := f.meeting(id)
+	if row.Status != statusPending || row.Reason != nil {
+		t.Fatalf("meeting = %+v, want pending with no reason: there is no transcript to look for yet, the poll keeps looking", row)
+	}
+	if n := f.topicCount(events.TopicMeetingIngest); n != 0 {
+		t.Errorf("%d meeting.ingest events, want none: an ingest would end it as no_transcript", n)
+	}
+	var sr eventsv1.MeetingSummaryReady
+	f.payload(f.outbox(events.TopicMeetingSummaryReady)[1], &sr)
+	if sr.GetStatus() != meetingsv1.MeetingStatus_MEETING_STATUS_PENDING {
+		t.Errorf("summary_ready after the retry = %v, want PENDING", &sr)
+	}
+
+	// The grant is back: the poll finds the transcript as it would have the first time.
+	f.g.QueueListConferences(conferences(conference("conferenceRecords/c1", at(9, 0), new(at(9, 40)), transcript(t1, google.StateFileGenerated, new(at(9, 41))))))
+	if err := f.poll(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.status(id); got != statusIngesting || f.topicCount(events.TopicMeetingIngest) != 1 {
+		t.Errorf("status %q with %d ingest events, want ingesting and one", got, f.topicCount(events.TopicMeetingIngest))
+	}
+}
+
+func TestMeetingDates_AreBangkokTime(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	// 01:30 on 11 October in Bangkok, still the 10th in UTC.
+	f.now = time.Date(2026, 10, 10, 18, 30, 0, 0, time.UTC)
+	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
+
+	started, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.GetTitle() != "Meeting 2026-10-11" {
+		t.Errorf("default title = %q, want the Bangkok date", started.GetTitle())
+	}
+
+	id := uuid.MustParse(started.GetId())
+	f.exec(`UPDATE meetings.meetings SET status = 'ingesting', last_entry_count = 3, ended_at = $2 WHERE id = $1`, id, f.now)
+	f.g.QueueListTranscriptEntries(entriesReply(3))
+	if err := f.deliver(f.ingest, f.ingestEvent(id, t1, 2), 1); err != nil {
+		t.Fatal(err)
+	}
+	slip := f.messages(ch)[1].GetArtifact()
+	if slip.GetMeta() != "2026-10-11" {
+		t.Errorf("slip meta = %q, want the Bangkok date of the meeting", slip.GetMeta())
+	}
+	if asked := f.summ.asked(); len(asked) != 1 || !asked[0].MeetingDate.Equal(f.now) {
+		t.Errorf("summarizer input = %+v, want the meeting date as the instant it ended", asked)
+	}
+}
+
+func TestPoll_ExactlyTwentyFourHoursOld_IsIgnored(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	f.seedMeeting(seed{channel: ch, space: "spaces/exactly", age: 24 * time.Hour})
+	f.seedMeeting(seed{channel: ch, space: "spaces/inside", age: 24*time.Hour - time.Second})
+	f.g.HandleListConferences(func(context.Context, uuid.UUID, string) ([]google.Conference, error) { return nil, nil })
+
+	if err := f.poll(); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []fakegoogle.Call{{Method: "ListConferences", UserID: f.alice, Name: "spaces/inside"}}; !slices.Equal(f.g.Calls(), want) {
+		t.Errorf("Meet calls = %+v, want only the meeting a second inside the window", f.g.Calls())
+	}
+}
+
+func TestStartMeeting_LinkPostFailure_RollsBackTheMeeting(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	boom := errors.New("chat is down")
+	f.chatHook = func(context.Context) error { return boom }
+	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
+
+	if _, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch); !errors.Is(err, boom) {
+		t.Fatalf("StartMeeting = %v, want the post's error", err)
+	}
+
+	if n := f.count(`SELECT count(*) FROM meetings.meetings`); n != 0 {
+		t.Errorf("%d meetings after a failed link post, want the row rolled back with it", n)
+	}
+	if msgs := f.messages(ch); len(msgs) != 0 {
+		t.Errorf("%d messages, want none", len(msgs))
+	}
+	if topics := f.topics(); len(topics) != 0 {
+		t.Errorf("outbox topics = %v, want none", topics)
+	}
+
+	// The REF number rolled back too: the next meeting is the first one.
+	f.chatHook = nil
+	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
+	got, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetRef() != "MTG-1001" {
+		t.Errorf("ref = %q, want MTG-1001: a rolled-back meeting consumes no number", got.GetRef())
+	}
+}
+
+func TestPoll_CancelledContext_StopsAndWritesNothing(t *testing.T) {
+	t.Run("already cancelled", func(t *testing.T) {
+		f := newFixture(t)
+		ch := f.channel("public", f.alice)
+		id := f.seedMeeting(seed{channel: ch, space: space})
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		if err := PollMeetings(ctx, f.db, f.g, f.now); !errors.Is(err, context.Canceled) {
+			t.Fatalf("PollMeetings = %v, want context.Canceled", err)
+		}
+		if calls := f.g.Calls(); len(calls) != 0 {
+			t.Errorf("%d Meet calls from a cancelled poll", len(calls))
+		}
+		if got := f.status(id); got != statusPending {
+			t.Errorf("status = %q, want pending", got)
+		}
+	})
+
+	t.Run("cancelled between meetings", func(t *testing.T) {
+		f := newFixture(t)
+		ch := f.channel("public", f.alice)
+		first := f.seedMeeting(seed{channel: ch, space: "spaces/first", age: 2 * time.Hour})
+		second := f.seedMeeting(seed{channel: ch, space: "spaces/second", age: time.Hour})
+		ctx, cancel := context.WithCancel(t.Context())
+		f.g.HandleListConferences(func(ctx context.Context, _ uuid.UUID, _ string) ([]google.Conference, error) {
+			cancel() // the process stops while Meet is being asked about the first meeting
+			return nil, ctx.Err()
+		})
+
+		if err := PollMeetings(ctx, f.db, f.g, f.now); !errors.Is(err, context.Canceled) {
+			t.Fatalf("PollMeetings = %v, want context.Canceled", err)
+		}
+		if calls := f.g.Calls(); len(calls) != 1 || calls[0].Name != "spaces/first" {
+			t.Errorf("Meet calls = %+v, want only the first meeting asked about", calls)
+		}
+		for name, id := range map[string]uuid.UUID{"first": first, "second": second} {
+			if got := f.status(id); got != statusPending {
+				t.Errorf("%s meeting = %q, want pending", name, got)
+			}
+		}
+		if strings.Contains(f.logs.String(), "poll failed") {
+			t.Errorf("a shutdown was logged as a failure: %s", f.logs.String())
+		}
+	})
 }
 
 type fanFunc func(ctx context.Context, topic string, frame []byte) error

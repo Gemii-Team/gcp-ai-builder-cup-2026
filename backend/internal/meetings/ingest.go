@@ -71,6 +71,9 @@ const (
 	// summary that still fails on it is recorded as a failed meeting, because nothing
 	// will deliver the message again and the meeting would show a spinner for ever.
 	finalAttempt = 5
+	// maxReads is how many reads of a transcript, counted by MeetingIngest.attempt, the
+	// meeting waits for two of them to agree before it gives up on the transcript.
+	maxReads = 10
 	// rereadDelay is how long after a read that disagrees with the last one the
 	// transcript is read again.
 	rereadDelay = 2 * time.Minute
@@ -159,6 +162,9 @@ func (p *pipeline) prepareIngest(ctx context.Context, m bus.Message) (outbox.App
 	}
 	count := int32(len(read))
 	if row.LastEntryCount == nil || *row.LastEntryCount != count {
+		if ev.GetAttempt() >= maxReads {
+			return p.fail(ctx, row, reasonMeetUnavailable, m.Attempt, fmt.Errorf("the transcript's entry count did not settle in %d reads", maxReads)), nil
+		}
 		return p.reread(row, name, ev.GetAttempt(), count), nil
 	}
 	if count == 0 {
@@ -172,7 +178,7 @@ func (p *pipeline) prepareIngest(ctx context.Context, m bus.Message) (outbox.App
 	sum, err := p.summarizer.Summarize(ctx, SummarizeInput{MeetingTitle: row.Title, MeetingDate: meetingDate(row), Entries: entries})
 	switch {
 	case err == nil:
-		return p.ready(row, entries, sum), nil
+		return p.ready(row, entries, cleanSummary(sum)), nil
 	case ctx.Err() != nil:
 		// Not the meeting's fault: a process that is shutting down will find the
 		// message again.
@@ -318,7 +324,7 @@ func (p *pipeline) slip(row store.MeetingsMeeting, sum Summary, entries []*meeti
 		Kind:         chatv1.ArtifactKind_ARTIFACT_KIND_MEETING_SUMMARY,
 		Ref:          deref(row.Ref),
 		Title:        row.Title,
-		Meta:         meetingDate(row).Format(time.DateOnly),
+		Meta:         meetingDate(row).In(bangkok).Format(time.DateOnly),
 		BodyMarkdown: sum.Summary,
 		Tracks:       tracks,
 		Sources: []*chatv1.Source{{
@@ -338,14 +344,20 @@ func track(kind chatv1.TrackKind, it Item, byIdx map[int32]*meetingsv1.Entry) *c
 	return t
 }
 
+// NoSourceEntry is the entry_idx of a task.draft item that names no transcript entry:
+// entry 0 is a real entry, so zero cannot mean "none". Consumers of the event treat a
+// negative entry_idx as an item without a source anchor.
+const NoSourceEntry = -1
+
 // draftItems turns the action items into what the task drafter reads. Each points at
 // the first transcript entry it names; offset_ms is that entry's start and stays unset
-// for an entry without timing. An item that names no entry points at the first one.
+// for an entry without timing. An item that names no entry that exists has entry_idx
+// NoSourceEntry and no offset.
 func draftItems(items []ActionItem, entries []*meetingsv1.Entry) []*eventsv1.TaskDraftRequested_Item {
 	byIdx := indexEntries(entries)
 	out := make([]*eventsv1.TaskDraftRequested_Item, 0, len(items))
 	for _, ai := range items {
-		it := &eventsv1.TaskDraftRequested_Item{Title: ai.Title, OwnerHint: ai.OwnerHint, DueHint: ai.DueHint}
+		it := &eventsv1.TaskDraftRequested_Item{Title: ai.Title, OwnerHint: ai.OwnerHint, DueHint: ai.DueHint, EntryIdx: NoSourceEntry}
 		if e := anchorEntry(ai.EntryRefs, byIdx); e != nil {
 			it.EntryIdx = e.GetIdx()
 			if e.StartMs != nil {
@@ -379,8 +391,7 @@ func indexEntries(entries []*meetingsv1.Entry) map[int32]*meetingsv1.Entry {
 	return byIdx
 }
 
-// entryOf maps a Meet entry. Postgres refuses NUL in text, so it is dropped here
-// rather than failing the whole meeting; an empty speaker means Meet named none.
+// entryOf maps a Meet entry; an empty speaker means Meet named none.
 func entryOf(e google.Entry) *meetingsv1.Entry {
 	out := &meetingsv1.Entry{Idx: int32(e.Idx), Text: cleanText(e.Text), StartMs: e.StartMS, EndMs: e.EndMS}
 	if e.Speaker != "" {
@@ -389,8 +400,38 @@ func entryOf(e google.Entry) *meetingsv1.Entry {
 	return out
 }
 
+// cleanText makes text from outside, a transcript or the model, safe to store and to
+// show: a NUL is dropped (Postgres text and jsonb refuse it), an invalid UTF-8 byte
+// becomes U+FFFD (protojson refuses it), and the bidirectional embedding, override and
+// isolate controls are dropped (they reorder what a reader sees). One such character
+// would otherwise make the transaction that stores a meeting fail every time.
 func cleanText(s string) string {
-	return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "\uFFFD")
+	return strings.Map(func(r rune) rune {
+		if r == 0 || (r >= '\u202A' && r <= '\u202E') || (r >= '\u2066' && r <= '\u2069') {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, "\uFFFD"))
+}
+
+// cleanSummary returns sum with every text the model wrote passed through cleanText.
+func cleanSummary(sum Summary) Summary {
+	items := func(in []Item) []Item {
+		out := make([]Item, len(in))
+		for i, it := range in {
+			out[i] = Item{Text: cleanText(it.Text), EntryRefs: it.EntryRefs}
+		}
+		return out
+	}
+	actions := make([]ActionItem, len(sum.ActionItems))
+	for i, ai := range sum.ActionItems {
+		actions[i] = ActionItem{
+			Title: cleanText(ai.Title), OwnerHint: cleanText(ai.OwnerHint), DueHint: cleanText(ai.DueHint), EntryRefs: ai.EntryRefs,
+		}
+	}
+	return Summary{
+		Summary: cleanText(sum.Summary), Decisions: items(sum.Decisions), OpenQuestions: items(sum.OpenQuestions), ActionItems: actions,
+	}
 }
 
 // entryJSON is a transcript entry as InsertTranscriptEntries reads it; a nil pointer is

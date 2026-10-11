@@ -1,5 +1,12 @@
 // Package meetings owns Meet meetings, their transcripts and AI summaries. Other
 // domains reach it only through Service.
+//
+// Meet is polled (PollMeetings), not pushed: the poll finds the transcript and the
+// meeting.ingest job reads it until two reads agree. The jobs settle what they can: a
+// message the bus is about to dead-letter ends its meeting failed with a reason (see
+// settleOnFinalDelivery). The one residual is a database that stays unreachable for the
+// whole of the bus's retry window: the meeting then stays ingesting, and only a future
+// pass that recovers stale meetings would re-drive it.
 package meetings
 
 import (

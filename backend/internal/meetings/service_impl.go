@@ -52,7 +52,14 @@ const (
 	reasonNoSpeech = "no_speech"
 	// reasonModelUnavailable: the summarizer kept failing until the last attempt.
 	reasonModelUnavailable = "model_unavailable"
+	// reasonInternal: a write of the pipeline kept failing until the last delivery.
+	reasonInternal = "internal"
 )
+
+// bangkok is the zone in which people read the dates of a meeting. Thailand has had no
+// daylight saving time since 1920, so a fixed offset is the same as Asia/Bangkok and
+// the image needs no zone database.
+var bangkok = time.FixedZone("Asia/Bangkok", 7*60*60)
 
 const (
 	// slipAuthor is the agent whose name the meeting messages are posted under.
@@ -201,7 +208,7 @@ func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uui
 		}
 		row, err = store.New(tx).InsertMeeting(ctx, store.InsertMeetingParams{
 			ID: id, WorkspaceID: a.WorkspaceID, ChannelID: channelID, OwnerUserID: a.EffectiveUserID(),
-			Ref: &ref, Title: "Meeting " + s.clock().UTC().Format(time.DateOnly),
+			Ref: &ref, Title: "Meeting " + s.clock().In(bangkok).Format(time.DateOnly),
 			MeetSpace: &space.Name, MeetUri: &space.MeetingURI,
 		})
 		if err != nil {
@@ -349,9 +356,12 @@ func (s *service) TranscriptEntries(ctx context.Context, a authz.Actor, meetingI
 }
 
 // RetrySummary implements Service. Only a failed meeting can be retried. A recording
-// meeting goes back to pending and its transcription is announced again; a Meet
-// meeting goes back to ingesting with an ingest event that finds the transcript in
-// Meet itself, because the failure may have come before any transcript was seen.
+// meeting goes back to pending and its transcription is announced again. A Meet
+// meeting that has seen a conference goes back to ingesting with an ingest event that
+// finds the transcript in Meet itself, because the failure may have come before any
+// transcript was seen. One that never saw a conference (it failed while the poll was
+// still waiting for people to join) has nothing to ingest: it goes back to pending and
+// the poll keeps looking, as it would have had the failure not happened.
 func (s *service) RetrySummary(ctx context.Context, a authz.Actor, meetingID uuid.UUID) error {
 	row, err := s.authorize(ctx, a, meetingID, authz.ActMeetingWrite)
 	if err != nil {
@@ -359,11 +369,12 @@ func (s *service) RetrySummary(ctx context.Context, a authz.Actor, meetingID uui
 	}
 	return s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
-		if _, err := q.LockMeeting(ctx, row.ID); err != nil {
+		locked, err := q.LockMeeting(ctx, row.ID)
+		if err != nil {
 			return fmt.Errorf("meetings: lock meeting: %w", err)
 		}
 		next := statusIngesting
-		if row.RecordingFileID != nil {
+		if locked.RecordingFileID != nil || locked.ConferenceRecord == nil {
 			next = statusPending
 		}
 		restarted, err := q.RestartMeeting(ctx, store.RestartMeetingParams{ID: row.ID, Status: next})
@@ -373,14 +384,17 @@ func (s *service) RetrySummary(ctx context.Context, a authz.Actor, meetingID uui
 		if err != nil {
 			return fmt.Errorf("meetings: restart meeting: %w", err)
 		}
-		if restarted.RecordingFileID != nil {
+		switch {
+		case restarted.RecordingFileID != nil:
 			if err := enqueueTranscribe(ctx, tx, restarted); err != nil {
 				return err
 			}
-		} else if err := enqueue(ctx, tx, events.TopicMeetingIngest, restarted, time.Time{}, &eventsv1.MeetingIngest{
-			WorkspaceId: restarted.WorkspaceID.String(), MeetingId: restarted.ID.String(), Attempt: 1,
-		}); err != nil {
-			return err
+		case next == statusIngesting:
+			if err := enqueue(ctx, tx, events.TopicMeetingIngest, restarted, time.Time{}, &eventsv1.MeetingIngest{
+				WorkspaceId: restarted.WorkspaceID.String(), MeetingId: restarted.ID.String(), Attempt: 1,
+			}); err != nil {
+				return err
+			}
 		}
 		return enqueueStatus(ctx, tx, restarted)
 	})
