@@ -17,6 +17,7 @@ require (
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/adk/v2 v2.5.0
+	google.golang.org/api v0.298.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
 	google.golang.org/protobuf v1.36.12
 )
@@ -24,6 +25,7 @@ require (
 require (
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.23.2 // indirect
+	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
@@ -92,7 +94,6 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
-	google.golang.org/api v0.298.0 // indirect
 	google.golang.org/genai v1.71.0 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 )
