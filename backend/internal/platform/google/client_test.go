@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -531,6 +532,100 @@ func TestListConferences_UnknownTranscriptStateIsAnError(t *testing.T) {
 	_, err := newClient(t, m, tokenFor(t, user)).ListConferences(t.Context(), user, "spaces/abc123")
 	if err == nil {
 		t.Fatal("ListConferences accepted a transcript state outside STARTED|ENDED|FILE_GENERATED")
+	}
+	const want = `transcript conferenceRecords/cr1/transcripts/t1 has unexpected state "STATE_UNSPECIFIED"`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to name the transcript and the state: %q", err, want)
+	}
+}
+
+func TestListConferences_QuotesTheSpaceNameInTheFilter(t *testing.T) {
+	m := newMeetStub(t)
+	user := uuid.New()
+	m.mux.HandleFunc("GET /v2/conferenceRecords", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{})
+	})
+
+	if _, err := newClient(t, m, tokenFor(t, user)).ListConferences(t.Context(), user, `spaces/a"b\c`); err != nil {
+		t.Fatalf("ListConferences: %v", err)
+	}
+
+	reqs := m.requests("/v2/conferenceRecords")
+	if len(reqs) != 1 {
+		t.Fatalf("conferenceRecords requests = %d, want 1", len(reqs))
+	}
+	// The quote and the backslash are escaped, so the name cannot end the string and
+	// widen the filter.
+	if got, want := reqs[0].Query.Get("filter"), `space.name = "spaces/a\"b\\c"`; got != want {
+		t.Errorf("filter = %q, want %q", got, want)
+	}
+}
+
+func TestListConferences_ZeroEndTimeMapsToNil(t *testing.T) {
+	m := newMeetStub(t)
+	user := uuid.New()
+	const zero = "0001-01-01T00:00:00Z"
+	m.mux.HandleFunc("GET /v2/conferenceRecords", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{"conferenceRecords": []map[string]any{{
+			"name": "conferenceRecords/cr1", "startTime": "2026-10-11T10:00:00Z", "endTime": zero,
+		}}})
+	})
+	m.mux.HandleFunc("GET /v2/conferenceRecords/cr1/transcripts", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{"transcripts": []map[string]any{
+			{"name": "conferenceRecords/cr1/transcripts/t1", "state": "STARTED", "endTime": zero},
+		}})
+	})
+
+	got, err := newClient(t, m, tokenFor(t, user)).ListConferences(t.Context(), user, "spaces/abc123")
+	if err != nil {
+		t.Fatalf("ListConferences: %v", err)
+	}
+	if len(got) != 1 || len(got[0].Transcripts) != 1 {
+		t.Fatalf("got %+v, want one conference with one transcript", got)
+	}
+	// A conference that Meet reports with the zero time is still running: reading it
+	// as ended in year 1 would schedule the no-transcript check in the past.
+	expectNoTime(t, "conference EndTime", got[0].EndTime)
+	expectNoTime(t, "transcript EndTime", got[0].Transcripts[0].EndTime)
+}
+
+func TestCalls_PreCancelledContextFailsWithoutReachingMeet(t *testing.T) {
+	user := uuid.New()
+	calls := []struct {
+		name string
+		call func(context.Context, google.Client) error
+	}{
+		{"CreateMeetSpace", func(ctx context.Context, c google.Client) error {
+			_, err := c.CreateMeetSpace(ctx, user, true)
+			return err
+		}},
+		{"ListConferences", func(ctx context.Context, c google.Client) error {
+			_, err := c.ListConferences(ctx, user, "spaces/abc123")
+			return err
+		}},
+		{"ListTranscriptEntries", func(ctx context.Context, c google.Client) error {
+			_, err := c.ListTranscriptEntries(ctx, user, transcriptName)
+			return err
+		}},
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			m := newMeetStub(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+
+			err := c.call(ctx, newClient(t, m, tokenFor(t, user)))
+
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+			}
+			if google.IsAccessDenied(err) {
+				t.Errorf("a cancelled context was reported as lost access: %v", err)
+			}
+			if m.total() != 0 {
+				t.Errorf("Meet saw %d requests from a cancelled context", m.total())
+			}
+		})
 	}
 }
 
