@@ -197,6 +197,23 @@ func EnsureSeedWorkspace(ctx context.Context, d *db.DB, domain string, emails []
 	return workspaceID, ids, nil
 }
 
+// ListWorkspaceIDs returns the id of every workspace, in id order. It is for operator
+// commands that must visit each tenant, such as `kiwi reindex`, which has no workspace
+// to start from: identity owns identity.workspaces, so the enumeration lives here, and
+// it reads nothing else. It is one SELECT on identity.workspaces, within what
+// kiwi_system is granted; the caller then works inside each workspace as kiwi_app.
+func ListWorkspaceIDs(ctx context.Context, d *db.DB) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := d.System(ctx, func(ctx context.Context, tx pgx.Tx) (err error) {
+		ids, err = store.New(tx).ListWorkspaceIDs(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("identity: list workspaces: %w", err)
+	}
+	return ids, nil
+}
+
 func normalizeEmail(s string) string  { return strings.ToLower(strings.TrimSpace(s)) }
 func normalizeDomain(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 

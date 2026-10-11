@@ -1,10 +1,9 @@
 -- Queries of the knowledge domain (sqlc generates internal/knowledge/internal/store).
 --
 -- Everything runs as kiwi_app inside db.InWorkspace, where row-level security binds
--- each statement to one workspace, except ListWorkspaceIDs, which `kiwi reindex` runs
--- through db.System to find the workspaces whose chunks it re-embeds. The text[]
--- parameters are cast to uuid[] on the server: the pools use pgx's QueryExecModeExec,
--- which sends no parameter types and so cannot encode a []uuid.UUID.
+-- each statement to one workspace. The text[] parameters are cast to uuid[] on the
+-- server: the pools use pgx's QueryExecModeExec, which sends no parameter types and
+-- so cannot encode a []uuid.UUID.
 --
 -- A chunk's id is UUIDv5(workspace_id, source_kind/source_id/anchor), so an upsert by
 -- id is what makes indexing idempotent. The queries from GetMeetingSource to
@@ -78,9 +77,6 @@ LIMIT sqlc.arg(row_limit);
 UPDATE knowledge.chunks
 SET embedding = sqlc.arg(embedding)::vector, embedding_model = sqlc.arg(embedding_model), updated_at = now()
 WHERE id = sqlc.arg(id) AND content_sha256 = sqlc.arg(content_sha256);
-
--- name: ListWorkspaceIDs :many
-SELECT id FROM identity.workspaces ORDER BY id;
 
 -- name: GetMeetingSource :one
 SELECT id, channel_id, owner_user_id, title, status

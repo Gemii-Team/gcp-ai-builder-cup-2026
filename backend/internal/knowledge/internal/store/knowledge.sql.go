@@ -155,10 +155,9 @@ type ListChunkStatesRow struct {
 // Queries of the knowledge domain (sqlc generates internal/knowledge/internal/store).
 //
 // Everything runs as kiwi_app inside db.InWorkspace, where row-level security binds
-// each statement to one workspace, except ListWorkspaceIDs, which `kiwi reindex` runs
-// through db.System to find the workspaces whose chunks it re-embeds. The text[]
-// parameters are cast to uuid[] on the server: the pools use pgx's QueryExecModeExec,
-// which sends no parameter types and so cannot encode a []uuid.UUID.
+// each statement to one workspace. The text[] parameters are cast to uuid[] on the
+// server: the pools use pgx's QueryExecModeExec, which sends no parameter types and
+// so cannot encode a []uuid.UUID.
 //
 // A chunk's id is UUIDv5(workspace_id, source_kind/source_id/anchor), so an upsert by
 // id is what makes indexing idempotent. The queries from GetMeetingSource to
@@ -254,30 +253,6 @@ func (q *Queries) ListUserNames(ctx context.Context, ids []string) ([]ListUserNa
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkspaceIDs = `-- name: ListWorkspaceIDs :many
-SELECT id FROM identity.workspaces ORDER BY id
-`
-
-func (q *Queries) ListWorkspaceIDs(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

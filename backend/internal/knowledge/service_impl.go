@@ -77,7 +77,9 @@ func (s *service) complete() error {
 // not overlap: each reads the source, then writes what it read and deletes what it
 // did not produce, so the later writer of two that read different moments would undo
 // the newer. The second run waits and then reads the source as the first left it.
-// It holds for one process, which is the only deployment there is.
+// It holds per Service instance, not per process: Jobs builds the one Service that runs
+// the embed.index job, which is the only caller of Index, so every run shares it. A
+// second Service built from the same Deps has a lock of its own.
 type keyedLock struct {
 	mu      sync.Mutex
 	entries map[string]*lockEntry

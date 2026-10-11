@@ -9,14 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 
+	"kiwi/internal/identity"
 	"kiwi/internal/knowledge/internal/store"
 	"kiwi/internal/platform/errs"
 )
-
-// This file is the knowledge domain's only db.System caller (see the allowlist in
-// platform/db). The command has no workspace to start from, so the system pool lists
-// them; kiwi_system reads nothing else here, and every chunk is read and written
-// inside the workspace it belongs to, as kiwi_app.
 
 // Reindex implements Service. It re-embeds, workspace by workspace and in batches, every
 // chunk whose vector was made by another model than the configured one, from the text
@@ -27,9 +23,9 @@ func (s *service) Reindex(ctx context.Context) error {
 	if s.db == nil || s.llm == nil {
 		return fmt.Errorf("knowledge: reindex needs a database and a model: %w", errs.ErrInvalid)
 	}
-	workspaces, err := s.workspaceIDs(ctx)
+	workspaces, err := identity.ListWorkspaceIDs(ctx, s.db)
 	if err != nil {
-		return err
+		return fmt.Errorf("knowledge: list workspaces: %w", err)
 	}
 	model := s.llm.EmbeddingModel()
 	var total int
@@ -45,18 +41,6 @@ func (s *service) Reindex(ctx context.Context) error {
 	}
 	slog.Info("knowledge: reindex finished", "workspaces", len(workspaces), "chunks", total, "model", model)
 	return nil
-}
-
-// workspaceIDs lists every workspace; it is the one thing the system pool is for here.
-func (s *service) workspaceIDs(ctx context.Context) (ids []uuid.UUID, err error) {
-	err = s.db.System(ctx, func(ctx context.Context, tx pgx.Tx) (err error) {
-		ids, err = store.New(tx).ListWorkspaceIDs(ctx)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("knowledge: list workspaces: %w", err)
-	}
-	return ids, nil
 }
 
 // reindexWorkspace re-embeds the chunks of ws that model did not make, and returns how

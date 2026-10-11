@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,6 +30,7 @@ import (
 	meetingsv1 "kiwi/gen/kiwi/meetings/v1"
 	"kiwi/internal/chat"
 	"kiwi/internal/docs"
+	"kiwi/internal/knowledge/internal/store"
 	"kiwi/internal/meetings"
 	"kiwi/internal/platform/authz"
 	"kiwi/internal/platform/bus"
@@ -158,6 +160,97 @@ func TestChunker_ThaiAndEnglishMixed_DoesNotSplitMidWord(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestChunkText_ShortHeadingBeforeUnspacedThaiDoesNotStartTheNextChunkMidWord: a heading
+// ends its chunk early, at the line break, and what follows has no space to cut at. The
+// next chunk must begin where the Thai does, not repeat "bstract" from a heading that was
+// shorter than the overlap.
+func TestChunkText_ShortHeadingBeforeUnspacedThaiDoesNotStartTheNextChunkMidWord(t *testing.T) {
+	thai := thaiText(rand.New(rand.NewPCG(21, 22)), 3000)
+	for name, heading := range map[string]string{
+		"abstract":        "Abstract",
+		"two words":       "Executive summary",
+		"numbered":        "3.2 Results",
+		"thai then latin": "สรุปผล Results",
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := heading + "\n" + thai
+			chunks := ChunkText(text, 512, 64)
+			if len(chunks) < 3 {
+				t.Fatalf("got %d chunks, want the heading and at least two of Thai", len(chunks))
+			}
+			if !strings.HasPrefix(chunks[0], heading) {
+				t.Fatalf("the first chunk = %.30q, want it to begin with the heading %q", chunks[0], heading)
+			}
+			for i, c := range chunks[1:] {
+				if first := []rune(c)[0]; first < 0x0E00 || first > 0x0E7F {
+					t.Errorf("chunk %d starts with %q, a piece of the heading, not with the Thai", i+1, first)
+				}
+				if llm.EstimateTokens(c) > 512 {
+					t.Errorf("chunk %d is %d tokens", i+1, llm.EstimateTokens(c))
+				}
+			}
+			var words []string
+			for _, c := range chunks {
+				words = append(words, regexp.MustCompile(`[A-Za-z0-9.]+`).FindAllString(c, -1)...)
+			}
+			for _, w := range regexp.MustCompile(`[A-Za-z0-9.]+`).FindAllString(heading, -1) {
+				if n := slices.Index(words, w); n < 0 {
+					t.Errorf("the word %q of the heading is not whole in any chunk (got %q)", w, words)
+				}
+			}
+			for _, w := range words {
+				if !strings.Contains(heading, w) {
+					t.Errorf("chunks hold %q, a piece of the heading %q", w, heading)
+				}
+			}
+		})
+	}
+}
+
+// TestChunkText_EarlyCutDoesNotEmitAChunkInsideThePreviousOne: a paragraph longer than the
+// overlap ends its chunk early, at the line break, and the Thai after it has no boundary
+// to cut at. The next chunk starts in the overlap, a word start of the paragraph, and must
+// carry on into the Thai rather than stop where the paragraph stopped, which would be a
+// chunk that is nothing but the tail of the one before.
+func TestChunkText_EarlyCutDoesNotEmitAChunkInsideThePreviousOne(t *testing.T) {
+	thai := thaiText(rand.New(rand.NewPCG(21, 22)), 3000)
+	para := strings.Repeat("The abstract describes the method and results in some detail. ", 7) // ~100 tokens
+	text := strings.TrimSpace(para) + "\n" + thai
+
+	chunks := ChunkText(text, 512, 64)
+	if len(chunks) < 4 {
+		t.Fatalf("got %d chunks, want the paragraph and at least three of Thai", len(chunks))
+	}
+	for i := 1; i < len(chunks); i++ {
+		if strings.Contains(chunks[i-1], chunks[i]) {
+			t.Errorf("chunk %d (%d tokens) is a piece of chunk %d: %.30q", i, llm.EstimateTokens(chunks[i]), i-1, chunks[i])
+		}
+		if llm.EstimateTokens(chunks[i]) > 512 {
+			t.Errorf("chunk %d is %d tokens", i, llm.EstimateTokens(chunks[i]))
+		}
+	}
+	if !strings.HasPrefix(chunks[0], "The abstract") || !strings.Contains(chunks[1], "\n") {
+		t.Errorf("chunk 1 = %.40q, want the overlap's tail of the paragraph followed by the Thai", chunks[1])
+	}
+	if pos := strings.Index(text, chunks[1]); pos <= 0 || text[pos-1] != ' ' {
+		t.Errorf("chunk 1 starts at %d, not at the start of a word of the paragraph: %.20q", pos, chunks[1])
+	}
+}
+
+// TestChunkText_ChunkShorterThanTheOverlapIsNotRepeated: a chunk of fewer tokens than the
+// overlap has nothing to carry over that the next chunk would not repeat whole; the same
+// holds for a Latin run without a space.
+func TestChunkText_ChunkShorterThanTheOverlapIsNotRepeated(t *testing.T) {
+	text := "Heading\n" + strings.Repeat("x", 5000)
+	chunks := ChunkText(text, 128, 32)
+	if len(chunks) < 3 || chunks[0] != "Heading" {
+		t.Fatalf("chunks = %d, first %.20q; want the heading alone first", len(chunks), chunks[0])
+	}
+	if strings.Contains(chunks[1], "eading") || !strings.HasPrefix(chunks[1], "xxxx") {
+		t.Errorf("the chunk after the heading repeats it: %.30q", chunks[1])
 	}
 }
 
@@ -625,24 +718,30 @@ type entry struct {
 	text    string
 }
 
-// meeting writes a meeting with its transcript and, when summary is not nil, its
-// summary with decisions and open questions as the meetings domain stores them.
+// meeting writes a meeting of the fixture workspace with its transcript and, when
+// summary is not nil, its summary with decisions and open questions as the meetings
+// domain stores them.
 func (f *fixture) meeting(channel, owner uuid.UUID, title, status string, entries []entry, summary *string, decisions, questions []string) uuid.UUID {
 	f.t.Helper()
+	return f.meetingIn(f.ws, channel, owner, title, status, entries, summary, decisions, questions)
+}
+
+func (f *fixture) meetingIn(ws, channel, owner uuid.UUID, title, status string, entries []entry, summary *string, decisions, questions []string) uuid.UUID {
+	f.t.Helper()
 	id := uuid.New()
-	f.exec(f.ws, `INSERT INTO meetings.meetings (id, workspace_id, channel_id, owner_user_id, title, status) VALUES ($1, $2, $3, $4, $5, $6)`,
-		id, f.ws, channel, owner, title, status)
+	f.exec(ws, `INSERT INTO meetings.meetings (id, workspace_id, channel_id, owner_user_id, title, status) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, ws, channel, owner, title, status)
 	for i, e := range entries {
 		var speaker *string
 		if e.speaker != "" {
 			speaker = &e.speaker
 		}
-		f.exec(f.ws, `INSERT INTO meetings.transcript_entries (meeting_id, workspace_id, idx, speaker, start_ms, text) VALUES ($1, $2, $3, $4, $5, $6)`,
-			id, f.ws, i, speaker, e.startMS, e.text)
+		f.exec(ws, `INSERT INTO meetings.transcript_entries (meeting_id, workspace_id, idx, speaker, start_ms, text) VALUES ($1, $2, $3, $4, $5, $6)`,
+			id, ws, i, speaker, e.startMS, e.text)
 	}
 	if summary != nil {
-		f.exec(f.ws, `INSERT INTO meetings.summaries (meeting_id, workspace_id, summary, decisions, open_questions) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
-			id, f.ws, *summary, items(decisions), items(questions))
+		f.exec(ws, `INSERT INTO meetings.summaries (meeting_id, workspace_id, summary, decisions, open_questions) VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)`,
+			id, ws, *summary, items(decisions), items(questions))
 	}
 	return id
 }
@@ -833,6 +932,43 @@ func TestIndex_MeetingChunkStoresLabelAndFirstEntryOffset(t *testing.T) {
 	}
 	if n := f.count(f.ws, `SELECT count(*) FROM knowledge.chunks WHERE source_id = $1 AND source_meta ? 'offset_ms'`, untimed); n != 0 {
 		t.Errorf("%d chunks of the untimed meeting have an offset_ms key", n)
+	}
+}
+
+// TestIndex_UnreadableSummaryItemsAreWarnedAboutNotSilentlyDropped: decisions that cannot
+// be read leave the rest of the meeting indexable, and the log says which meeting lost them.
+func TestIndex_UnreadableSummaryItemsAreWarnedAboutNotSilentlyDropped(t *testing.T) {
+	f := newFixture(t)
+	id := f.meeting(f.public, f.alice, "Weekly", "ready", []entry{{"Alice", nil, "we decided"}},
+		new("The team decided."), []string{"Ship on Friday"}, []string{"Who deploys?"})
+	f.exec(f.ws, `UPDATE meetings.summaries SET decisions = '{"not":"a list"}'::jsonb WHERE meeting_id = $1`, id)
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if err := f.index(system(f.ws), kindMeeting, id, f.public, nil); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	var summary string
+	for _, c := range f.sourceChunks(id) {
+		if c.Anchor == "summary" {
+			summary = c.Content
+		}
+	}
+	if want := "The team decided.\n\nOpen questions:\n- Who deploys?"; summary != want {
+		t.Errorf("summary chunk = %q, want the summary and the readable open questions only", summary)
+	}
+	out := logs.String()
+	for _, want := range []string{"level=WARN", "meeting_id=" + id.String(), "list=decisions"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the log %q lacks %q", out, want)
+		}
+	}
+	if strings.Contains(out, "list=open_questions") {
+		t.Errorf("a readable list was reported as unreadable: %q", out)
 	}
 }
 
@@ -1316,6 +1452,185 @@ func TestIndex_RejectsRequestsThatNameNoSource(t *testing.T) {
 	}
 	if err := New(Deps{DB: f.db, LLM: f.llm}).Index(t.Context(), sys, IndexRequest{SourceKind: kindMeeting, SourceID: id}); !errors.Is(err, errs.ErrInvalid) {
 		t.Errorf("Index on a Service built to reindex = %v, want ErrInvalid rather than a nil dereference", err)
+	}
+}
+
+// ---- tenancy ----------------------------------------------------------------
+
+// foreign is a second workspace with a user, a channel, a meeting, a file and a chat
+// window of its own, all indexed there, so a test can try to reach them from the fixture
+// workspace.
+type foreign struct {
+	ws, user, channel, meeting, doc uuid.UUID
+	window                          time.Time
+	chunks                          int
+}
+
+func (f *fixture) foreignWorkspace() foreign {
+	f.t.Helper()
+	ws := f.workspace("mallory.example")
+	user := f.user(ws, "Mallory")
+	channel := f.channel(ws, "public", user)
+	o := foreign{
+		ws: ws, user: user, channel: channel, window: at(10, 0, 0),
+		meeting: f.meetingIn(ws, channel, user, "Secret merger", "ready",
+			[]entry{{"Mallory", nil, "the merger closes in March"}}, new("The merger closes in March."), nil, nil),
+		doc: f.file(ws, channel, user, "merger.txt", []byte("the merger closes in March")),
+	}
+	f.say(ws, channel, user, 1, "the merger closes in March", at(10, 1, 0))
+	for _, req := range []IndexRequest{
+		{SourceKind: kindMeeting, SourceID: o.meeting, ChannelID: &channel},
+		{SourceKind: kindDoc, SourceID: o.doc, ChannelID: &channel},
+		{SourceKind: kindChat, SourceID: channel, ChannelID: &channel, WindowStart: &o.window},
+	} {
+		if err := f.svc.Index(f.t.Context(), system(ws), req); err != nil {
+			f.t.Fatalf("index the other workspace's %s: %v", req.SourceKind, err)
+		}
+	}
+	o.chunks = f.count(ws, `SELECT count(*) FROM knowledge.chunks`)
+	if o.chunks != 4 { // the transcript, the summary, the page and the chat window
+		f.t.Fatalf("the other workspace holds %d chunks, want 4", o.chunks)
+	}
+	return o
+}
+
+// TestIndex_SourceOfAnotherWorkspaceIsNotFoundAndWritesNothing: the indexer reads rows
+// of other domains with plain queries that name no workspace; row-level security is what
+// keeps them to the actor's. A job for workspace A that names a meeting, a file or a
+// channel of workspace B finds nothing, embeds nothing and leaves both workspaces as
+// they were.
+func TestIndex_SourceOfAnotherWorkspaceIsNotFoundAndWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	other := f.foreignWorkspace()
+	embedsBefore := len(f.llm.EmbedCalls())
+	sys := system(f.ws)
+
+	for _, tc := range []struct {
+		name string
+		req  IndexRequest
+	}{
+		{"meeting with its channel", IndexRequest{SourceKind: kindMeeting, SourceID: other.meeting, ChannelID: &other.channel}},
+		{"meeting without a channel", IndexRequest{SourceKind: kindMeeting, SourceID: other.meeting}},
+		{"doc with its channel", IndexRequest{SourceKind: kindDoc, SourceID: other.doc, ChannelID: &other.channel}},
+		{"doc without a channel", IndexRequest{SourceKind: kindDoc, SourceID: other.doc}},
+	} {
+		if err := f.svc.Index(t.Context(), sys, tc.req); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("%s: Index = %v, want ErrNotFound", tc.name, err)
+		}
+	}
+
+	// A chat window of a channel this workspace does not have is an empty window: no
+	// message is visible, so there is nothing to embed and nothing to delete.
+	if err := f.svc.Index(t.Context(), sys, IndexRequest{SourceKind: kindChat, SourceID: other.channel, ChannelID: &other.channel, WindowStart: &other.window}); err != nil {
+		t.Errorf("chat window of another workspace's channel: %v", err)
+	}
+
+	if got := len(f.llm.EmbedCalls()) - embedsBefore; got != 0 {
+		t.Errorf("%d Embed calls for sources of another workspace, want none", got)
+	}
+	if n := f.count(f.ws, `SELECT count(*) FROM knowledge.chunks`); n != 0 {
+		t.Errorf("the requesting workspace holds %d chunks, want none", n)
+	}
+	if n := f.count(other.ws, `SELECT count(*) FROM knowledge.chunks`); n != other.chunks {
+		t.Errorf("the other workspace holds %d chunks, want its %d untouched", n, other.chunks)
+	}
+
+	// The same requests in the right workspace do find their sources: the decoys above
+	// fail because of the workspace and for no other reason.
+	for _, req := range []IndexRequest{
+		{SourceKind: kindMeeting, SourceID: other.meeting, ChannelID: &other.channel},
+		{SourceKind: kindDoc, SourceID: other.doc, ChannelID: &other.channel},
+	} {
+		if err := f.svc.Index(t.Context(), system(other.ws), req); err != nil {
+			t.Errorf("%s in its own workspace: %v", req.SourceKind, err)
+		}
+	}
+}
+
+// TestIndex_AuthorOfAnotherWorkspaceIsUnknown: a message whose author_id is a user of
+// another workspace is labelled with no name from there.
+func TestIndex_AuthorOfAnotherWorkspaceIsUnknown(t *testing.T) {
+	f := newFixture(t)
+	other := f.foreignWorkspace()
+	f.say(f.ws, f.public, f.alice, 1, "good morning", at(10, 1, 0))
+	f.say(f.ws, f.public, other.user, 2, "I know a secret", at(10, 2, 0))
+
+	w := at(10, 0, 0)
+	if err := f.index(system(f.ws), kindChat, f.public, f.public, &w); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	got := f.sourceChunks(f.public)
+	if len(got) != 1 || got[0].Content != "Alice: good morning\nunknown: I know a secret" {
+		t.Fatalf("chunks = %+v, want the foreign author labelled unknown", got)
+	}
+	if strings.Contains(got[0].Content, "Mallory") {
+		t.Error("a name from another workspace reached the chunk")
+	}
+}
+
+// TestCrossSchemaReads_AreBoundByRowLevelSecurity runs every query that reads a table of
+// another domain from the wrong workspace and from the right one. The queries carry no
+// workspace predicate, so what answers "no rows" is row-level security. Run as kiwi_system,
+// which bypasses it, the same queries would answer: the control that shows the test could
+// fail.
+func TestCrossSchemaReads_AreBoundByRowLevelSecurity(t *testing.T) {
+	f := newFixture(t)
+	other := f.foreignWorkspace()
+
+	read := func(ws uuid.UUID, fn func(q *store.Queries) error) error {
+		return f.db.InWorkspace(t.Context(), ws, func(ctx context.Context, tx pgx.Tx) error { return fn(store.New(tx)) })
+	}
+	for _, tc := range []struct {
+		name string
+		fn   func(q *store.Queries) error
+	}{
+		{"GetMeetingSource", func(q *store.Queries) error { _, err := q.GetMeetingSource(t.Context(), other.meeting); return err }},
+		{"GetMeetingSummary", func(q *store.Queries) error { _, err := q.GetMeetingSummary(t.Context(), other.meeting); return err }},
+		{"GetFileSource", func(q *store.Queries) error { _, err := q.GetFileSource(t.Context(), other.doc); return err }},
+	} {
+		if err := read(f.ws, tc.fn); !errors.Is(err, pgx.ErrNoRows) {
+			t.Errorf("%s from the wrong workspace = %v, want no rows", tc.name, err)
+		}
+		if err := read(other.ws, tc.fn); err != nil {
+			t.Errorf("%s from its own workspace = %v, want the row", tc.name, err)
+		}
+	}
+
+	names := func(ws uuid.UUID) (out []string) {
+		err := read(ws, func(q *store.Queries) error {
+			rows, err := q.ListUserNames(t.Context(), []string{other.user.String(), f.alice.String()})
+			for _, r := range rows {
+				out = append(out, r.Name)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatalf("ListUserNames: %v", err)
+		}
+		return out
+	}
+	if got := names(f.ws); !slices.Equal(got, []string{"Alice"}) {
+		t.Errorf("ListUserNames from the wrong workspace = %v, want only its own user", got)
+	}
+	if got := names(other.ws); !slices.Equal(got, []string{"Mallory"}) {
+		t.Errorf("ListUserNames from its own workspace = %v, want only Mallory", got)
+	}
+
+	// Control: row-level security is the only thing in the way. kiwi_system bypasses it and
+	// sees the foreign user and the foreign meeting through the same queries.
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, f.env.SystemURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	q := store.New(conn)
+	rows, err := q.ListUserNames(ctx, []string{other.user.String(), f.alice.String()})
+	if err != nil || len(rows) != 2 {
+		t.Errorf("control: ListUserNames without row-level security = %d rows, %v, want both users", len(rows), err)
+	}
+	if _, err := q.GetMeetingSource(ctx, other.meeting); err != nil {
+		t.Errorf("control: GetMeetingSource without row-level security = %v, want the foreign meeting", err)
 	}
 }
 

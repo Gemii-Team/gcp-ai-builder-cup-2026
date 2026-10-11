@@ -36,7 +36,8 @@ var protoJSON = protojson.MarshalOptions{UseProtoNames: true}
 // which also turns each chat.message.created into an embed.index event for the
 // message's five-minute window, due thirty seconds later. Every message of a window
 // makes one, and the runs after the first find nothing changed and embed nothing.
-// Jobs panics when a dependency of indexing is missing.
+// Jobs panics when a dependency of indexing is missing. The job is the only caller of
+// Index and owns the Service that runs it; see Index for why that has to stay so.
 func Jobs(d Deps) []bus.Job {
 	s := newService(d)
 	if err := s.complete(); err != nil {

@@ -49,17 +49,18 @@ func ChunkText(text string, maxTokens, overlapTokens int) []string {
 	c := newCutter(text)
 	n := len(c.runes)
 	var chunks []string
-	for start := c.skipSpace(0); start < n; {
+	for start, floor := c.skipSpace(0), 0; start < n; {
 		end := c.fit(start, maxTokens)
 		if end == n {
 			chunks = append(chunks, c.slice(start, n))
 			break
 		}
-		cut := c.cut(start, end)
+		cut := c.cut(start, end, floor)
 		chunks = append(chunks, c.slice(start, cut))
 		if c.skipSpace(cut) == n {
 			break // only whitespace is left: a chunk of nothing but the overlap would repeat the last
 		}
+		floor = cut
 		start = c.skipSpace(c.next(start, cut, overlapTokens))
 	}
 	return chunks
@@ -124,11 +125,13 @@ func (c *cutter) fit(start, maxTokens int) int {
 
 // cut picks where the chunk that starts at start and may reach end (end is before the
 // end of the text) really stops: the best class of boundary in the second half of its
-// reach, else in all of it, else any safe one, else end.
-func (c *cutter) cut(start, end int) int {
+// reach, else in all of it, else any safe one, else end. It stops only after floor, the
+// end of the chunk before, so that a chunk that begins in the overlap still brings text
+// of its own instead of ending where the last one did.
+func (c *cutter) cut(start, end, floor int) int {
 	upper := start + (end-start)/2
 	var anywhere, late [classParagraph + 1]int // the last position of each class; 0 = none
-	for p := end; p > start; p-- {
+	for p := end; p > max(start, floor); p-- {
 		class, ok := c.boundary(p)
 		if !ok {
 			continue
@@ -154,9 +157,12 @@ func (c *cutter) cut(start, end int) int {
 }
 
 // next is where the chunk after runes[start:cut] starts: the repeated tail of about
-// overlapTokens, begun at a word boundary when one is near the front of the tail.
+// overlapTokens, begun at the first boundary of any class in it (a word, a line, a
+// script change) and only without one at a safe cut, which can fall inside a word. A
+// chunk of no more than overlapTokens has nothing to repeat that would not be the whole
+// chunk again, so the next one starts where it stopped.
 func (c *cutter) next(start, cut, overlapTokens int) int {
-	if overlapTokens == 0 {
+	if overlapTokens == 0 || c.tokens(start, cut) <= overlapTokens {
 		return cut
 	}
 	lo, hi := start+1, cut // the earliest o with a tail of at most overlapTokens
@@ -168,12 +174,12 @@ func (c *cutter) next(start, cut, overlapTokens int) int {
 			lo = mid + 1
 		}
 	}
-	tail, near, safe := lo, lo+(cut-lo)/2, 0
-	for p := tail; p < cut; p++ {
+	safe := 0
+	for p := lo; p < cut; p++ {
 		class, ok := c.boundary(p)
 		switch {
 		case !ok:
-		case class > classSafe && p <= near:
+		case class > classSafe:
 			return p
 		case safe == 0:
 			safe = p

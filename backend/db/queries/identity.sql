@@ -16,6 +16,11 @@ SELECT id, name, google_domain, created_at
 FROM identity.workspaces
 WHERE id = $1;
 
+-- name: ListWorkspaceIDs :many
+-- Every workspace id: what an operator command that must visit each tenant (`kiwi
+-- reindex`) starts from. A System query that only SELECTs identity.workspaces.
+SELECT id FROM identity.workspaces ORDER BY id;
+
 -- name: InsertWorkspaceIfAbsent :exec
 INSERT INTO identity.workspaces (id, name, google_domain)
 VALUES ($1, $2, $3)

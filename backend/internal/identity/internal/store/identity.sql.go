@@ -306,6 +306,32 @@ func (q *Queries) ListUsers(ctx context.Context) ([]IdentityUser, error) {
 	return items, nil
 }
 
+const listWorkspaceIDs = `-- name: ListWorkspaceIDs :many
+SELECT id FROM identity.workspaces ORDER BY id
+`
+
+// Every workspace id: what an operator command that must visit each tenant (`kiwi
+// reindex`) starts from. A System query that only SELECTs identity.workspaces.
+func (q *Queries) ListWorkspaceIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockSignIn = `-- name: LockSignIn :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 `

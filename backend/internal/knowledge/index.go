@@ -68,6 +68,15 @@ type source struct {
 // whose text and embedding model are what is stored is left alone, and every batch of
 // embedded chunks is committed on its own, so a run that stops half way is continued
 // by the next one and a run on an unchanged source embeds nothing.
+//
+// Its one caller is the embed.index job (Jobs), which acts as a system actor, and it
+// must stay job-only. A meeting or a file is read before the actor is authorised on it,
+// because the channel that authorisation needs is the source's own (a channel in req is
+// only checked against it), so a person calling Index would learn whether a source
+// exists before being refused; a caller that is a person has to authorise first. Runs of
+// one source do not overlap within one Service (keyedLock), not within one process: Jobs
+// builds the Service whose job is the only caller, and a second caller would need to
+// share that lock, for instance through Deps.
 func (s *service) Index(ctx context.Context, a authz.Actor, req IndexRequest) error {
 	if err := s.complete(); err != nil {
 		return err
@@ -224,6 +233,10 @@ func (s *service) authorNames(ctx context.Context, ws uuid.UUID, msgs []*chatv1.
 
 // ---- meetings ---------------------------------------------------------------
 
+// resolveMeeting reads the meeting's row, then authorises the actor on the channel the
+// row names. That order is for the indexer, a system actor that needs no membership; a
+// caller that is a person would have to authorise first, or learn that the meeting exists
+// before being refused (see Index).
 func (s *service) resolveMeeting(ctx context.Context, a authz.Actor, req IndexRequest) (source, func(context.Context) ([]draft, error), error) {
 	var row store.GetMeetingSourceRow
 	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {
@@ -261,7 +274,9 @@ func (s *service) resolveMeeting(ctx context.Context, a authz.Actor, req IndexRe
 }
 
 // meetingSummary reads the summary of a meeting; a meeting without one has an empty
-// summary, and so no summary chunk.
+// summary, and so no summary chunk. Decisions or open questions that cannot be read are
+// left out of the chunk with a warning that names the meeting: the summary and the
+// transcript are still worth indexing.
 func (s *service) meetingSummary(ctx context.Context, ws, id uuid.UUID) (meetingSummary, error) {
 	var row store.GetMeetingSummaryRow
 	err := s.db.InWorkspace(ctx, ws, func(ctx context.Context, tx pgx.Tx) (err error) {
@@ -276,18 +291,20 @@ func (s *service) meetingSummary(ctx context.Context, ws, id uuid.UUID) (meeting
 	}
 	return meetingSummary{
 		Summary:       row.Summary,
-		Decisions:     itemTexts(row.Decisions),
-		OpenQuestions: itemTexts(row.OpenQuestions),
+		Decisions:     itemTexts(id, "decisions", row.Decisions),
+		OpenQuestions: itemTexts(id, "open_questions", row.OpenQuestions),
 	}, nil
 }
 
 // itemTexts reads the text of each item of a stored list of decisions or open
-// questions, [{text, entry_refs}]; a list that cannot be read has none.
-func itemTexts(raw json.RawMessage) []string {
+// questions, [{text, entry_refs}]. A list that cannot be read has none, and the warning
+// says which list of which meeting it was.
+func itemTexts(meeting uuid.UUID, list string, raw json.RawMessage) []string {
 	var items []struct {
 		Text string `json:"text"`
 	}
-	if json.Unmarshal(raw, &items) != nil {
+	if err := json.Unmarshal(raw, &items); err != nil {
+		slog.Warn("knowledge: summary items are unreadable and are not indexed", "meeting_id", meeting, "list", list, "error", err)
 		return nil
 	}
 	texts := make([]string, len(items))
@@ -299,6 +316,10 @@ func itemTexts(raw json.RawMessage) []string {
 
 // ---- documents --------------------------------------------------------------
 
+// resolveDoc reads the file's row, then authorises the actor on the channel the row names.
+// That order is for the indexer, a system actor that needs no membership; a caller that is
+// a person would have to authorise first, or learn that the file exists before being
+// refused (see Index).
 func (s *service) resolveDoc(ctx context.Context, a authz.Actor, req IndexRequest) (source, func(context.Context) ([]draft, error), error) {
 	var row store.GetFileSourceRow
 	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {

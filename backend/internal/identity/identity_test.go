@@ -1141,6 +1141,59 @@ func TestEnsureSeedWorkspace_IdempotentAndCallbackAdoptsPlaceholders(t *testing.
 	}
 }
 
+// TestListWorkspaceIDs_ReturnsEveryWorkspaceThroughTheSystemPool: a command with no
+// workspace to start from, `kiwi reindex`, enumerates the tenants through identity. A
+// session bound to one workspace sees only that one (row-level security), so two ids
+// coming back proves the enumeration really ran on the system pool.
+func TestListWorkspaceIDs_ReturnsEveryWorkspaceThroughTheSystemPool(t *testing.T) {
+	f := newFixture(t)
+
+	if ids, err := ListWorkspaceIDs(t.Context(), f.db); err != nil || len(ids) != 0 {
+		t.Fatalf("ListWorkspaceIDs on an empty database = %v, %v, want none", ids, err)
+	}
+
+	wsA, _, err := EnsureSeedWorkspace(t.Context(), f.db, "alpha.example", []string{"a@alpha.example"})
+	if err != nil {
+		t.Fatalf("seed alpha: %v", err)
+	}
+	wsB, _, err := EnsureSeedWorkspace(t.Context(), f.db, "beta.example", []string{"b@beta.example"})
+	if err != nil {
+		t.Fatalf("seed beta: %v", err)
+	}
+
+	got, err := ListWorkspaceIDs(t.Context(), f.db)
+	if err != nil {
+		t.Fatalf("ListWorkspaceIDs: %v", err)
+	}
+	want := []uuid.UUID{wsA, wsB}
+	slices.SortFunc(want, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	if !slices.Equal(got, want) {
+		t.Errorf("ListWorkspaceIDs = %v, want both workspaces %v in id order", got, want)
+	}
+
+	var seen int
+	f.asOwner(wsA, func(ctx context.Context, tx pgx.Tx) {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM identity.workspaces`).Scan(&seen); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if seen != 1 {
+		t.Errorf("a session bound to one workspace sees %d workspaces, want 1: the test would not tell the system pool from the application pool", seen)
+	}
+}
+
+func TestListWorkspaceIDs_FailsWithoutASystemPool(t *testing.T) {
+	f := newFixture(t)
+	appOnly, err := db.Open(t.Context(), config.Config{DatabaseURL: f.env.AppURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(appOnly.Close)
+	if _, err := ListWorkspaceIDs(t.Context(), appOnly); err == nil || !strings.Contains(err.Error(), "identity: list workspaces") {
+		t.Errorf("ListWorkspaceIDs without a system pool = %v, want an error naming the step", err)
+	}
+}
+
 func TestEnsureSeedWorkspace_RejectsEmptyDomainAndBadEmails(t *testing.T) {
 	f := newFixture(t)
 	for name, tc := range map[string]struct {
