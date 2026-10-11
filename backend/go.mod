@@ -8,6 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/pressly/goose/v3 v3.26.0
 	github.com/redis/go-redis/v9 v9.23.0
