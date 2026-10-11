@@ -17,5 +17,5 @@ keywords = ["sk-"]
 [[rules]]
 id = "kiwi-env-assignment-with-value"
 description = "K.I.W.I. secret or connection string assigned a value"
-regex = '''(?m)^[ \t]*KIWI_(LLM_API_KEY|LLM_BASE_URL|OAUTH_CLIENT_SECRET|TOKEN_ENC_KEY|BLOB_SIGNING_KEY|DB_PASSWORD|DATABASE[A-Z_]*URL)[ \t]*=[ \t]*\S+'''
+regex = '''(?m)^[ \t]*KIWI_(LLM_API_KEY|LLM_BASE_URL|OAUTH_CLIENT_SECRET|TOKEN_ENC_KEY|BLOB_SIGNING_KEY|DB_PASSWORD|[A-Z_]*DATABASE[A-Z_]*URL)[ \t]*=[ \t]*\S+'''
 keywords = ["kiwi_"]

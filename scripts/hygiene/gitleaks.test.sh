@@ -66,7 +66,7 @@ printf 'see the task-%s runner\n' "$(printf 'c%.0s' $(seq 24))" | sample
 scan "sk- inside a longer word is not a key" 0
 
 # --- kiwi-env-assignment-with-value -------------------------------------------
-vars="LLM_API_KEY LLM_BASE_URL OAUTH_CLIENT_SECRET TOKEN_ENC_KEY DATABASE_URL DATABASE_RO_URL BLOB_SIGNING_KEY DB_PASSWORD"
+vars="LLM_API_KEY LLM_BASE_URL OAUTH_CLIENT_SECRET TOKEN_ENC_KEY DATABASE_URL DATABASE_RO_URL MIGRATE_DATABASE_URL BLOB_SIGNING_KEY DB_PASSWORD"
 for v in $vars; do
   assign "$v" abc | sample
   scan "KIWI_$v=<value> is a leak" 2 kiwi-env-assignment-with-value

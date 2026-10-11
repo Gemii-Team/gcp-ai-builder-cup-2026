@@ -7,9 +7,17 @@ pre-commit:
     check-paths:
       run: bash scripts/hygiene/check-paths.sh --staged
 
+# A branch with no remote-tracking ref (its first push) has no @{push}; scan every
+# commit no remote-tracking ref contains instead.
 pre-push:
   commands:
     check-paths:
-      run: bash scripts/hygiene/check-paths.sh --range @{push}..HEAD
+      run: |
+        range='@{push}..HEAD'
+        git rev-parse -q --verify '@{push}' >/dev/null 2>&1 || range='HEAD --not --remotes'
+        bash scripts/hygiene/check-paths.sh --range $range
     gitleaks:
-      run: gitleaks git --log-opts="@{push}..HEAD" --redact -c .gitleaks.toml
+      run: |
+        range='@{push}..HEAD'
+        git rev-parse -q --verify '@{push}' >/dev/null 2>&1 || range='HEAD --not --remotes'
+        gitleaks git --log-opts="$range" --redact -c .gitleaks.toml

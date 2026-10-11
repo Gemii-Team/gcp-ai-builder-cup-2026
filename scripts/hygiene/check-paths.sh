@@ -4,6 +4,8 @@
 #
 #   check-paths.sh --staged            paths staged in the index
 #   check-paths.sh --range <rev-range> paths touched by any commit in the range
+#   check-paths.sh --range HEAD --not --remotes
+#                                      commits no remote-tracking ref has (a push with no upstream)
 #
 # Exit 0: nothing offending. Exit 1: offending paths printed, one per line, to
 # stderr. Exit 2: usage or git error (never a silent pass).
@@ -14,7 +16,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: check-paths.sh --staged | --range <rev-range>" >&2
+  echo "usage: check-paths.sh --staged | --range <rev-range> | --range HEAD --not --remotes" >&2
   exit 2
 }
 
@@ -48,22 +50,30 @@ case $1 in
     git diff --cached --name-only -z --diff-filter=d >"$list" || exit 2
     ;;
   --range)
-    [ $# -eq 2 ] && [[ $2 != -* ]] || usage
-    git log --name-only -z --format= --diff-filter=d "$2" -- >"$list" || exit 2
+    shift
+    have_rev=0
+    for arg in "$@"; do
+      case $arg in
+        --not | --remotes) ;;
+        -*) usage ;;
+        *) have_rev=1 ;;
+      esac
+    done
+    [ "$have_rev" -eq 1 ] || usage
+    git log --name-only -z --format= --diff-filter=d "$@" -- >"$list" || exit 2
     ;;
   *) usage ;;
 esac
 
-declare -A seen=()
+# Offenders are few, so a newline-joined string dedupes them without bash 4 arrays (macOS has 3.2).
+reported=$'\n'
 offending=0
 while IFS= read -r -d '' path; do
-  [ -n "$path" ] || continue
-  [ -z "${seen[$path]+x}" ] || continue
-  seen[$path]=1
-  if blocked "$path"; then
-    echo "blocked: $path" >&2
-    offending=$((offending + 1))
-  fi
+  blocked "$path" || continue
+  case $reported in *$'\n'"$path"$'\n'*) continue ;; esac
+  reported=$reported$path$'\n'
+  echo "blocked: $path" >&2
+  offending=$((offending + 1))
 done <"$list"
 
 if [ "$offending" -gt 0 ]; then

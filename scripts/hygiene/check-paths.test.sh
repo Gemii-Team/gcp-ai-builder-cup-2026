@@ -170,6 +170,40 @@ commit_files "$repo" "docs, hooks skipped" "docs/a b.md"
 run_in "$repo" --range HEAD~1..HEAD
 verdict "--range names a path with spaces" 1 "docs/a b.md"
 
+repo=$(new_repo)
+commit_files "$repo" "docs, hooks skipped" docs/x.md
+printf 'y\n' >"$repo/docs/x.md"
+git -C "$repo" add -f -- docs/x.md
+git -C "$repo" commit -q --no-verify -m "docs again"
+run_in "$repo" --range HEAD~2..HEAD
+verdict "a path touched by several commits is reported once" 1 "check-paths: 1 path(s)"
+
+# --- --range HEAD --not --remotes: the range a push scans when the branch has no upstream ---
+# A remote-tracking ref is simulated with update-ref; only commits it does not contain are in scope.
+repo=$(new_repo)
+commit_files "$repo" "docs, hooks skipped" docs/x.md
+run_in "$repo" --range HEAD --not --remotes
+verdict "no remote-tracking ref: HEAD --not --remotes catches docs/x.md" 1 docs/x.md
+
+repo=$(new_repo)
+commit_files "$repo" "readme" README.md
+run_in "$repo" --range HEAD --not --remotes
+verdict "no remote-tracking ref: HEAD --not --remotes over clean history" 0
+
+repo=$(new_repo)
+commit_files "$repo" "docs, already on the remote" docs/old.md
+git -C "$repo" update-ref refs/remotes/origin/main HEAD
+commit_files "$repo" "docs, unpushed" docs/x.md
+run_in "$repo" --range HEAD --not --remotes
+verdict "HEAD --not --remotes names the unpushed docs/x.md, not the pushed docs/old.md" 1 docs/x.md docs/old.md
+
+repo=$(new_repo)
+commit_files "$repo" "docs, already on the remote" docs/old.md
+git -C "$repo" update-ref refs/remotes/origin/main HEAD
+commit_files "$repo" "readme" README.md
+run_in "$repo" --range HEAD --not --remotes
+verdict "HEAD --not --remotes does not rescan history the remote already has" 0
+
 # --- usage errors fail closed (exit 2), never pass ------------------------------
 repo=$(new_repo)
 run_in "$repo" --range no-such-rev..HEAD
@@ -180,6 +214,12 @@ run_in "$repo"
 verdict "no arguments" 2
 run_in "$repo" --bogus
 verdict "unknown flag" 2
+run_in "$repo" --range HEAD --bogus
+verdict "--range with an unknown option" 2
+run_in "$repo" --range --all
+verdict "--range --all is not accepted" 2
+run_in "$repo" --range --not --remotes
+verdict "--range with no positive revision" 2
 
 if [ "$failures" -ne 0 ]; then
   echo "check-paths.test.sh: $failures case(s) failed"
