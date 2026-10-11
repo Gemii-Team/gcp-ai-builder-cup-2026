@@ -121,12 +121,26 @@ describe('TaskForm', () => {
 
   it('TaskForm_ChannelChangeRepopulatesOwnersAndClearsANonMember', async () => {
     const user = userEvent.setup();
-    const { membersFor } = await renderForm({ channels, heading: 'New task', subtitle: 'Added by hand: no meeting, message or document behind it.' });
+    const { membersFor, onSubmit } = await renderForm({
+      channels,
+      heading: 'New task',
+      subtitle: 'Added by hand: no meeting, message or document behind it.',
+    });
     expect(membersFor).toHaveBeenLastCalledWith('c1');
     expect(within(ownerSelect()).getAllByRole('option').map((option) => option.textContent)).toEqual(['No owner', 'Somchai W.', 'Nok']);
     const channel = screen.getByRole('combobox', { name: 'Channel' });
     expect(channel).toHaveValue('c1');
     expect(within(channel).getAllByRole('option').map((option) => option.textContent)).toEqual(['# q4-launch', '# sales-th', '# general']);
+    const create = screen.getByRole('button', { name: 'Create task' });
+    // A native select shows its first option whenever its value matches none, so what the form holds is read from what it
+    // submits: the select alone cannot tell a cleared owner from a stale one.
+    const submitted = async (call: number) => {
+      await user.click(create);
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledTimes(call);
+        expect(create).not.toHaveAttribute('aria-busy');
+      });
+    };
 
     await user.selectOptions(ownerSelect(), 'Nok');
     expect(ownerSelect()).toHaveValue('u2');
@@ -137,6 +151,8 @@ describe('TaskForm', () => {
     await screen.findByRole('option', { name: 'Arthit K.' });
     expect(within(ownerSelect()).getAllByRole('option').map((option) => option.textContent)).toEqual(['No owner', 'Nok', 'Arthit K.']);
     expect(ownerSelect()).toHaveValue('u2');
+    await submitted(1);
+    expect(onSubmit).toHaveBeenNthCalledWith(1, { title: 'Send the quotation to ACME', channelId: 'c3', ownerId: 'u2', dueDate: null });
 
     // Nok is not in #sales-th: the options are replaced and the owner is cleared back to No owner.
     await user.selectOptions(channel, 'c2');
@@ -145,6 +161,8 @@ describe('TaskForm', () => {
     });
     expect(within(ownerSelect()).getAllByRole('option').map((option) => option.textContent)).toEqual(['No owner', 'Arthit K.']);
     expect(ownerSelect()).toHaveValue('');
+    await submitted(2);
+    expect(onSubmit).toHaveBeenNthCalledWith(2, { title: 'Send the quotation to ACME', channelId: 'c2', ownerId: null, dueDate: null });
   });
 
   it('TaskForm_SubmitsTitleChannelOwnerAndDueDate', async () => {

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { en } from '../labels/en';
 import { LabelsProvider } from '../labels';
@@ -432,6 +432,61 @@ describe('tear and seal', () => {
     const user = userEvent.setup();
     stubReducedMotion(true);
     renderPanel({ drafts: [quotation, slides], listLagMs: 30 });
+    await user.click(draftItem(quotation.title).getByRole('button', { name: `Confirm: ${quotation.title}` }));
+    expect(await screen.findByRole('img', { name: 'Confirmed' })).toBeInTheDocument();
+    expect(await screen.findByText('Confirmed: Send the quotation to ACME. 1 draft left.')).toBeInTheDocument();
+    expect(draftItem(slides.title).getByRole('button', { name: `Confirm: ${slides.title}` })).toHaveFocus();
+  });
+
+  it('Confirm_ServerAnswersAfterUnmount_TearsAndSchedulesNothing', async () => {
+    vi.useFakeTimers();
+    const animate = stubAnimate();
+    stubLayout();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let answer: () => void = () => undefined;
+    const confirm = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { unmount } = renderPanel({ drafts: [quotation, slides], confirm });
+
+    fireEvent.click(draftItem(quotation.title).getByRole('button', { name: `Confirm: ${quotation.title}` }));
+    expect(confirm).toHaveBeenCalledExactlyOnceWith('t1');
+
+    // The route changes while the server is still thinking; then the server says yes.
+    unmount();
+    answer();
+    await settle(0);
+
+    // No slip is left to tear: no ghost over the screen that replaced the panel, no animation, and nothing scheduled.
+    // `play` always sets the live region and schedules its text 40ms later, so a timer count of 0 also means that no
+    // state was set on the unmounted hook. This is read straight after the answer, before a ghost's own 400ms removal
+    // could hide it, and again once every timer that could have been scheduled would have fired.
+    const nothing = () => {
+      expect(document.body.querySelector('.kiwi-ghost')).toBeNull();
+      expect(animate).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    };
+    nothing();
+    await settle(1000);
+    nothing();
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('Confirm_StillSealsUnderStrictMode', async () => {
+    // The app renders in StrictMode, which mounts, unmounts and mounts every effect again: the hook's "on screen" flag
+    // must survive that rehearsal, or no draft would ever tear.
+    const user = userEvent.setup();
+    stubReducedMotion(true);
+    render(
+      <StrictMode>
+        <Harness drafts={[quotation, slides]} />
+      </StrictMode>,
+    );
     await user.click(draftItem(quotation.title).getByRole('button', { name: `Confirm: ${quotation.title}` }));
     expect(await screen.findByRole('img', { name: 'Confirmed' })).toBeInTheDocument();
     expect(await screen.findByText('Confirmed: Send the quotation to ACME. 1 draft left.')).toBeInTheDocument();

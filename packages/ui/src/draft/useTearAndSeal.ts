@@ -121,10 +121,15 @@ export function useTearAndSeal(): TearAndSeal {
   const timers = useRef(new Set<number>());
   const ghosts = useRef(new Set<HTMLElement>());
   const sayTimer = useRef<number>(undefined);
+  // Whether the host is on screen. Unlike the cleanup below, it also covers what is still in flight: the server call
+  // that resolves after an unmount must schedule nothing and set no state.
+  const mounted = useRef(false);
 
   useEffect(() => {
+    mounted.current = true;
     const owned = { waiting: waiting.current, timers: timers.current, ghosts: ghosts.current };
     return () => {
+      mounted.current = false;
       owned.timers.forEach((timer) => {
         window.clearTimeout(timer);
       });
@@ -173,6 +178,9 @@ export function useTearAndSeal(): TearAndSeal {
 
   const play = useCallback(
     (before: Before, text: Labels) => {
+      if (!mounted.current) {
+        return;
+      }
       const { root, id, title, motion, ghost } = before;
       const body = root.querySelector<HTMLElement>('[data-drafts-body]');
       if (body !== null) {
@@ -240,7 +248,9 @@ export function useTearAndSeal(): TearAndSeal {
       const before = take(li, !reduced && typeof Element.prototype.animate === 'function');
       // The server decides first. A rejection leaves the slip exactly where it was: nothing has been torn, sealed or said.
       await run();
-      if (before === null) {
+      // The panel may have gone while the server thought (a route change): there is no slip left to tear, and a ghost
+      // appended now would float over whatever screen replaced it.
+      if (before === null || !mounted.current) {
         return;
       }
       void removed(li).then((gone) => {
