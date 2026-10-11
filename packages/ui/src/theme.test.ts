@@ -60,6 +60,12 @@ describe('theme.css palette', () => {
     expect(reset).toBeLessThan(css.indexOf('--color-primary:'));
   });
 
+  it('keeps every token as a CSS variable, because component stylesheets read them with var()', () => {
+    // Without `static`, Tailwind drops each variable no utility references, and var(--color-slip-edge) in slip.css
+    // would resolve to nothing in the built app.
+    expect(css).toMatch(/^@theme static\s*{/m);
+  });
+
   it('declares exactly the DESIGN.md colour tokens', () => {
     expect([...colorTokens().keys()].sort()).toEqual([...DESIGN_TOKENS].sort());
   });

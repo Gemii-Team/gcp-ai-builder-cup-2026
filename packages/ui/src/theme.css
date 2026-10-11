@@ -2,8 +2,11 @@
  * K.I.W.I. Proof Slip theme for Tailwind v4. Token names and values are DESIGN.md's; a token that no
  * prototype uses is not added. Seal Green is for confirmed things, Draft Amber for what waits on a person,
  * Returned Red for failure. There are no gradients, and the torn sealed slip is the only thing that casts a shadow.
+ *
+ * `static` keeps every token as a CSS variable on :root. Tailwind would otherwise drop the variables no utility
+ * references, and the component stylesheets (slip.css and the like) read tokens with var(--color-*).
  */
-@theme {
+@theme static {
   /* The default palette, type scale, radii and shadows give way to the design system's own. */
   --color-*: initial;
   --font-*: initial;
