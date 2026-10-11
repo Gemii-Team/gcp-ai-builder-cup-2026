@@ -1,0 +1,498 @@
+/*
+ * The signed-in shell: the grid `rail | main`, the Ink Teal rail, the phone's tab bar, the account menu and the bottom
+ * sheets. Ported from .impeccable/prototype/channel.html (the three screens that live in the shell share it); every
+ * colour, radius and size is a theme token (`var(--color-*)`, `var(--radius-*)`), nothing is hard-coded.
+ *
+ * Unlayered plain CSS like the component stylesheets of @kiwi/ui, so it beats Tailwind utilities where they meet.
+ */
+
+:root {
+  --rail-w: clamp(232px, 16.7vw, 264px);
+  --panel-w: clamp(312px, 23.9vw, 380px);
+  --pad: 28px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ===== The grid ===== */
+.shell {
+  height: 100%;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+}
+
+.demo-tag {
+  position: fixed;
+  left: 16px;
+  bottom: 8px;
+  z-index: 5;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-rail-sage);
+  pointer-events: none;
+}
+
+.tabs {
+  display: none;
+}
+
+/* ===== The rail ===== */
+.rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 0 36px 12px;
+  background: var(--color-primary);
+  color: var(--color-tally-mint);
+}
+
+.rail-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 12px 4px;
+  color: var(--color-on-primary);
+}
+
+.rail-brand svg {
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+
+.rail-brand strong {
+  display: block;
+  font-size: var(--text-wordmark);
+  font-weight: var(--text-wordmark--font-weight);
+  letter-spacing: var(--text-wordmark--letter-spacing);
+  line-height: var(--text-wordmark--line-height);
+}
+
+.rail-brand small {
+  display: block;
+  font-size: 14px;
+  color: var(--color-rail-sage);
+  line-height: 1.45;
+}
+
+.rail h2 {
+  padding: 16px 12px 4px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--color-rail-sage);
+}
+
+.ch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-tally-mint);
+  transition: background-color .15s, color .15s;
+}
+
+a.ch:hover {
+  background: var(--color-rail-hover);
+  color: var(--color-on-primary);
+}
+
+a.ch:active {
+  background: var(--color-rail-press);
+}
+
+.ch .h {
+  width: 10px;
+  text-align: center;
+  color: var(--color-rail-sage);
+}
+
+.ch[data-unread] {
+  color: var(--color-on-primary);
+  font-weight: 600;
+}
+
+.ch[aria-current] {
+  background: var(--color-counter-mint);
+  color: var(--color-ledger-ink);
+  font-weight: 600;
+}
+
+.ch[aria-current] .h {
+  color: var(--color-carbon-copy);
+}
+
+.ch .cnt {
+  margin: 0 12px 0 auto;
+  min-width: 24px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-tally-mint);
+  color: var(--color-primary);
+  font: 600 12px/20px var(--font-mono);
+  text-align: center;
+}
+
+.ch .dot {
+  width: 8px;
+  height: 8px;
+  margin: 0 1px;
+  border-radius: var(--radius-pill);
+  background: var(--color-presence-green);
+}
+
+.ch .st {
+  margin: 0 12px 0 auto;
+  font-size: 14px;
+  color: var(--color-rail-sage);
+}
+
+.ch[data-view] svg {
+  margin: 0 -4px;
+}
+
+.mewrap {
+  margin: auto 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-rail-line);
+}
+
+.me {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-tally-mint);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .15s;
+}
+
+.me:hover {
+  background: var(--color-rail-hover);
+}
+
+.me:active {
+  background: var(--color-rail-press);
+}
+
+.me .av {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-tile);
+  font-size: 16px;
+}
+
+.me b {
+  display: block;
+  font-weight: 600;
+  color: var(--color-on-primary);
+  line-height: 1.45;
+}
+
+.me small {
+  display: block;
+  font-size: 14px;
+  color: var(--color-rail-sage);
+  line-height: 1.45;
+}
+
+.me .chv {
+  margin-left: auto;
+  flex: none;
+  color: var(--color-rail-sage);
+}
+
+.me-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 4px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-on-primary);
+}
+
+/* The avatar tile: the first letter of a name on Tally Mint. */
+.av {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--color-tally-mint);
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* The account menu's header line, inside the menu. */
+.menu-h {
+  margin-bottom: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-track-rule);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-carbon-copy);
+}
+
+.menu-h .n {
+  display: block;
+  color: var(--color-ledger-ink);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* ===== Bottom sheets (phones): the drafts sheet and the account sheet, over a scrim ===== */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--color-sheet-scrim);
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  max-height: min(88dvh, 720px);
+  border: 1px solid var(--color-ledger-rule);
+  border-bottom: 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: var(--color-counter-mint);
+}
+
+.scrim[data-state="open"] {
+  animation: scrim-in .3s;
+}
+
+.scrim[data-state="closed"] {
+  animation: scrim-out .3s forwards;
+}
+
+.sheet[data-state="open"] {
+  animation: sheet-in .36s var(--ease-expo);
+}
+
+.sheet[data-state="closed"] {
+  animation: sheet-out .36s var(--ease-expo) forwards;
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes scrim-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.sheet:focus {
+  outline: none;
+}
+
+.sheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 6px 8px 6px 16px;
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.sheet-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+/* The drafts sheet's close button sits at the panel header's right edge, where the prototype's header holds it. */
+.sheet-close {
+  position: absolute;
+  top: 6px;
+  right: 0;
+}
+
+.sheet [data-drafts-root] .kiwi-ph {
+  padding-right: 56px;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.mcard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mcard .av {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-tile);
+  font-size: 16px;
+}
+
+.mcard b {
+  display: block;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.mcard small {
+  display: block;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--color-carbon-copy);
+}
+
+.mcard .n {
+  font-size: 13px;
+}
+
+.sheet-body .sheet-signout {
+  width: 100%;
+}
+
+/* ===== Phones and narrow (1023px and below): the rail gives way to the tab bar ===== */
+@media (max-width: 1023px) {
+  :root {
+    --pad: 16px;
+  }
+
+  .shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  .demo-tag {
+    position: static;
+    order: -1;
+    flex: none;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 2px) 16px 0;
+    text-align: right;
+    color: var(--color-carbon-copy);
+    pointer-events: auto;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .rail {
+    display: none;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    flex: none;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    background: var(--color-primary);
+  }
+
+  .tabs a,
+  .tabs button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-tally-mint);
+    font-size: 15px;
+    line-height: 1.5;
+    cursor: pointer;
+  }
+
+  .tab-pill {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 28px;
+    border-radius: var(--radius-pill);
+    transition: background-color .15s;
+  }
+
+  .tabs a:hover .tab-pill,
+  .tabs button:hover .tab-pill {
+    background: var(--color-rail-hover);
+  }
+
+  .tabs a:active .tab-pill,
+  .tabs button:active .tab-pill {
+    background: var(--color-rail-press);
+  }
+
+  .tabs [aria-current] {
+    color: var(--color-on-primary);
+    font-weight: 600;
+  }
+
+  .tabs [aria-current] .tab-pill {
+    background: var(--color-rail-hover);
+  }
+}
+
+@media (max-width: 600px) {
+  .tabs {
+    padding-top: 4px;
+  }
+}

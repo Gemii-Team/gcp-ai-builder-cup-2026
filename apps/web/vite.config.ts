@@ -40,4 +40,12 @@ export default defineConfig({
       },
     }),
   ],
+  server: {
+    // The API is same-origin: in development the dev server stands in for the ingress and forwards both the Connect
+    // calls and the realtime socket to the backend the local stack runs on port 8080.
+    proxy: {
+      '/api': 'http://localhost:8080',
+      '/ws': { target: 'http://localhost:8080', ws: true },
+    },
+  },
 });
