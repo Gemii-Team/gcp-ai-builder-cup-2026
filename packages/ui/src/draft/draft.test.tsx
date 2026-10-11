@@ -700,6 +700,15 @@ describe('DraftsPanel', () => {
     renderPanel({ drafts: [quotation], sealed: [sealedFrom(slides)], variant: 'band' });
     expect(screen.getByRole('list', { name: 'Confirmed just now' })).toBeInTheDocument();
   });
+
+  it('offers a draft its own members when it has them, and the panel list to the rest', () => {
+    const ops: DraftTask = { ...slides, id: 't4', title: 'Print the pick lists', members: [{ id: 'u9', name: 'Warehouse lead' }] };
+    renderPanel({ drafts: [quotation, ops], variant: 'band' });
+
+    const options = (title: string) => draftItem(title).getAllByRole('option').map((option) => option.textContent);
+    expect(options(ops.title)).toEqual(['Choose an owner', 'Warehouse lead']);
+    expect(options(quotation.title)).toEqual(['Choose an owner', 'Somchai W.', 'Nok', 'Arthit K.']);
+  });
 });
 
 describe('DraftsBar', () => {

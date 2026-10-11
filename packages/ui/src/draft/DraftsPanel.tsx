@@ -69,7 +69,7 @@ function DraftItem({ draft, members, onConfirm, onEdit, confirm }: DraftItemProp
     <li ref={item} className="kiwi-item" data-draft="" data-flip="" data-task-id={draft.id}>
       <DraftSlip
         draft={draft}
-        members={members}
+        members={draft.members ?? members}
         onEdit={(patch) => onEdit(draft.id, patch)}
         onConfirm={() => (item.current === null ? Promise.resolve() : confirm(item.current, () => onConfirm(draft.id)))}
       />

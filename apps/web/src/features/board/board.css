@@ -323,3 +323,43 @@
     font-size: 15px;
   }
 }
+
+/* ===== New task: a person adds it directly, so it is confirmed at once: a plain card, never a draft and never sealed ===== */
+.bd-nfw {
+  padding-top: 16px;
+}
+
+/* ===== Filters and the status control, on phones ===== */
+@media (max-width: 1023px) {
+  .bd-nfw {
+    padding-top: 12px;
+  }
+
+  .bd-tool {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 16px;
+  }
+
+  .bd-filt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* The selects wait behind the Filters button, two to a row (`hidden` closes them). */
+  .bd-tool-f {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .bd-tool-f .kiwi-sel {
+    display: block;
+  }
+
+  .bd-tool-f .kiwi-sel-ctl {
+    width: 100%;
+  }
+}

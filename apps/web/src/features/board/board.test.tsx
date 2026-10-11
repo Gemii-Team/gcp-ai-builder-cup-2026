@@ -1,90 +1,16 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
-import {
-  CreatedByKind,
-  ExcerptSchema,
-  GetFileResponseSchema,
-  GetMeetingResponseSchema,
-  GetTranscriptExcerptResponseSchema,
-  ListMessagesResponseSchema,
-  MoveTaskResponseSchema,
-  SourceKind,
-  TaskStatus,
-} from '@kiwi/api-client';
-import { dateToDueAt } from '@kiwi/ui';
+import { ExcerptSchema, GetTranscriptExcerptResponseSchema, ListMessagesResponseSchema, MoveTaskResponseSchema, TaskStatus } from '@kiwi/api-client';
 import { screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useUiStore } from '../../state/ui';
-import { at, channel, file, frame, meeting, message, ME_ID, task } from '../../testing/fixtures';
-import { renderApp } from '../../testing/render';
-import { createStubApi, seedApi, type StubApi, type World } from '../../testing/stubApi';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ANNOUNCE, card, cell, DOCUMENT, endBoardDay, lane, openBoard, QUOTE, ready, startBoardDay, TASKS } from '../../testing/boardWorld';
+import { at, frame, message, ME_ID, task } from '../../testing/fixtures';
+import { createStubApi } from '../../testing/stubApi';
 import boardCss from './board.css?raw';
-import { BoardScreen } from './Board';
 
-const CHANNELS = [channel({ id: 'ch-q4', name: 'q4-launch' }), channel({ id: 'ch-ops', name: 'ops-warehouse' })];
-
-const MEETING = { kind: SourceKind.MEETING, id: 'meeting-1', anchor: '12', label: 'Q4 launch weekly sync', channelId: 'ch-q4', offsetMs: 761000n };
-const QUOTE = '4.1 Term. This Agreement ends on 31 December 2026.';
-const DOCUMENT = { kind: SourceKind.FILE, id: 'file-1', anchor: 'page:4', label: 'ACME-contract-v3.pdf', channelId: 'ch-q4', page: 4, quote: QUOTE };
-const MESSAGE = { kind: SourceKind.MESSAGE, id: 'msg-41', anchor: '41', label: 'Arthit K.', channelId: 'ch-ops', at: timestampFromDate(at('17:05', '2026-10-12')) };
-
-const due = (day: string) => timestampFromDate(dateToDueAt(day));
-
-const ANNOUNCE = task({ id: 't-announce', ref: 'TSK-2030', title: 'Announce the new launch date', assigneeId: ME_ID, dueAt: due('2026-10-14'), position: 'a0', source: MEETING });
-const RATE_CARD = task({ id: 't-ratecard', ref: 'TSK-2024', title: 'Get the Q4 rate card', assigneeId: 'user-nok', dueAt: due('2026-10-12'), position: 'a1', source: MEETING });
-const RENEW = task({ id: 't-renew', ref: 'TSK-2026', title: 'Decide whether to renew ACME', position: 'a0', source: DOCUMENT });
-const FORKLIFT = task({ id: 't-forklift', ref: 'TSK-2028', channelId: 'ch-ops', title: 'Book two extra forklift shifts', assigneeId: 'user-arthit', position: 'a0', source: MESSAGE });
-const BRIEFING = task({
-  id: 't-hand',
-  ref: 'TSK-2036',
-  channelId: 'ch-ops',
-  title: 'Prepare the warehouse briefing',
-  assigneeId: 'user-arthit',
-  dueAt: due('2026-10-20'),
-  position: 'a0',
-  createdById: ME_ID,
-  createdByKind: CreatedByKind.USER,
-  createdTime: '13:20',
-});
-const SIGNED = task({ id: 't-signed', ref: 'TSK-2017', title: 'Send the signed contract to Finance', status: TaskStatus.DONE, assigneeId: ME_ID, doneAt: timestampFromDate(at('14:48')), position: 'a0', source: DOCUMENT });
-const TASKS = [ANNOUNCE, RATE_CARD, RENEW, FORKLIFT, BRIEFING, SIGNED];
-
-// "Now" is 14:40 on Tue 13 Oct 2026 in Bangkok.
-beforeEach(() => {
-  localStorage.clear();
-  useUiStore.setState({ lang: 'en', readSeq: {}, lastChannelId: null, draftsSheetOpen: false });
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(at('14:40'));
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-function openBoard(world: World = {}, api: StubApi = createStubApi(), initialChannelId: string | null = null) {
-  seedApi(api, { channels: CHANNELS, tasks: TASKS, ...world });
-  api.meetings.getMeeting.mockResolvedValue(create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-1', ref: 'MTG-1014', startedAt: timestampFromDate(at('13:46')), endedAt: timestampFromDate(at('14:29')) }) }));
-  api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ id: 'file-1', name: 'ACME-contract-v3.pdf', ref: 'DOC-0371', pages: 18 }) }));
-  return renderApp({ path: '/board', api, routes: [{ path: '/board', element: <BoardScreen initialChannelId={initialChannelId} /> }] });
-}
-
-/** The card of a task, by its title. */
-const card = (title: string) => {
-  const item = screen.getByRole('heading', { level: 3, name: title }).closest('li');
-  if (item === null) {
-    throw new Error(`"${title}" is not on a card`);
-  }
-  return within(item);
-};
-
-const lane = (name: RegExp | string) => within(screen.getByRole('region', { name }));
-const cell = (status: string, laneTitle: string) => within(screen.getByRole('group', { name: `${status} in ${laneTitle}` }));
-
-async function ready() {
-  await screen.findByRole('heading', { level: 3, name: 'Announce the new launch date' });
-}
+beforeEach(startBoardDay);
+afterEach(endBoardDay);
 
 describe('the Board: source lanes', () => {
   it('draws the header, the column heads and one lane per source with its meta and REF from GetMeeting and GetFile', async () => {
@@ -419,7 +345,7 @@ describe('realtime and filters', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'Source type' }), 'hand');
 
     expect(screen.getByText('Prepare the warehouse briefing')).toBeInTheDocument();
-    expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(1);
+    expect(within(document.querySelector<HTMLElement>('.bd-lanes') ?? document.body).getAllByRole('heading', { level: 3 })).toHaveLength(1);
     expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent).filter((text) => /Added by hand/.test(text))).toHaveLength(1);
   });
 

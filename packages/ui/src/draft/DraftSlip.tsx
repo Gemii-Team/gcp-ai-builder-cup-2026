@@ -25,6 +25,8 @@ export type DraftTask = {
   source: Source;
   /** The answer the draft was made from, `ANS-2209`, when it came from Ask. */
   fromAnswerRef?: string;
+  /** Who this draft may be given to, when that differs from the panel's list: the Board's drafts belong to different channels. */
+  members?: readonly Member[];
 };
 
 /** What a person may change on a draft before confirming it. */

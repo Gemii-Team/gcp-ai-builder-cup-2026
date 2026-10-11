@@ -7,6 +7,9 @@ export const STATUSES = ['todo', 'doing', 'done'] as const;
 /** A status's name in `@kiwi/core`'s tables. */
 export const STATUS_KEY = { todo: 'statusTodo', doing: 'statusDoing', done: 'statusDone' } as const;
 
+/** What an empty cell of each status says. */
+export const EMPTY_KEY = { todo: 'cellEmptyTodo', doing: 'cellEmptyDoing', done: 'cellEmptyDone' } as const;
+
 export type Status = (typeof STATUSES)[number];
 
 /** What the Source type filter offers: the three kinds of source, and `hand` for a task no source stands behind. */

@@ -2,10 +2,8 @@ import { formatDay, type BoardCounts, type DraftPatch, type DraftTask, type Memb
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useApi } from '../../api/client';
-import { confirmDraft } from '../../api/confirmDraft';
+import { confirmDraft, editDraft } from '../../api/confirmDraft';
 import { useChannelTasks, useMe, useMembers } from '../../api/hooks';
-import { mapTask } from '../../api/mappers';
-import { writeTask } from '../../api/queries';
 import type { ChannelView, TaskView } from '../../api/types';
 import { useI18n } from '../../i18n';
 
@@ -61,15 +59,8 @@ export function useChannelDrafts(channel: ChannelView, ownerNameOf: (userId: str
     }
   }
 
-  async function onEdit(id: string, patch: DraftPatch) {
-    const { task } = await api.tasks.updateTask({
-      id,
-      ...(patch.title === undefined ? {} : { title: patch.title }),
-      ...(patch.ownerId === undefined ? {} : patch.ownerId === null ? { clearAssignee: true } : { assigneeId: patch.ownerId }),
-    });
-    if (task !== undefined) {
-      writeTask(queryClient, mapTask(task));
-    }
+  function onEdit(id: string, patch: DraftPatch) {
+    return editDraft(api, queryClient, id, patch);
   }
 
   return { drafts, sealed, members: memberList, counts, onConfirm, onEdit };

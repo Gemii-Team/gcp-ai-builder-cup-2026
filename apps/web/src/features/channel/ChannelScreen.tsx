@@ -19,7 +19,7 @@ import { MessageFiles } from './MessageFiles';
 import { MessageRow } from './MessageRow';
 import { Stream } from './Stream';
 import { useChannelMessages } from './useChannelMessages';
-import { DraftsSheet } from './DraftsSheet';
+import { DraftsSheet } from '../shell/DraftsSheet';
 import { useChannelDrafts } from './useChannelDrafts';
 import { useMakeTask } from './useMakeTask';
 import { useStartMeeting } from './useStartMeeting';

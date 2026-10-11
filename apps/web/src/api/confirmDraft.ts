@@ -1,4 +1,5 @@
 import { Code } from '@connectrpc/connect';
+import type { DraftPatch } from '@kiwi/ui';
 import type { QueryClient } from '@tanstack/react-query';
 import type { Api } from './client';
 import { hasCode } from './errors';
@@ -27,5 +28,17 @@ export async function confirmDraft(api: Api, queryClient: QueryClient, draft: { 
       void queryClient.invalidateQueries({ queryKey: keys.tasks() });
     }
     throw error;
+  }
+}
+
+/** Saves a change to a draft (its title, or its owner: `null` clears it) and writes the updated task into the caches. */
+export async function editDraft(api: Api, queryClient: QueryClient, id: string, patch: DraftPatch): Promise<void> {
+  const { task } = await api.tasks.updateTask({
+    id,
+    ...(patch.title === undefined ? {} : { title: patch.title }),
+    ...(patch.ownerId === undefined ? {} : patch.ownerId === null ? { clearAssignee: true } : { assigneeId: patch.ownerId }),
+  });
+  if (task !== undefined) {
+    writeTask(queryClient, mapTask(task));
   }
 }

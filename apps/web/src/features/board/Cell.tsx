@@ -1,10 +1,7 @@
 import type { ReactNode } from 'react';
 import type { TaskView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
-import { STATUS_KEY } from './useBoardData';
-import type { Status } from './useBoardData';
-
-const EMPTY = { todo: 'cellEmptyTodo', doing: 'cellEmptyDoing', done: 'cellEmptyDone' } as const;
+import { EMPTY_KEY, STATUS_KEY, type Status } from './useBoardData';
 
 type CellProps = {
   status: Status;
@@ -23,7 +20,7 @@ export function Cell({ status, laneTitle, tasks, renderCard }: CellProps) {
         <ul>{tasks.map((task) => renderCard(task))}</ul>
       ) : (
         <p className="bd-cell-empty">
-          <T k={EMPTY[status]} />
+          <T k={EMPTY_KEY[status]} />
         </p>
       )}
     </div>
