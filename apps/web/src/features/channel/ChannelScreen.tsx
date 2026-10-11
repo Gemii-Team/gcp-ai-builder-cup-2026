@@ -77,7 +77,7 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
   const sheetOpen = useUiStore((state) => state.draftsSheetOpen);
   const setSheetOpen = useUiStore((state) => state.setDraftsSheetOpen);
   const sheetId = useId();
-  const barOpener = useRef<HTMLElement | null>(null);
+  const bar = useRef<HTMLButtonElement>(null);
 
   /** The drafts a meeting summary made that are still waiting; unknown until the channel's tasks have loaded. */
   const draftsOf = (message: ChatMessage): number | undefined =>
@@ -160,11 +160,11 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
             }}
           />
           <DraftsBar
+            ref={bar}
             count={drafts.drafts.length}
             expanded={sheetOpen}
             controls={sheetId}
             onPress={() => {
-              barOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
               setSheetOpen(true);
             }}
           />
@@ -182,7 +182,7 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
         </main>
         <DraftsPanel {...panel} />
       </div>
-      <DraftsSheet id={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} opener={barOpener}>
+      <DraftsSheet id={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} opener={bar}>
         <DraftsPanel {...panel} />
       </DraftsSheet>
     </ExcerptProvider>

@@ -1,6 +1,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { create } from '@bufbuild/protobuf';
 import {
+  GetMeetingResponseSchema,
   CompleteUploadResponseSchema,
   CreateFromRecordingResponseSchema,
   CreateUploadResponseSchema,
@@ -14,6 +15,7 @@ import {
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUiStore } from '../../state/ui';
+import { keys } from '../../api/queries';
 import { file, frame, meeting, message } from '../../testing/fixtures';
 import { LOG, openChannel } from '../../testing/openChannel';
 import { createStubApi, type StubApi } from '../../testing/stubApi';
@@ -228,5 +230,71 @@ describe('the slips of a message with files', () => {
     await user.click(within(log).getByRole('button', { name: 'Retry' }));
     expect(api.meetings.retrySummary).toHaveBeenCalledWith({ meetingId: 'meeting-9' });
     expect(await within(log).findByText('Summarizing the recording…')).toBeInTheDocument();
+  });
+});
+
+describe('Retry when the service is unhealthy', () => {
+  /** Every promise rejection nobody handled while a test ran. */
+  const unhandled: unknown[] = [];
+  const record = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  beforeEach(() => {
+    unhandled.length = 0;
+    process.on('unhandledRejection', record);
+  });
+  afterEach(() => {
+    process.off('unhandledRejection', record);
+  });
+  /** Lets a rejection that nobody handled surface. */
+  const flush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+
+  it('says so, keeps the file slip failed and lets Retry be pressed again, when RetryAnalysis fails', async () => {
+    const api = createStubApi();
+    const { user } = openChannel({ messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-1', name: 'warehouse-slots.csv', mime: 'text/csv', size: 2048n }] })] }, api);
+    api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ status: FileStatus.FAILED, failureReason: 'unreadable' }) }));
+    const log = await screen.findByRole('log', LOG);
+    const retry = await within(log).findByRole('button', { name: 'Retry' });
+    api.files.retryAnalysis.mockRejectedValue(new ConnectError('down', Code.Unavailable));
+
+    await user.click(retry);
+    await flush();
+
+    expect(await within(log).findByRole('alert')).toHaveTextContent("Couldn't start the retry. Try again.");
+    expect(within(log).getByText(/Couldn't summarize warehouse-slots.csv/)).toBeInTheDocument();
+    expect(within(log).queryByText('Summarizing file…')).not.toBeInTheDocument();
+    expect(within(log).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(unhandled).toEqual([]);
+
+    // Pressing it again goes through once the service is back, and the notice clears.
+    api.files.retryAnalysis.mockResolvedValue({} as never);
+    await user.click(within(log).getByRole('button', { name: 'Retry' }));
+    expect(await within(log).findByText('Summarizing file…')).toBeInTheDocument();
+    expect(within(log).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says so, keeps the meeting slip failed and lets Retry be pressed again, when RetrySummary fails', async () => {
+    const api = createStubApi();
+    const { user, queryClient } = openChannel(
+      { messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-9', name: 'standup.wav', mime: 'audio/wav', size: 4n }] })] },
+      api,
+    );
+    api.meetings.getMeeting.mockResolvedValue(
+      create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.FAILED, failureReason: 'no_speech' }) }),
+    );
+    const log = await screen.findByRole('log', LOG);
+    await within(log).findByText('standup.wav');
+    queryClient.setQueryData(keys.recording('file-9'), 'meeting-9');
+    const retry = await within(log).findByRole('button', { name: 'Retry' });
+    api.meetings.retrySummary.mockRejectedValue(new ConnectError('down', Code.Unavailable));
+
+    await user.click(retry);
+    await flush();
+
+    expect(await within(log).findByRole('alert')).toHaveTextContent("Couldn't start the retry. Try again.");
+    expect(within(log).getByText(/Couldn't summarize standup/)).toBeInTheDocument();
+    expect(within(log).queryByText('Summarizing the recording…')).not.toBeInTheDocument();
+    expect(within(log).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(unhandled).toEqual([]);
   });
 });

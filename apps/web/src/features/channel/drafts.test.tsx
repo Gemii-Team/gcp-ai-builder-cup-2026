@@ -8,7 +8,8 @@ import {
   SourceKind,
   TaskState,
 } from '@kiwi/api-client';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import type { UserEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUiStore } from '../../state/ui';
 import { message, task } from '../../testing/fixtures';
@@ -180,5 +181,31 @@ describe('the phone drafts sheet', () => {
     });
     expect(bar()).toHaveFocus();
     await act(async () => Promise.resolve());
+  });
+
+  // Safari (macOS and iOS) and Firefox on macOS do not focus a button when it is clicked or tapped, so the page's
+  // active element is the body at that moment: the sheet must still give focus back to the bar, not to the body.
+  it.each<[string, (user: UserEvent) => Promise<void>]>([
+    ['Escape', (user) => user.keyboard('{Escape}')],
+    [
+      'the close button',
+      () => {
+        fireEvent.click(within(screen.getByRole('dialog', { name: 'AI drafts' })).getByRole('button', { name: 'Close' }));
+        return Promise.resolve();
+      },
+    ],
+  ])('returns focus to the bar after %s when the bar was never focused', async (_how, close) => {
+    const { user } = await withDrafts();
+    expect(document.body).toHaveFocus();
+
+    fireEvent.click(bar());
+    const sheet = await screen.findByRole('dialog', { name: 'AI drafts' });
+    expect(sheet).toBeInTheDocument();
+    await close(user);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(bar()).toHaveFocus();
   });
 });

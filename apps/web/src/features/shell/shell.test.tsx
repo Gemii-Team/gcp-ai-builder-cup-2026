@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import { ListChannelsResponseSchema, MembershipChange, MembershipChangedSchema } from '@kiwi/api-client';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hardNavigate } from '../../navigation';
 import { useUiStore } from '../../state/ui';
@@ -227,6 +227,23 @@ describe('AccountSheet', () => {
     expect(me).toHaveFocus();
     expect(me).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByRole('navigation', RAIL)).toBeInTheDocument();
+  });
+
+  // Safari and Firefox on macOS do not focus a button on a click or a tap: focus must still return to the Me tab.
+  it('returns focus to the Me tab when it was never focused', async () => {
+    const { user } = shellWithChannels('/c/ch-q4');
+    const tabs = within(await screen.findByRole('navigation', { name: 'Main navigation' }));
+    const me = tabs.getByRole('button', { name: 'Me' });
+    expect(document.body).toHaveFocus();
+
+    fireEvent.click(me);
+    await screen.findByRole('dialog', { name: 'Account' });
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Me' })).toHaveFocus();
   });
 
   it('signs out from the sheet with the same logout, and shows the failure inside it', async () => {

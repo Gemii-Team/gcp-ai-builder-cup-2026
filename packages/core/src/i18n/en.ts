@@ -104,6 +104,7 @@ export const en = {
   taskMadeAnnouncement: 'Task {code} created: {title}. It is on the Board under To do.',
   aiDrafts: 'AI drafts',
   summarizedBy: 'Summarized by K.I.W.I.',
+  retryFailed: "Couldn't start the retry. Try again.",
 };
 
 /** The shape every language table must fill: each key of `en`, a plural key with both forms. */

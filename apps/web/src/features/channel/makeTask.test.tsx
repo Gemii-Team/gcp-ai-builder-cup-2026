@@ -98,6 +98,27 @@ describe('MakeTask', () => {
     expect(within(log).getByRole('button', { name: /at 14:10$/ })).toHaveFocus();
   });
 
+  it('MakeTask_TitleClipCountsCodePointsAndNeverSplitsAnEmojiOrAThaiCluster', async () => {
+    const emojis = '😀'.repeat(125);
+    const thai = `${'ก'.repeat(118)}น้ and the rest of the message`;
+    const { user } = openChannel({
+      messages: [message({ seq: 2, time: '14:08', body: thai }), message({ seq: 1, time: '14:02', body: emojis })],
+    });
+    const log = await screen.findByRole('log', LOG);
+    await within(log).findByText(emojis);
+
+    await user.click(within(log).getByRole('button', { name: /at 14:02$/ }));
+    const astral = (titleField() as HTMLInputElement).value;
+    // 125 astral runes are 250 UTF-16 units: counted in runes the title is 119 emoji and the ellipsis, 120 in all.
+    expect(astral).toBe(`${'😀'.repeat(119)}…`);
+    expect(runes(astral)).toBe(120);
+    expect(astral).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+
+    await user.click(within(log).getByRole('button', { name: /at 14:08$/ }));
+    // The consonant and its tone mark are one cluster: it does not fit in 119 runes, so the title ends before it.
+    expect((titleField() as HTMLInputElement).value).toBe(`${'ก'.repeat(118)}…`);
+  });
+
   const CREATED = (init: Parameters<typeof task>[0] = {}) =>
     create(CreateTaskResponseSchema, {
       task: task({

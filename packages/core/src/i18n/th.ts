@@ -100,4 +100,5 @@ export const th: I18nTable = {
   taskMadeAnnouncement: 'สร้างงาน {code} แล้ว: {title} อยู่บนบอร์ดในช่องต้องทำ',
   aiDrafts: 'ฉบับร่างจาก <en>AI</en>',
   summarizedBy: 'สรุปโดย <en>K.I.W.I.</en>',
+  retryFailed: 'เริ่มการลองอีกครั้งไม่ได้ ลองใหม่อีกครั้ง',
 };
