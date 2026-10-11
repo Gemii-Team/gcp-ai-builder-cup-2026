@@ -1,0 +1,26 @@
+# Local-only documentation: specs, plans, ADRs, notes. Never pushed.
+/docs/
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+kubeconfig
+kubeconfig*
+*.kubeconfig
+*.pem
+*.key
+*.p12
+*-credentials.json
+*-sa-key.json
+service-account*.json
+application_default_credentials.json
+
+# Terraform state, plans and variable files (can contain secrets)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+crash.log
