@@ -172,6 +172,46 @@ export const en = {
   taskMoveFailed: "Couldn't move {code}. Try again.",
   taskLanded: 'Added to To do in {lane}.',
   taskLandedNote: 'Added to To do',
+
+  // Ask: header, command field and scope
+  askSubtitle: 'Cited answers from your channels',
+  askInputLabel: 'Ask a question, in English or Thai',
+  askPlaceholder: 'Ask about your channels, meetings, files and tasks',
+  askPlaceholderPhone: 'Ask about your work',
+  askSubmit: 'Ask',
+  askNeedText: 'Type a question first.',
+  askScope: { one: "Searching {count} channel you're in", other: "Searching {count} channels you're in" },
+  askScopedTo: 'Searching only #{channel}',
+  askScopeList: 'Channels searched',
+  askScopeNote: 'Only channels you belong to: their messages, meeting transcripts, files and tasks.',
+  askLangHint: 'Ask in English or {thai}',
+  askSamples: 'Sample questions',
+
+  // Ask: thread, answers and not-found answers
+  askThread: 'Thread',
+  askLog: 'Questions and answers',
+  askKindEnglish: 'answer in English',
+  askKindThai: 'answer in Thai',
+  askKindNotFound: 'no answer found',
+  askFailed: "Couldn't answer this question: {reason}",
+  askAnswerReady: { one: 'Answer ready, {ref}: {count} source.', other: 'Answer ready, {ref}: {count} sources.' },
+  askNotFoundAnnounced: 'Not found in channels you can access. Next steps are listed below the answer.',
+  askNotFoundTitle: 'Not found in channels you can access',
+  askNotFoundWhy: {
+    one: "Searched messages, meeting transcripts, files and tasks in the {count} channel you're in and found nothing that answers this.",
+    other: "Searched messages, meeting transcripts, files and tasks in the {count} channels you're in and found nothing that answers this.",
+  },
+  askNextHeading: 'What you can do next',
+  askNextRephrase: 'Rephrase it with a name, a date or a file name.',
+  askNextAsk: 'Ask the people in the channel where it would come up, then ask again.',
+  askNextWait: 'If a file or a meeting was only just added, wait until it has been summarized, then ask again.',
+  askSearchedOnly: "Searched only channels you're in",
+  askSearched: 'Searched {time}',
+  askEditQuestion: 'Edit question',
+  askAskTeam: 'Ask the team in a channel',
+  askMessageSource: '{author} in #{channel}',
+  askChannelGone: "a channel you're no longer in",
+  askPageShort: 'p. {page}',
 };
 
 /** The shape every language table must fill: each key of `en`, a plural key with both forms. */

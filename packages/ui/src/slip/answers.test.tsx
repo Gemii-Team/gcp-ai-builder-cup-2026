@@ -136,3 +136,33 @@ describe('Escape with an open excerpt', () => {
     document.removeEventListener('keydown', sheetEscape, true);
   });
 });
+
+describe('a slip that handles its own source presses', () => {
+  it('hands a pressed offset or page to onSourcePress with its source and position, and opens no excerpt (no provider is needed)', async () => {
+    const onSourcePress = vi.fn();
+    const user = userEvent.setup();
+    render(<ProofSlip ref="ANS-2207" summary="x" sources={sources} sourceNumbers={[1, 2]} onSourcePress={onSourcePress} generatedAt="2026-10-13T07:40:00Z" />);
+
+    await user.click(screen.getByRole('button', { name: 'ACME-contract-v3.pdf, page 4' }));
+    await user.click(screen.getByRole('button', { name: 'Transcript at 0:18:22' }));
+
+    expect(onSourcePress.mock.calls).toEqual([
+      [sources[0], 0],
+      [sources[1], 1],
+    ]);
+    expect(screen.queryByRole('group', { name: /excerpt/ })).toBeNull();
+  });
+
+  it('puts its actions in a row at the foot of the stub, after the sources', () => {
+    render(
+      <ProofSlip ref="ANS-2207" summary="x" sources={sources} generatedAt="2026-10-13T07:40:00Z" actions={<button type="button">Make a task from this</button>} />,
+      { wrapper: ({ children }) => <ExcerptProvider load={loadExcerpt}>{children}</ExcerptProvider> },
+    );
+
+    const action = screen.getByRole('button', { name: 'Make a task from this' });
+    const list = screen.getByRole('list', { name: 'Sources' });
+
+    expect(action.parentElement).toHaveClass('kiwi-acts');
+    expect(list.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

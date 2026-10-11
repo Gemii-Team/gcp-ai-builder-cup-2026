@@ -17,6 +17,7 @@ describe('service worker navigation allowlist', () => {
     '/board',
     '/board?channel=0194f3a2',
     '/ask',
+    '/ask?channel=0194f3a2',
     '/ask?q=%E0%B8%AA%E0%B8%A7%E0%B8%B1%E0%B8%AA%E0%B8%94%E0%B8%B5',
   ])('answers the SPA route %s with the cached shell', (path) => {
     expect(shellAnswers(path)).toBe(true);

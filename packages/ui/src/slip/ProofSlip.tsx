@@ -29,6 +29,13 @@ type ProofSlipProps = {
   draftCount?: number;
   /** The meeting the tracks' offsets point into. */
   meetingId?: string;
+  /**
+   * Replaces opening an excerpt in place when a row's offset or page is pressed, with the source and its row's position:
+   * Ask uses it to select the matching source slip instead. A slip given it needs no `ExcerptProvider`.
+   */
+  onSourcePress?: (source: Source, index: number) => void;
+  /** The slip's own actions, in a row at the foot of the stub, after the sources (Ask's Sources toggle and Make a task). */
+  actions?: ReactNode;
 };
 
 /**
@@ -36,7 +43,7 @@ type ProofSlipProps = {
  * generated and the sources it rests on. Offsets and pages in it open their excerpt in place, so the slip needs an
  * `ExcerptProvider` above it.
  */
-export function ProofSlip({ ref, title, meta, summary, tracks, sources, sourceNumbers, hitNumber, generatedAt, draftCount, meetingId }: ProofSlipProps) {
+export function ProofSlip({ ref, title, meta, summary, tracks, sources, sourceNumbers, hitNumber, generatedAt, draftCount, meetingId, onSourcePress, actions }: ProofSlipProps) {
   const labels = useLabels();
   return (
     <Slip>
@@ -75,11 +82,16 @@ export function ProofSlip({ ref, title, meta, summary, tracks, sources, sourceNu
         </StubRow>
         {sources.length > 0 && (
           <ol className="kiwi-srcs" aria-label={labels.text('sources')}>
-            {sources.map((source, index) => (
-              <SourceRow key={index} source={source} n={sourceNumbers?.[index]} hit={hitNumber !== undefined && hitNumber !== null && sourceNumbers?.[index] === hitNumber} />
-            ))}
+            {sources.map((source, index) => {
+              const hit = hitNumber !== undefined && hitNumber !== null && sourceNumbers?.[index] === hitNumber;
+              const press = (pressed: Source) => {
+                onSourcePress?.(pressed, index);
+              };
+              return <SourceRow key={index} source={source} n={sourceNumbers?.[index]} hit={hit} {...(onSourcePress === undefined ? {} : { onPress: press })} />;
+            })}
           </ol>
         )}
+        {actions !== undefined && <div className="kiwi-acts">{actions}</div>}
       </Stub>
     </Slip>
   );
