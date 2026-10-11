@@ -1,8 +1,10 @@
 package frames_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -247,9 +249,33 @@ func TestRouter_FansOutThroughFrameForAndAddsNoBusMessages(t *testing.T) {
 	if err != nil || len(extra) != 0 || len(fan) != 0 {
 		t.Errorf("Route(doc.uploaded) = %v, %v, %v; want nothing", extra, fan, err)
 	}
+}
 
-	_, _, err = r.Route(outbox.Stored{Event: outbox.Event{Topic: events.TopicTaskChanged, Payload: []byte(`{`)}})
-	if !errors.Is(err, errs.ErrInvalid) {
-		t.Errorf("Route(bad payload) error = %v, want errs.ErrInvalid so the row is retried and logged", err)
+// A hint that cannot be mapped must not stop the row: the relay runs Route before
+// the row's own bus Publish, so an error would postpone the row for ever and keep
+// its durable consumers from ever seeing it. Route logs and sends no frame instead.
+func TestRouter_UnmappableEvent_IsLoggedAndDroppedNotRetried(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	row := outbox.Stored{ID: 4242, Event: outbox.Event{Topic: events.TopicTaskChanged, Payload: []byte(`{`)}}
+	if _, err := frames.FrameFor(row.Topic, row.Payload); !errors.Is(err, errs.ErrInvalid) {
+		t.Fatalf("FrameFor(bad payload) error = %v, want errs.ErrInvalid: the mapper itself stays strict", err)
+	}
+
+	extra, fan, err := frames.Router{}.Route(row)
+	if err != nil {
+		t.Fatalf("Route(bad payload) error = %v, want nil: an error makes the relay retry the row for ever", err)
+	}
+	if len(extra) != 0 || len(fan) != 0 {
+		t.Errorf("Route(bad payload) = %v, %v; want no bus messages and no frames", extra, fan)
+	}
+	got := logged.String()
+	for _, want := range []string{"level=ERROR", "outbox_id=4242", "topic=task.changed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log %q lacks %q", got, want)
+		}
 	}
 }

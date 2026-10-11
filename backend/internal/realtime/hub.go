@@ -101,6 +101,12 @@ func (h *hub) detach(c *conn) {
 // subscribe makes c follow channel. epoch is the value of epochNow before the
 // membership check that allowed it; if a revocation has happened since, nothing is
 // changed and false is returned so the caller checks again.
+//
+// The epoch only covers an answer read from the cache before the revocation
+// invalidated it. A check that reads Postgres before the removal commits and
+// writes the stale set into the cache after the invalidation is not caught here:
+// keeping that from happening is the obligation of the Membership implementation
+// (chat.NewMembership), not of the gateway.
 func (h *hub) subscribe(c *conn, channel uuid.UUID, epoch uint64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

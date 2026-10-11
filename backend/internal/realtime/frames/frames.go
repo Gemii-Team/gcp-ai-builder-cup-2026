@@ -4,7 +4,9 @@
 package frames
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -29,8 +31,9 @@ import (
 //	membership.changed                          ->  u:{userId}, plus ch:{channelId} for ADDED
 //
 // A payload it cannot route (not decodable, or missing the channel or user a frame
-// is addressed to) is errs.ErrInvalid, so the relay retries and logs the row
-// instead of dropping it.
+// is addressed to) is errs.ErrInvalid and yields no frames. FrameFor stays strict;
+// Router is where such an event is dropped, so it never blocks the row's other
+// deliveries.
 func FrameFor(topic string, payload []byte) ([]outbox.Fanout, error) {
 	switch topic {
 	case events.TopicChatMessageCreated:
@@ -165,8 +168,17 @@ type Router struct{}
 
 var _ outbox.Router = Router{}
 
-// Route implements outbox.Router.
+// Route implements outbox.Router. An event FrameFor calls errs.ErrInvalid is logged
+// and dropped, not returned: the relay runs Route before the row's own bus Publish
+// and retries a failed row without limit, so returning it would keep the row from
+// its durable consumers for the sake of a frame, and frames are only hints (clients
+// resync by seq). Any other error, a failed encode, stays retryable.
 func (Router) Route(ev outbox.Stored) ([]bus.Message, []outbox.Fanout, error) {
 	fan, err := FrameFor(ev.Topic, ev.Payload)
+	if errors.Is(err, errs.ErrInvalid) {
+		slog.Error("realtime: event cannot be mapped to a frame; no frame sent, the row still goes to the bus",
+			"outbox_id", ev.ID, "topic", ev.Topic, "error", err)
+		return nil, nil, nil
+	}
 	return nil, fan, err
 }

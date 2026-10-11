@@ -289,9 +289,19 @@ func (f *fixture) wsURL(ticket string) string {
 // dial opens a WebSocket with ticket and returns the HTTP handshake response too.
 func (f *fixture) dial(ticket string) (*websocket.Conn, *http.Response, error) {
 	f.t.Helper()
+	return f.dialWith(ticket, "")
+}
+
+// dialWith is dial from a page of the given origin ("" sends no Origin header).
+func (f *fixture) dialWith(ticket, origin string) (*websocket.Conn, *http.Response, error) {
+	f.t.Helper()
 	ctx, cancel := context.WithTimeout(f.t.Context(), 10*time.Second)
 	defer cancel()
-	c, resp, err := websocket.Dial(ctx, f.wsURL(ticket), nil)
+	var opts *websocket.DialOptions
+	if origin != "" {
+		opts = &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {origin}}}
+	}
+	c, resp, err := websocket.Dial(ctx, f.wsURL(ticket), opts)
 	if err == nil {
 		f.t.Cleanup(func() { _ = c.CloseNow() })
 	}
@@ -898,6 +908,89 @@ func TestClientFrames_MalformedOrTextFramesCloseTheConnection(t *testing.T) {
 	if got := websocket.CloseStatus(text.readErr()); got != websocket.StatusUnsupportedData {
 		t.Errorf("text frame closed with %v, want unsupported data", got)
 	}
+}
+
+// onlyChannel is a membership of exactly one channel.
+type onlyChannel struct{ channel uuid.UUID }
+
+func (m onlyChannel) IsMember(_ context.Context, channelID, _ uuid.UUID) (bool, error) {
+	return channelID == m.channel, nil
+}
+
+func TestClientFrames_FrameSizeIsBounded(t *testing.T) {
+	member := uuid.Must(uuid.NewV7())
+	f := newFixture(t, Options{}, func(*fixture) authz.Membership { return onlyChannel{member} })
+
+	// A Subscribe of 400 channel ids is about 15 KB: inside the bound, served in full.
+	big := f.connect(uuid.Must(uuid.NewV7()))
+	ids := make([]string, 0, 400)
+	for range 399 {
+		ids = append(ids, uuid.NewString())
+	}
+	big.subscribe(append(ids, member.String())...)
+	f.live(ch(member), 1)
+
+	// 20 KB is above the bound and below the library's own default (32 KB), so only
+	// the gateway's explicit limit can refuse it: with none the frame is read and
+	// fails as a protobuf instead (1007).
+	oversized := f.connect(uuid.Must(uuid.NewV7()))
+	if err := oversized.ws.Write(t.Context(), websocket.MessageBinary, make([]byte, 20<<10)); err != nil {
+		t.Fatal(err)
+	}
+	if got := websocket.CloseStatus(oversized.readErr()); got != websocket.StatusMessageTooBig {
+		t.Errorf("a 20 KB frame closed with %v, want message too big", got)
+	}
+}
+
+func TestOrigin_SameOriginByDefault_ConfiguredPatternsAdded(t *testing.T) {
+	const dev = "localhost:5173"
+	for _, tc := range []struct {
+		name     string
+		patterns []string
+		origin   func(f *fixture) string
+		want     int
+	}{
+		{"no origin header", nil, func(*fixture) string { return "" }, http.StatusSwitchingProtocols},
+		{"same origin", nil, func(f *fixture) string { return f.srv.URL }, http.StatusSwitchingProtocols},
+		{"another origin, none configured", nil, func(*fixture) string { return "http://" + dev }, http.StatusForbidden},
+		{"configured origin", []string{dev}, func(*fixture) string { return "http://" + dev }, http.StatusSwitchingProtocols},
+		{"same origin, others configured", []string{dev}, func(f *fixture) string { return f.srv.URL }, http.StatusSwitchingProtocols},
+		{"origin that is not configured", []string{dev}, func(*fixture) string { return "https://evil.example" }, http.StatusForbidden},
+		{"look-alike of the configured origin", []string{dev}, func(*fixture) string { return "http://" + dev + "0" }, http.StatusForbidden},
+		{"scheme-qualified pattern for another scheme", []string{"https://" + dev}, func(*fixture) string { return "http://" + dev }, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, Options{OriginPatterns: tc.patterns}, nil)
+			_, resp, err := f.dialWith(f.ticket(f.newUser()), tc.origin(f))
+			if resp == nil || resp.StatusCode != tc.want {
+				t.Fatalf("dial with Origin %q: response %v, err %v; want status %d", tc.origin(f), resp, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestShutdown_ExpiredContext_CutsConnectionsWithoutWaitingForHandshakes(t *testing.T) {
+	f := newFixture(t, Options{DrainTimeout: time.Hour}, nil)
+	ana := f.newUser()
+	c := f.connect(ana) // never reads, so it never answers the close frame
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	start := time.Now()
+	f.gw.Shutdown(ctx)
+	// Without the cut, Shutdown waits for the close handshake, which the library
+	// gives up on after 5 s; the bound sits well under that and far above a cut.
+	if elapsed := time.Since(start); elapsed > 2500*time.Millisecond {
+		t.Errorf("Shutdown with an expired context took %v, want it not to wait for close handshakes", elapsed)
+	}
+
+	if err := c.readErr(); err == nil {
+		t.Error("the connection is still readable after Shutdown returned")
+	}
+	if n := f.gw.subscribers(usr(ana)); n != 0 {
+		t.Errorf("%d connections still registered after Shutdown", n)
+	}
+	eventually(t, "Valkey to drop u:{user}", func() bool { return f.shardNumSub(usr(ana)) == 0 })
 }
 
 func TestSubscribe_MembershipLookupFailureFailsClosed(t *testing.T) {

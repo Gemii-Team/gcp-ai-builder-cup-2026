@@ -19,6 +19,11 @@ import (
 // when its queue is not full yet.
 const writeTimeout = 10 * time.Second
 
+// maxClientFrame bounds a frame from a client, which is read whole. A Subscribe
+// takes about 38 bytes per channel id, so this holds roughly 430 channels; a
+// client in more channels must send several Subscribe frames.
+const maxClientFrame = 16 << 10
+
 // conn is one client's WebSocket. Frames for it go through send, a bounded queue
 // drained by writeLoop, so a slow client can delay only itself.
 type conn struct {

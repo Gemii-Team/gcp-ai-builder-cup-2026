@@ -4,6 +4,15 @@
 // ch:{channelId} and u:{userId}. Frames are hints; Postgres is the source of
 // truth and clients resync by seq. The gateway holds no business logic and
 // publishes nothing.
+//
+// Revocation is best effort, because the API enforces access and a frame only
+// hints. When a MembershipChanged{REMOVED} frame arrives on u:{userId} the user's
+// connections stop following the channel and the cached member set is dropped, but
+// two windows remain. Frames already queued for such a connection (up to the send
+// buffer, 256 for a client that reads slowly) are still written after the
+// revocation. And a REMOVED hint lost while the Valkey subscription reconnects is
+// not recovered: nothing re-validates a connection's channels periodically, so
+// the user keeps following the channel until the connection ends.
 package realtime
 
 import (
@@ -12,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,6 +46,10 @@ const (
 // frames behind it.
 const invalidateTimeout = 5 * time.Second
 
+// closeGrace is how long Shutdown lets close handshakes finish after its context
+// has ended, before it cuts the connections still open.
+const closeGrace = 500 * time.Millisecond
+
 // Deps are what the gateway needs; neither may be nil.
 type Deps struct {
 	// Cache redeems tickets, carries the pub/sub subscription and holds the
@@ -57,6 +71,12 @@ type Options struct {
 	// DrainTimeout is how long Shutdown keeps serving after readiness fails, for the
 	// load balancer to stop routing here. Zero skips the wait.
 	DrainTimeout time.Duration
+	// OriginPatterns are the extra origins (host or host:port patterns, matched
+	// case-insensitively with path.Match against the Origin header; a pattern with
+	// "://" is matched against scheme://host) that may open a connection. The
+	// request's own host is always allowed, so empty means same-origin only. The app
+	// passes the host of its public URL and, outside prod, the Vite dev origin.
+	OriginPatterns []string
 }
 
 // Gateway serves GET /ws?ticket=… as an http.Handler.
@@ -108,12 +128,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Accept's same-origin check stays on: /ws is served from the web app's own
-	// origin. A page on another origin is refused with 403, ticket or not.
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
+	// The ticket is consumed above, before Accept's origin check, so a request
+	// refused with 403 has used its ticket up: the client fetches a new ticket for
+	// every connect, so nothing is lost.
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		CompressionMode: websocket.CompressionDisabled,
+		OriginPatterns:  g.opt.OriginPatterns, // the request's own host is always allowed
+	})
 	if err != nil {
 		return // Accept has written the HTTP error
 	}
+	// The library's default of 32 KB is undocumented API behaviour; the largest
+	// legitimate frame is a Subscribe, about 38 bytes per channel id.
+	ws.SetReadLimit(maxClientFrame)
+
 	c := newConn(context.WithoutCancel(r.Context()), ws, who, g.opt.SendBuffer)
 	if err := g.hub.attach(c.ctx, c); err != nil {
 		c.cancel()
@@ -132,7 +160,10 @@ func (g *Gateway) Ready() bool { return !g.stopping.Load() }
 
 // Shutdown fails readiness, keeps serving for Options.DrainTimeout (or until ctx
 // ends), then closes every connection with StatusGoingAway, so clients reconnect
-// elsewhere and resync, and releases the Valkey subscription. It returns when the
+// elsewhere and resync, and releases the Valkey subscription. A close handshake
+// needs the client's answer, which one that stopped reading never gives (the
+// library waits 5 s for it), so once ctx has ended the handshakes get closeGrace
+// to finish and the connections still open are then cut. It returns when the
 // connections are gone; a second call waits for the first. The Cache is the
 // caller's to close.
 func (g *Gateway) Shutdown(ctx context.Context) {
@@ -155,15 +186,30 @@ func (g *Gateway) Shutdown(ctx context.Context) {
 	}
 
 	conns := g.hub.close()
-	done := make(chan struct{}, len(conns))
-	for _, c := range conns {
-		go func() {
-			c.closeWith(websocket.StatusGoingAway, "server shutting down")
-			done <- struct{}{}
-		}()
-	}
-	for range conns {
-		<-done
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		var wg sync.WaitGroup
+		for _, c := range conns {
+			wg.Go(func() { c.closeWith(websocket.StatusGoingAway, "server shutting down") })
+		}
+		wg.Wait()
+	}()
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		grace := time.NewTimer(closeGrace)
+		select {
+		case <-closed:
+		case <-grace.C:
+			// Cancelling a connection's context closes its socket even in the middle
+			// of a close handshake, which CloseNow does not.
+			for _, c := range conns {
+				c.cancel()
+			}
+			<-closed
+		}
+		grace.Stop()
 	}
 	g.hub.stop()
 }
