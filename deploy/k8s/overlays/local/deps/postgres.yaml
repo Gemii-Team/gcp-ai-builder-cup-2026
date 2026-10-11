@@ -1,6 +1,8 @@
 # Postgres 17 with pgvector. The first start of an empty data directory runs
 # the ConfigMap postgres-init (database, roles, extension); the migrate Job
-# then builds the schema. The password is the one in the Secret kiwi-env.
+# then builds the schema. The password is the one in the Secret kiwi-env, set
+# into the roles once, on that first start: changing KIWI_DB_PASSWORD later
+# needs `task local:down` and `task local:up`, which drops the data directory.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,6 +45,15 @@ spec:
                   key: KIWI_DB_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+          # Holds the liveness and readiness probes off for up to 300 s while
+          # initdb and postgres-init run: a liveness kill after initdb but before
+          # the bootstrap SQL finished would leave a data directory that is
+          # never bootstrapped again (the init scripts run only on an empty one).
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]
+            periodSeconds: 3
+            failureThreshold: 100
           # TCP only answers once initdb and the init scripts are done: the
           # temporary server they use listens on the socket alone.
           readinessProbe:

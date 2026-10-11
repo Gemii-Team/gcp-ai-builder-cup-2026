@@ -2,7 +2,9 @@
 # on the first start of an empty data directory: the database kiwi owned by
 # kiwi_owner, the pgvector extension (only a superuser may install it), and the
 # four roles the migrations grant to. Every role takes the password from the
-# environment (KIWI_DB_PASSWORD); this file holds no secret.
+# environment (KIWI_DB_PASSWORD); this file holds no secret. It never runs
+# again on that data directory: changing the password needs `task local:down`
+# and `task local:up`.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,6 +17,10 @@ data:
     #!/bin/sh
     set -eu
     psql -v ON_ERROR_STOP=1 --no-psqlrc --username "$POSTGRES_USER" --dbname postgres <<'SQL'
+    -- A failing statement must not put the cleartext password into the server
+    -- log (log_min_error_statement) or psql's own error output (VERBOSITY).
+    SET log_min_error_statement = panic;
+    \set VERBOSITY terse
     \set pw `printf %s "$KIWI_DB_PASSWORD"`
     CREATE ROLE kiwi_owner LOGIN PASSWORD :'pw';
     CREATE ROLE kiwi_app LOGIN PASSWORD :'pw';

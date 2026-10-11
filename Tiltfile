@@ -2,9 +2,15 @@
 # The local stack on the k3d cluster. `task local:up` starts it:
 #   tilt up -- --overlay local
 #
-# Start order: postgres -> migrate -> kiwi, ollama -> ollama-pull -> kiwi,
-# valkey -> kiwi. Each resource waits until its dependencies are ready; a Job
-# is ready when it has completed.
+# Start order, on the first start only: postgres -> migrate -> kiwi,
+# ollama -> ollama-pull -> kiwi, valkey -> kiwi. resource_deps make a resource
+# wait until its dependencies are ready (a Job is ready once it has completed);
+# they do not order later updates: after a code change kiwi and migrate are
+# rebuilt and redeployed in parallel.
+#
+# The ConfigMap kiwi-config reaches the pod through envFrom, so editing it
+# changes nothing in a running kiwi. Restart it to pick the change up:
+#   kubectl --context k3d-kiwi -n kiwi rollout restart deploy/kiwi
 
 KUBE_CONTEXT = 'k3d-kiwi'
 REGISTRY = 'kiwi-registry.localhost:5001'
@@ -109,6 +115,6 @@ if web_enabled:
     )
     k8s_resource(
         'web',
-        resource_deps=['web-build', 'kiwi'],
+        resource_deps=['web-build'],
         labels=['app'],
     )

@@ -7,10 +7,17 @@
 # shown. Every missing required variable is named in one error.
 set -euo pipefail
 
+# Only .env may supply a value. A KIWI_* exported in the calling shell would
+# otherwise satisfy a variable missing from .env and end up in the Secret.
+while IFS= read -r inherited; do
+  unset "$inherited"
+done < <(compgen -v KIWI_)
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
-# Never the current context: a Secret holding the LLM key must not reach another cluster.
-KUBE_CONTEXT="${KUBE_CONTEXT:-k3d-kiwi}"
+# Always the k3d cluster, never the current context or the caller's environment:
+# a Secret holding the LLM key must not reach another cluster.
+KUBE_CONTEXT=k3d-kiwi
 NAMESPACE=kiwi
 overlay="${1:-local}"
 
@@ -25,10 +32,15 @@ case "$overlay" in
 esac
 [ -f "$ENV_FILE" ] || die "$ENV_FILE not found; run scripts/local/gen-env.sh and fill in the LLM values"
 
-# NAME=value lines are read, never evaluated: a value may hold $, quotes or backticks.
+# NAME=value lines (optionally "export NAME=value") are read, never evaluated: a
+# value may hold $, quotes or backticks.
 while IFS= read -r line || [ -n "$line" ]; do
   line="${line%$'\r'}"
+  line="${line#"${line%%[![:space:]]*}"}"
   case "$line" in '' | '#'*) continue ;; esac
+  if [[ "$line" =~ ^export[[:space:]]+ ]]; then
+    line="${line#"${BASH_REMATCH[0]}"}"
+  fi
   name="${line%%=*}"
   [[ "$name" =~ ^KIWI_[A-Z0-9_]+$ ]] || continue
   value="${line#*=}"

@@ -13,12 +13,14 @@ ports:
   - port: 8080:80
     nodeFilters:
       - loadbalancer
-# The registry Tilt pushes the kiwi and web images to. k3d wires it into every
+# The registry Tilt pushes the kiwi and web images to. Tilt pushes through the
+# loopback address below; the nodes pull over the Docker network by name, so the
+# port is not exposed beyond this machine. k3d wires the registry into every
 # node and advertises it in the kube-public/local-registry-hosting ConfigMap.
 registries:
   create:
     name: kiwi-registry.localhost
-    host: 0.0.0.0
+    host: 127.0.0.1
     hostPort: "5001"
 options:
   k3d:
