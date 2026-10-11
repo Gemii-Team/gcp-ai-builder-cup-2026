@@ -129,16 +129,52 @@ describe('a rejected upload says its reason', () => {
   });
 });
 
-describe('a failed file slip says the same reason', () => {
-  it.each(REASONS)('file_status_changed FAILED with %s', async (reason, english) => {
-    const api = createStubApi();
-    const { client } = openChannel(
-      { messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-1', name: 'warehouse-slots.csv', mime: 'text/csv', size: 2048n }] })] },
-      api,
-    );
-    api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ status: FileStatus.ANALYZING }) }));
-    const log = await screen.findByRole('log', LOG);
-    await within(log).findByText('Summarizing file…');
+/** What a failed file slip says for a reason, whole: the English and the Thai sentence of the same reason as the inline notice has them. */
+const SLIP = {
+  en: { name: 'Messages in #q4-launch', sentence: (reason: string) => `Couldn't summarize warehouse-slots.csv: ${reason}`, pending: 'Summarizing file…' },
+  th: { name: 'ข้อความใน #q4-launch', sentence: (reason: string) => `สรุป warehouse-slots.csv ไม่ได้: ${reason}`, pending: 'กำลังสรุปไฟล์…' },
+} as const;
+
+/** The channel with a message carrying a CSV, whose file the server reports as analyzing. */
+async function withFile(lang: 'en' | 'th') {
+  useUiStore.getState().setLang(lang);
+  const api = createStubApi();
+  const opened = openChannel(
+    { messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-1', name: 'warehouse-slots.csv', mime: 'text/csv', size: 2048n }] })] },
+    api,
+  );
+  api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ status: FileStatus.ANALYZING }) }));
+  const log = await screen.findByRole('log', { name: SLIP[lang].name });
+  await within(log).findByText((_, element) => element?.matches('[role="status"]') === true && element.textContent === SLIP[lang].pending);
+  return { ...opened, api, log };
+}
+
+/** The text of the failed slip, whole, once it shows: what the person reads and a screen reader announces. */
+async function failureText(log: HTMLElement): Promise<{ text: string; element: HTMLElement }> {
+  const element = await vi.waitFor(() => {
+    const found = log.querySelector<HTMLElement>('.kiwi-fmsg');
+    if (found === null) {
+      throw new Error('no failed slip yet');
+    }
+    return found;
+  });
+  return { text: element.textContent, element };
+}
+
+describe.each(['en', 'th'] as const)('a failed file slip says the same reason, in %s', (lang) => {
+  /** The reason's sentence in this language, as the inline rejection of the same reason says it. */
+  const said = (english: string, thai: string) => SLIP[lang].sentence(lang === 'en' ? english : thai);
+
+  /** The Latin words a Thai sentence marks carry `lang="en"` wherever the sentence is shown. */
+  const expectMarked = (reason: string, element: HTMLElement) => {
+    if (reason === 'unsupported_audio' && lang === 'th') {
+      expect(within(element).getByText('WAV')).toHaveAttribute('lang', 'en');
+      expect(within(element).getByText('PCM16')).toHaveAttribute('lang', 'en');
+    }
+  };
+
+  it.each(REASONS)('file_status_changed FAILED with %s', async (reason, english, thai) => {
+    const { client, log } = await withFile(lang);
 
     await act(async () => {
       client.emit(
@@ -150,21 +186,26 @@ describe('a failed file slip says the same reason', () => {
       await Promise.resolve();
     });
 
-    expect(await within(log).findByText(`Couldn't summarize warehouse-slots.csv: ${english}`)).toBeInTheDocument();
+    const { text, element } = await failureText(log);
+    expect(text).toBe(said(english, thai));
     expect(within(log).queryByText(/^REF /)).not.toBeInTheDocument();
+    expectMarked(reason, element);
   });
 
-  it('GetFile of a failed file says the reason it carries, with no event needed', async () => {
+  it.each(REASONS)('GetFile of a failed file says %s with no event needed', async (reason, english, thai) => {
+    useUiStore.getState().setLang(lang);
     const api = createStubApi();
     openChannel(
       { messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-1', name: 'warehouse-slots.csv', mime: 'text/csv', size: 2048n }] })] },
       api,
     );
-    api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ status: FileStatus.FAILED, failureReason: 'unsupported_audio' }) }));
+    api.files.getFile.mockResolvedValue(create(GetFileResponseSchema, { file: file({ status: FileStatus.FAILED, failureReason: reason }) }));
+    const log = await screen.findByRole('log', { name: SLIP[lang].name });
 
-    expect(
-      await within(await screen.findByRole('log', LOG)).findByText("Couldn't summarize warehouse-slots.csv: recordings must be WAV (PCM16) files."),
-    ).toBeInTheDocument();
+    const { text, element } = await failureText(log);
+
+    expect(text).toBe(said(english, thai));
+    expectMarked(reason, element);
   });
 });
 

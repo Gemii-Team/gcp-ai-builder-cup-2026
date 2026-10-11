@@ -1,17 +1,18 @@
 import { FailedSlip, Icon, PendingSlip } from '@kiwi/ui';
 import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useApi } from '../../api/client';
 import { useFile } from '../../api/hooks';
 import { keys, meetingQuery } from '../../api/queries';
 import type { ChatMessage, FileRefView, FileView, MeetingView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { failureReasonKey, isRecording } from '../../lib/failure';
+import { Sentence } from './Sentence';
 
 type SlipProps = { file: FileRefView; message: ChatMessage };
 
 type FailureProps = {
-  reason: string;
+  reason: ReactNode;
   failedAt: string;
   /** Asks the server to try again; resolves once it has agreed. */
   retry: () => Promise<void>;
@@ -58,7 +59,7 @@ function FileSlip({ file, message }: SlipProps) {
   if (status.status === 'failed') {
     return (
       <Failure
-        reason={plain('fileSummaryFailed', { name: file.name, reason: plain(failureReasonKey(status.failureReason)) })}
+        reason={<Sentence k="fileSummaryFailed" text={file.name} reason={failureReasonKey(status.failureReason)} />}
         failedAt={status.settledAt ?? message.createdAt}
         retry={async () => {
           await api.files.retryAnalysis({ fileId: file.fileId });
@@ -88,7 +89,7 @@ function RecordingSlip({ file, message }: SlipProps) {
   if (meeting.status === 'failed' || meeting.status === 'no_transcript') {
     return (
       <Failure
-        reason={plain('meetingSummaryFailed', { title: meeting.title, reason: plain(failureReasonKey(meeting.failureReason)) })}
+        reason={<Sentence k="meetingSummaryFailed" slot="title" text={meeting.title} reason={failureReasonKey(meeting.failureReason)} />}
         failedAt={meeting.settledAt ?? message.createdAt}
         retry={async () => {
           await api.meetings.retrySummary({ meetingId: meeting.id });

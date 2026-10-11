@@ -1,9 +1,14 @@
-import { Icon, IconButton, LangRuns, Rich } from '@kiwi/ui';
+import { Icon, IconButton, LangRuns } from '@kiwi/ui';
 import { useRef } from 'react';
 import { useI18n } from '../../i18n';
-import type { UploadRejection, UploadState } from './useUpload';
+import { Sentence } from './Sentence';
+import type { UploadState } from './useUpload';
 
-/** What the paperclip offers the file picker: the attachments the server takes, and sound and video, which become a meeting. */
+/**
+ * What the paperclip offers the file picker: the attachments the server takes (PDF, PNG, JPEG, text, Markdown, CSV) and
+ * sound and video. The picker only offers; the server decides. It takes sound only as PCM16 WAV and says so in the
+ * rejection of anything else, so the list is not narrowed here.
+ */
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.txt,.md,.csv,audio/*,video/*';
 
 /** The paperclip: a 44px icon button on phones that opens the file picker (the input itself stays out of sight). */
@@ -40,26 +45,6 @@ export function AttachButton({ onPick }: { onPick: (file: File) => void }) {
   );
 }
 
-/** Stands where the file name goes while the sentence around it is rendered (a control character no sentence contains). */
-const NAME_SLOT = '\u0001';
-
-/**
- * One of the sentences that name a file. Its Latin words in Thai (`WAV`, `PCM16`) are tagged `lang="en"` by `Rich`, and
- * the file name, which is the person's own words, has its Thai runs tagged `lang="th"` by `LangRuns`.
- */
-function Sentence({ rejection, name }: { rejection: UploadRejection; name: string }) {
-  const { t } = useI18n();
-  const text = t(rejection.key, { name: NAME_SLOT, ...('reason' in rejection ? { reason: t(rejection.reason) } : {}) });
-  const [before = '', after = ''] = text.split(NAME_SLOT);
-  return (
-    <>
-      <Rich text={before} />
-      <LangRuns text={name} />
-      <Rich text={after} />
-    </>
-  );
-}
-
 /** Above the composer: the file being sent, or why the server would not take it, in the one failure family. */
 export function UploadNotice({ state, onDismiss }: { state: UploadState; onDismiss: () => void }) {
   const { plain } = useI18n();
@@ -78,7 +63,7 @@ export function UploadNotice({ state, onDismiss }: { state: UploadState; onDismi
     <p className="notice" role="alert">
       <Icon name="warning" />
       <span>
-        <Sentence rejection={state.rejection} name={state.name} />
+        <Sentence k={state.rejection.key} text={state.name} {...('reason' in state.rejection ? { reason: state.rejection.reason } : {})} />
       </span>
       <IconButton label={plain('close')} className="notice-close" onClick={onDismiss}>
         <Icon name="close" />
