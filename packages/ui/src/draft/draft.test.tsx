@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { StrictMode, useState } from 'react';
+import { createRef, StrictMode, useState } from 'react';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { en } from '../labels/en';
 import { LabelsProvider } from '../labels';
@@ -694,6 +694,16 @@ describe('DraftsBar', () => {
 
     rerender(<DraftsBar count={0} expanded={false} controls="sheet" onPress={onPress} />);
     expect(screen.getByRole('button', { name: 'No drafts waiting' })).toHaveAttribute('data-zero');
+  });
+
+  it('DraftsBar_HandsOutItsButtonThroughRef, so the sheet it opens can return focus to it', () => {
+    const bar = createRef<HTMLButtonElement>();
+
+    render(<DraftsBar ref={bar} count={2} expanded={false} controls="sheet" onPress={() => undefined} />);
+
+    expect(bar.current).toBe(screen.getByRole('button', { name: '2 drafts to confirm' }));
+    bar.current?.focus();
+    expect(screen.getByRole('button', { name: '2 drafts to confirm' })).toHaveFocus();
   });
 });
 
