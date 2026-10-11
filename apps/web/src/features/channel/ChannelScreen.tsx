@@ -1,7 +1,7 @@
 import './channel.css';
-import { ExcerptProvider, formatClock, Pending } from '@kiwi/ui';
+import { DraftsBar, DraftsPanel, ExcerptProvider, formatClock, Pending } from '@kiwi/ui';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { useApi } from '../../api/client';
 import { createExcerptLoader } from '../../api/excerpts';
 import { useChannels, useChannelTasks, useMe, useMembers, useUsers } from '../../api/hooks';
@@ -18,6 +18,8 @@ import { MessageFiles } from './MessageFiles';
 import { MessageRow } from './MessageRow';
 import { Stream } from './Stream';
 import { useChannelMessages } from './useChannelMessages';
+import { DraftsSheet } from './DraftsSheet';
+import { useChannelDrafts } from './useChannelDrafts';
 import { useMakeTask } from './useMakeTask';
 import { useStartMeeting } from './useStartMeeting';
 import { useUpload } from './useUpload';
@@ -69,6 +71,13 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
     () => [ASSISTANT, ...(members.data ?? []).filter((member) => member.userId !== me.data?.user.id).map((member): MentionTarget => ({ kind: 'user', id: member.userId, name: member.name }))],
     [members.data, me.data],
   );
+
+  const drafts = useChannelDrafts(channel, (id) => names.get(id));
+  const panel = { drafts: drafts.drafts, sealed: drafts.sealed, members: drafts.members, onConfirm: drafts.onConfirm, onEdit: drafts.onEdit, counts: drafts.counts, variant: 'panel' } as const;
+  const sheetOpen = useUiStore((state) => state.draftsSheetOpen);
+  const setSheetOpen = useUiStore((state) => state.setDraftsSheetOpen);
+  const sheetId = useId();
+  const barOpener = useRef<HTMLElement | null>(null);
 
   /** The drafts a meeting summary made that are still waiting; unknown until the channel's tasks have loaded. */
   const draftsOf = (message: ChatMessage): number | undefined =>
@@ -150,6 +159,15 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
               );
             }}
           />
+          <DraftsBar
+            count={drafts.drafts.length}
+            expanded={sheetOpen}
+            controls={sheetId}
+            onPress={() => {
+              barOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+              setSheetOpen(true);
+            }}
+          />
           <Composer
             channelName={channel.name}
             people={people}
@@ -162,7 +180,11 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
             {make.announcement}
           </p>
         </main>
+        <DraftsPanel {...panel} />
       </div>
+      <DraftsSheet id={sheetId} open={sheetOpen} onOpenChange={setSheetOpen} opener={barOpener}>
+        <DraftsPanel {...panel} />
+      </DraftsSheet>
     </ExcerptProvider>
   );
 }

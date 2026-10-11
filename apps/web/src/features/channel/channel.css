@@ -563,3 +563,21 @@
     grid-template-columns: 24px minmax(0, 1fr) auto auto;
   }
 }
+
+/* ===== The drafts panel: the channel's right column from 1024px, the phone sheet's content below ===== */
+@media (min-width: 1024px) {
+  .chan {
+    grid-template-columns: minmax(0, 1fr) var(--panel-w);
+  }
+}
+
+@media (max-width: 1023px) {
+  .chan > [data-drafts-root] {
+    display: none;
+  }
+}
+
+.sheet [data-drafts-root] {
+  flex: 1;
+  min-height: 0;
+}

@@ -209,3 +209,10 @@ export function removeChannel(queryClient: QueryClient, channelId: string): void
   queryClient.removeQueries({ queryKey: keys.members(channelId) });
   queryClient.removeQueries({ queryKey: keys.channelTasks(channelId) });
 }
+
+/** Drops a task that no longer exists (a draft someone discarded) from the workspace list and its channel's list. */
+export function removeTask(queryClient: QueryClient, task: { id: string; channelId: string }): void {
+  const without = (tasks: TaskView[] | undefined) => tasks?.filter((t) => t.id !== task.id);
+  queryClient.setQueryData<TaskView[]>(keys.tasks(), without);
+  queryClient.setQueryData<TaskView[]>(keys.channelTasks(task.channelId), without);
+}
