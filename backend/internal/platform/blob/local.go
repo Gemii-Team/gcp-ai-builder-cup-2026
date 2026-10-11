@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"slices"
 	"strconv"
@@ -78,14 +79,17 @@ func newLocal(dir string, signingKey []byte, publicURL string) (*Local, error) {
 // Close releases the store.
 func (l *Local) Close() error { return l.bucket.Close() }
 
-// SignedPut implements Store. The URL belongs to ServeHTTP: it accepts one PUT of
-// at most maxBytes with exactly this Content-Type until ttl passes.
+// SignedPut implements Store. The URL belongs to ServeHTTP: it accepts any number of
+// PUTs of at most maxBytes with exactly this Content-Type until ttl passes, and the
+// last one wins, so callers must not treat the object as immutable inside the ttl.
+// It refuses what the PUT could never store: a contentType that is not a media type
+// and a key the file store reserves.
 func (l *Local) SignedPut(_ context.Context, key, contentType string, maxBytes int64, ttl time.Duration) (string, map[string]string, error) {
 	if err := validKey(key); err != nil {
 		return "", nil, err
 	}
-	if contentType == "" || maxBytes <= 0 || ttl <= 0 {
-		return "", nil, fmt.Errorf("blob: a signed upload needs a content type, a positive size limit and a positive ttl: %w", errs.ErrInvalid)
+	if _, _, err := mime.ParseMediaType(contentType); err != nil || maxBytes <= 0 || ttl <= 0 {
+		return "", nil, fmt.Errorf("blob: a signed upload needs a media type, a positive size limit and a positive ttl: %w", errs.ErrInvalid)
 	}
 	u, err := l.sign(claims{Key: key, Method: http.MethodPut, ContentType: contentType, MaxBytes: maxBytes}, ttl)
 	if err != nil {
@@ -211,6 +215,14 @@ func (l *Local) servePut(w http.ResponseWriter, r *http.Request, c claims) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// inlineTypes are the only content types serveGet lets a browser render in place.
+var inlineTypes = map[string]bool{
+	"application/pdf": true,
+	"image/png":       true,
+	"image/jpeg":      true,
+	"text/plain":      true,
+}
+
 func (l *Local) serveGet(w http.ResponseWriter, r *http.Request, c claims) {
 	br, err := l.bucket.NewReader(r.Context(), c.Key, nil)
 	if err != nil {
@@ -230,9 +242,21 @@ func (l *Local) serveGet(w http.ResponseWriter, r *http.Request, c claims) {
 	h := w.Header()
 	h.Set("Content-Type", contentType)
 	h.Set("Content-Length", strconv.FormatInt(br.Size(), 10))
-	// The object is served from the application's own origin with the type its
-	// uploader declared; never let a browser second-guess it.
+	// The object is served from the application's own origin, which holds the session
+	// cookie, with the type its uploader declared. This is the one place user bytes
+	// reach a browser, so it defends in depth behind the docs lane's attachment
+	// allowlist: a type admitted by mistake (HTML, SVG, XML) downloads instead of
+	// rendering, and every response but a PDF carries a sandbox CSP that denies
+	// scripts should a browser render it anyway. The PDF is exempt because Chromium's
+	// viewer refuses a sandboxed document. A type that does not parse is not inline.
 	h.Set("X-Content-Type-Options", "nosniff")
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	if !inlineTypes[mediaType] {
+		h.Set("Content-Disposition", "attachment")
+	}
+	if mediaType != "application/pdf" {
+		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, br) // a failure here is the client going away
 }
@@ -285,9 +309,10 @@ func (l *Local) mac(payload string) string {
 }
 
 // validKey refuses keys that could climb out of the store's directory or that the
-// store cannot name. The error never echoes the key.
+// file store cannot name (it reserves the .attrs suffix for its sidecar files). The
+// error never echoes the key.
 func validKey(key string) error {
-	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") || strings.ContainsRune(key, 0) {
+	if key == "" || strings.HasPrefix(key, "/") || strings.Contains(key, "..") || strings.ContainsRune(key, 0) || strings.HasSuffix(key, ".attrs") {
 		return fmt.Errorf("blob: invalid key: %w", errs.ErrInvalid)
 	}
 	return nil

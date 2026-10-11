@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -424,6 +425,18 @@ func TestLocal_SignedURLRejectsInvalidArguments(t *testing.T) {
 			_, _, err := f.SignedPut(ctx, "uploads/ws-1/f", "", 1, time.Minute)
 			return err
 		},
+		"put with a type that is not a media type": func() error {
+			_, _, err := f.SignedPut(ctx, "uploads/ws-1/f", "not a media type", 1, time.Minute)
+			return err
+		},
+		"put with a malformed type parameter": func() error {
+			_, _, err := f.SignedPut(ctx, "uploads/ws-1/f", "text/plain; charset", 1, time.Minute)
+			return err
+		},
+		"put under a key the file store reserves": func() error {
+			_, _, err := f.SignedPut(ctx, "uploads/ws-1/f.attrs", "application/pdf", 1, time.Minute)
+			return err
+		},
 		"put without bytes": func() error {
 			_, _, err := f.SignedPut(ctx, "uploads/ws-1/f", "application/pdf", 0, time.Minute)
 			return err
@@ -443,6 +456,79 @@ func TestLocal_SignedURLRejectsInvalidArguments(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLocal_GetServesUserBytesAsAttachmentUnderSandbox pins the defence in depth
+// behind the docs lane's allowlist: a type nobody meant to admit must never render on
+// the application's origin, even when the signer let it in.
+func TestLocal_GetServesUserBytesAsAttachmentUnderSandbox(t *testing.T) {
+	const csp = "default-src 'none'; sandbox"
+	for _, tc := range []struct {
+		contentType string
+		inline      bool // rendered in place: no Content-Disposition
+		sandboxed   bool // carries the CSP; a PDF cannot, Chromium's viewer refuses it
+	}{
+		{"text/html", false, true},
+		{"text/html; charset=utf-8", false, true},
+		{"image/svg+xml", false, true},
+		{"application/xml", false, true},
+		{"application/octet-stream", false, true},
+		{"image/png", true, true},
+		{"application/pdf", true, false},
+	} {
+		t.Run(tc.contentType, func(t *testing.T) {
+			f := newFixture(t)
+			const key = "uploads/ws-1/file-9"
+			payload := []byte("<script>fetch('/api/x')</script>")
+			f.upload(t, key, tc.contentType, payload)
+
+			resp := f.do(t, http.MethodGet, f.signedGet(t, key, time.Minute), nil, nil)
+			wantStatus(t, resp, http.StatusOK)
+			if body, _ := io.ReadAll(resp.Body); !bytes.Equal(body, payload) {
+				t.Fatalf("body = %q, want %q", body, payload)
+			}
+			if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+			wantDisposition := "attachment"
+			if tc.inline {
+				wantDisposition = ""
+			}
+			if got := resp.Header.Get("Content-Disposition"); got != wantDisposition {
+				t.Errorf("Content-Disposition = %q, want %q", got, wantDisposition)
+			}
+			wantCSP := ""
+			if tc.sandboxed {
+				wantCSP = csp
+			}
+			if got := resp.Header.Get("Content-Security-Policy"); got != wantCSP {
+				t.Errorf("Content-Security-Policy = %q, want %q", got, wantCSP)
+			}
+		})
+	}
+}
+
+// TestLocal_GetOfSignedTraversalKeyRefused covers the re-check of the key at
+// verification: a token that carries our signature but names a key outside the store
+// (a signer that skipped SignedGet's check) must not read the file next to it.
+func TestLocal_GetOfSignedTraversalKeyRefused(t *testing.T) {
+	f := newFixture(t)
+	decoy := []byte("outside the store")
+	path := filepath.Join(filepath.Dir(f.dir), "decoy")
+	if err := os.WriteFile(path, decoy, 0o600); err != nil {
+		t.Fatalf("write decoy: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	u, err := f.sign(claims{Key: "../decoy", Method: http.MethodGet}, time.Minute)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	resp := f.do(t, http.MethodGet, u, nil, nil)
+	if body, _ := io.ReadAll(resp.Body); bytes.Contains(body, decoy) {
+		t.Fatalf("served the file outside the store: %q", body)
+	}
+	wantStatus(t, resp, http.StatusForbidden)
 }
 
 func TestLocal_NotUnderPrefixIs404(t *testing.T) {
