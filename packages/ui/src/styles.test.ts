@@ -17,14 +17,21 @@ describe('component stylesheets', () => {
     expect(componentCss).toContain('slip/slip.css');
   });
 
-  it.each(componentCss)('%s casts no shadow: only the torn, sealed slip may, and it is not built here', (path) => {
-    expect(read(path)).not.toMatch(/drop-shadow|box-shadow|text-shadow/);
+  // The torn, sealed slip's wrapper is the one place the shadow token is used: draft/draft.css, whose single use
+  // `OneShadowRule` (draft.test.tsx) pins. Nothing else casts a shadow, and nothing at all uses a box or text shadow.
+  it.each(componentCss)('%s uses no box or text shadow', (path) => {
+    expect(read(path)).not.toMatch(/box-shadow|text-shadow/);
   });
 
+  it.each(componentCss.filter((path) => path !== 'draft/draft.css'))('%s casts no shadow: only the torn, sealed slip may', (path) => {
+    expect(read(path)).not.toMatch(/drop-shadow/);
+  });
+
+  // The one URL a sheet may hold is the SVG namespace of an inline `data:` mask, which names a format and fetches nothing.
   it.each(componentCss)('%s has no gradient, no external URL and no literal hex colour', (path) => {
     const css = read(path);
     expect(css).not.toMatch(/gradient\(/);
-    expect(css).not.toMatch(/https?:|googleapis|gstatic/);
+    expect(css).not.toMatch(/https?:(?!\/\/www\.w3\.org\/2000\/svg)|googleapis|gstatic/);
     expect(css).not.toMatch(HEX_COLOUR);
   });
 });

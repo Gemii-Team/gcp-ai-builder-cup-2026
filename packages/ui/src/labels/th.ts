@@ -51,4 +51,59 @@ export const th: UiLabels = {
   // Seal
   confirmed: 'ยืนยันแล้ว',
   confirmedStamp: 'ยืนยันแล้ว',
+
+  // Draft slip and owner select
+  draft: 'ฉบับร่าง',
+  confirmAction: 'ยืนยัน',
+  confirmNamed: 'ยืนยัน: {title}',
+  edit: 'แก้ไข',
+  editNamed: 'แก้ไข: {title}',
+  save: 'บันทึก',
+  cancel: 'ยกเลิก',
+  taskTitle: 'ชื่องาน',
+  titleEmpty: 'ชื่องานต้องไม่ว่าง',
+  owner: 'ผู้รับผิดชอบ',
+  chooseOwner: 'เลือกผู้รับผิดชอบ',
+  chooseOwnerFirst: 'เลือกผู้รับผิดชอบก่อน',
+  noOwner: 'ไม่มีผู้รับผิดชอบ',
+  noDueDate: 'ไม่มีกำหนดส่ง',
+  fromMeeting: 'จากการประชุม',
+  fromMessage: 'จากข้อความ',
+  fromAnswer: 'จากคำตอบ {ref}',
+  handoffNote: 'ยังเป็นฉบับร่างจนกว่าจะมีคนยืนยันบนบอร์ด',
+  reviewOnBoard: 'ตรวจดูบนบอร์ด',
+  discard: 'ทิ้งฉบับร่าง',
+  confirmFailed: 'ยืนยันฉบับร่างนี้ไม่ได้ ลองอีกครั้ง',
+  saveFailed: 'บันทึกการแก้ไขไม่ได้ ลองอีกครั้ง',
+
+  // Sealed slip
+  confirmedBy: 'ยืนยันโดย',
+
+  // Drafts panel, band and bar
+  aiDrafts: 'ฉบับร่างจาก <en>AI</en>',
+  draftsCaption: 'ไม่มีอะไรมีผลจนกว่าคุณจะยืนยัน',
+  toConfirm: '{count} รอยืนยัน',
+  allConfirmed: 'ยืนยันครบแล้ว',
+  draftsList: 'ฉบับร่างที่รอยืนยัน',
+  confirmedJustNow: 'เพิ่งยืนยัน',
+  draftsEmptyBody: 'ยืนยันฉบับร่างจาก <en>AI</en> ครบแล้ว',
+  board: 'บอร์ด',
+  todo: 'ต้องทำ',
+  doing: 'กำลังทำ',
+  done: 'เสร็จแล้ว',
+  confirmedAnnouncement: {
+    one: 'ยืนยันแล้ว: {title} เหลือฉบับร่าง {count} ฉบับ',
+    other: 'ยืนยันแล้ว: {title} เหลือฉบับร่าง {count} ฉบับ',
+  },
+  confirmedAnnouncementLast: 'ยืนยันแล้ว: {title} ยืนยันฉบับร่างครบทุกฉบับแล้ว',
+
+  // Task form and created card
+  taskFieldTitle: 'ชื่องาน',
+  taskFieldChannel: 'แชนเนล',
+  dueDate: 'กำหนดส่ง',
+  createTask: 'สร้างงาน',
+  createFailed: 'สร้างงานไม่ได้ ลองอีกครั้ง',
+  taskNamed: 'งาน {code}',
+  taskCreated: 'สร้างงาน {code} แล้ว · {link}',
+  viewOnBoard: 'ดูบนบอร์ด',
 };

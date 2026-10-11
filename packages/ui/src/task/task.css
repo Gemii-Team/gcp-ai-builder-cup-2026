@@ -1,0 +1,220 @@
+/*
+ * Making a task: the inline task form, its fields (title, selects, the segmented date), and the card a made task leaves
+ * behind. A person who makes a task acts directly, so none of this is a draft: a plain slip, no perforation, no Draft
+ * tag, no seal and no shadow. Ported from the channel and board prototypes; every colour, radius and size is a theme token.
+ *
+ * Unlayered plain CSS, like slip.css: it beats Tailwind utilities, so a variant of a slip.css rule is written here with a
+ * selector of equal or higher specificity.
+ */
+
+/* ===== The form: 560px in the stream, 720px on the Board (the form with a Channel select), full width on phones ===== */
+.kiwi-mk {
+  max-width: 560px;
+}
+
+.kiwi-mk[data-board] {
+  max-width: 720px;
+}
+
+.kiwi-mk-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.kiwi-mk-t {
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+  line-height: var(--text-item-title--line-height);
+}
+
+.kiwi-mk-s {
+  margin-top: 2px;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-fld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.kiwi-fld > label,
+.kiwi-label {
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  line-height: var(--text-label--line-height);
+}
+
+.kiwi-input {
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+  color: var(--color-ledger-ink);
+  transition: border-color .15s;
+}
+
+.kiwi-input:hover {
+  border-color: var(--color-control-line-hover);
+}
+
+.kiwi-input[aria-invalid="true"] {
+  border-color: var(--color-returned-red);
+}
+
+.kiwi-fld .kiwi-sel {
+  display: block;
+}
+
+.kiwi-fld .kiwi-sel-ctl {
+  width: 100%;
+}
+
+.kiwi-mk-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.kiwi-mk[data-board] .kiwi-mk-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.kiwi-mk-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px 12px;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+/* ===== The due date: segmented day, month and year in the same 32px control ===== */
+.kiwi-date {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+  color: var(--color-ledger-ink);
+  transition: border-color .15s;
+}
+
+.kiwi-date:hover {
+  border-color: var(--color-control-line-hover);
+}
+
+.kiwi-date:focus-within {
+  outline: 2px solid var(--color-focus-teal);
+  outline-offset: 2px;
+}
+
+.kiwi-date-seg {
+  padding: 0 1px;
+  border-radius: var(--radius-hair);
+  outline: none;
+}
+
+.kiwi-date-seg[data-placeholder] {
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-date-seg:focus {
+  background: var(--color-selection-mint);
+  color: var(--color-selection-ink);
+}
+
+/* ===== The card a made task leaves: a plain slip with its REF, its source and a line with an Ink Teal check ===== */
+.kiwi-slip.kiwi-made {
+  max-width: 560px;
+}
+
+.kiwi-made:focus {
+  outline: none;
+}
+
+.kiwi-made:focus-visible {
+  outline: 2px solid var(--color-focus-teal);
+  outline-offset: 2px;
+}
+
+.kiwi-made .kiwi-d-title {
+  overflow-wrap: anywhere;
+}
+
+.kiwi-stub.kiwi-made-stub {
+  padding: 6px 16px 8px;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+.kiwi-made-stub .kiwi-row {
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+
+.kiwi-made-src {
+  color: var(--color-carbon-copy);
+  text-align: right;
+}
+
+.kiwi-made-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+.kiwi-made-line svg {
+  margin-top: 2px;
+}
+
+.kiwi-fade {
+  animation: kiwi-fade 320ms var(--ease-expo);
+}
+
+@keyframes kiwi-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* ===== Phones and narrow (1023px and below): 44px controls ===== */
+@media (max-width: 1023px) {
+  .kiwi-input,
+  .kiwi-date {
+    height: 44px;
+  }
+
+  .kiwi-mk-s,
+  .kiwi-made .kiwi-d-meta {
+    font-size: 15px;
+  }
+}
+
+@media (max-width: 600px) {
+  .kiwi-mk[data-board] .kiwi-mk-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kiwi-mk[data-board] .kiwi-mk-row > :first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kiwi-fade {
+    animation: none;
+  }
+}

@@ -55,6 +55,61 @@ export const en = {
   // Seal
   confirmed: 'Confirmed',
   confirmedStamp: 'CONFIRMED',
+
+  // Draft slip and owner select
+  draft: 'Draft',
+  confirmAction: 'Confirm',
+  confirmNamed: 'Confirm: {title}',
+  edit: 'Edit',
+  editNamed: 'Edit: {title}',
+  save: 'Save',
+  cancel: 'Cancel',
+  taskTitle: 'Task title',
+  titleEmpty: "Title can't be empty.",
+  owner: 'Owner',
+  chooseOwner: 'Choose an owner',
+  chooseOwnerFirst: 'Choose an owner first.',
+  noOwner: 'No owner',
+  noDueDate: 'No due date',
+  fromMeeting: 'From meeting',
+  fromMessage: 'From message',
+  fromAnswer: 'From answer {ref}',
+  handoffNote: 'Stays a draft until a person confirms it on the Board.',
+  reviewOnBoard: 'Review on the Board',
+  discard: 'Discard',
+  confirmFailed: "Couldn't confirm this draft. Try again.",
+  saveFailed: "Couldn't save the change. Try again.",
+
+  // Sealed slip
+  confirmedBy: 'Confirmed by',
+
+  // Drafts panel, band and bar
+  aiDrafts: 'AI drafts',
+  draftsCaption: 'Nothing here takes effect until you confirm it.',
+  toConfirm: '{count} to confirm',
+  allConfirmed: 'All confirmed',
+  draftsList: 'Drafts to confirm',
+  confirmedJustNow: 'Confirmed just now',
+  draftsEmptyBody: 'Every AI draft has been confirmed.',
+  board: 'Board',
+  todo: 'To do',
+  doing: 'Doing',
+  done: 'Done',
+  confirmedAnnouncement: {
+    one: 'Confirmed: {title}. {count} draft left.',
+    other: 'Confirmed: {title}. {count} drafts left.',
+  },
+  confirmedAnnouncementLast: 'Confirmed: {title}. All drafts confirmed.',
+
+  // Task form and created card
+  taskFieldTitle: 'Title',
+  taskFieldChannel: 'Channel',
+  dueDate: 'Due date',
+  createTask: 'Create task',
+  createFailed: "Couldn't create the task. Try again.",
+  taskNamed: 'Task {code}',
+  taskCreated: 'Task {code} created · {link}',
+  viewOnBoard: 'View on Board',
 };
 
 /** The shape every language table must fill: each key of `en`, a plural key with both forms. */
