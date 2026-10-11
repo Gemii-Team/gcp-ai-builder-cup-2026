@@ -10,6 +10,7 @@ import { useChannels, useMe, useUsers } from '../../api/hooks';
 import type { TaskView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { useAnnouncer } from '../../lib/useAnnouncer';
+import { useGlide } from '../../lib/useGlide';
 import { useMediaQuery } from '../../lib/useMediaQuery';
 import { useUiStore } from '../../state/ui';
 import { AppButtonLink, AppLink } from '../shell/AppLink';
@@ -21,7 +22,7 @@ import { FilterBar } from './FilterBar';
 import { Lane } from './Lane';
 import { NewTask } from './NewTask';
 import { TaskCard, type Landing } from './TaskCard';
-import { EMPTY_KEY, matchesFilters, NO_FILTERS, STATUS_KEY, useBoardData, type BoardFilters, type Status } from './useBoardData';
+import { cellsOf, EMPTY_KEY, matchesFilters, NO_FILTERS, STATUS_KEY, useBoardData, type BoardFilters, type Status } from './useBoardData';
 
 /** A draft this person confirmed and has not moved since: its card in To do stays the sealed slip. */
 type Confirmed = { id: string; landing: Landing; sealed: SealedTask };
@@ -72,6 +73,11 @@ export function BoardScreen({ initialChannelId }: BoardScreenProps) {
   const pinned = useMemo(() => confirmed.map((entry) => entry.id), [confirmed]);
   const landings = useMemo(() => new Map(confirmed.map((entry) => [entry.id, entry.landing])), [confirmed]);
   const { board, isPending, isError, refetch } = useBoardData(filters, pinned);
+
+  // Which cell each card is in: a card that changes cell glides from its old place to its new one (a move, a confirm, a
+  // change another client made).
+  const cells = useMemo(() => cellsOf(board), [board]);
+  useGlide(scroller, cells);
 
   const channelNames = useMemo(() => new Map((channels.data ?? []).map((channel) => [channel.id, channel.name])), [channels.data]);
   const userNames = useMemo(() => new Map((users.data ?? []).map((user) => [user.id, user.name])), [users.data]);

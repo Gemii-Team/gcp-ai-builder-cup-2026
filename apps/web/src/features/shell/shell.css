@@ -404,6 +404,11 @@ a.ch:active {
   padding-right: 56px;
 }
 
+.sheet [data-drafts-root] {
+  flex: 1;
+  min-height: 0;
+}
+
 .sheet-body {
   display: flex;
   flex-direction: column;

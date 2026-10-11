@@ -13,11 +13,11 @@ function matches(query: string, width: number): boolean {
   return found[1] === 'min' ? width >= limit : width <= limit;
 }
 
-/** `matchMedia` and `innerWidth` for a window `width` px wide. `test-setup.ts` unstubs both after each test. */
-export function stubViewport(width: number): void {
+/** `matchMedia` and `innerWidth` for a window `width` px wide, with or without `prefers-reduced-motion`. `test-setup.ts` unstubs both after each test. */
+export function stubViewport(width: number, reducedMotion = false): void {
   vi.stubGlobal('innerWidth', width);
   vi.stubGlobal('matchMedia', (query: string) => ({
-    matches: matches(query, width),
+    matches: query.includes('prefers-reduced-motion') ? reducedMotion : matches(query, width),
     media: query,
     addEventListener: () => undefined,
     removeEventListener: () => undefined,

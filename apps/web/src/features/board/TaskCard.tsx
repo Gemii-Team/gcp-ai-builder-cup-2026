@@ -264,14 +264,14 @@ export function TaskCard({ task, laneKind, channelName, ownerName, creatorName, 
       ...(task.dueAt === null ? {} : { dueLabel: formatDay(task.dueAt, lang) }),
     };
     return (
-      <li ref={item} className="bd-card" data-task-id={task.id} data-flip="">
+      <li ref={item} className="bd-card" data-task-id={task.id} data-glide="">
         <SealedSlip {...sealed} actions={<div className="kiwi-acts">{control}</div>} />
       </li>
     );
   }
 
   return (
-    <li ref={item} className="bd-card" data-task-id={task.id} data-flip="">
+    <li ref={item} className="bd-card" data-task-id={task.id} data-glide="">
       <Slip className="bd-tcard">
         <SlipBody>
           <h3 className="kiwi-d-title">

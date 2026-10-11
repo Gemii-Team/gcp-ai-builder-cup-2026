@@ -443,8 +443,3 @@
     display: none;
   }
 }
-
-.sheet [data-drafts-root] {
-  flex: 1;
-  min-height: 0;
-}

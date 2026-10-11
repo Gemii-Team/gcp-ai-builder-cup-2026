@@ -14,7 +14,7 @@ import {
   UpdateTaskResponseSchema,
   type CreateTaskRequest,
 } from '@kiwi/api-client';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ANNOUNCE, card, cell, due, endBoardDay, MEETING, openBoard, ready, startBoardDay, TASKS } from '../../testing/boardWorld';
 import { member, ME_ID, MEMBERS, task } from '../../testing/fixtures';
@@ -487,14 +487,15 @@ describe('on a phone (390px)', () => {
     expect(await screen.findByText(`Added to To do in ${SYNC}.`)).toBeInTheDocument();
   });
 
-  it('returns focus to the bar through its ref when the sheet closes, even if the bar was never focused', async () => {
+  it('returns focus to the bar through its ref when the sheet closes, even though the bar was never focused', async () => {
     stubViewport(390);
     const { user } = openBoard({ tasks: WITH_DRAFTS });
     await ready();
     expect(document.body).toHaveFocus();
     const bar = screen.getByRole('button', { name: MENU_BAR });
 
-    await user.click(bar);
+    // `fireEvent` does not focus the button, so the sheet's opener is not the page's active element when it opens.
+    fireEvent.click(bar);
     await screen.findByRole('dialog', { name: 'AI drafts' });
     await user.keyboard('{Escape}');
 

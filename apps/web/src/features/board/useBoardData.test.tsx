@@ -75,7 +75,6 @@ describe('useBoardData', () => {
     expect(data.lanes.find((lane) => lane.key === 'messages:ch-ops')).toMatchObject({ kind: 'channel', label: 'ops-warehouse', channelId: 'ch-ops' });
 
     expect(data.counts).toEqual({ todo: 10, doing: 1, done: 2 });
-    expect(data.confirmed).toBe(13);
   });
 
   it('keeps drafts out of the lanes and out of the filters', async () => {

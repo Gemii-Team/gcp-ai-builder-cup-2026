@@ -43,8 +43,6 @@ export type BoardData = {
   drafts: TaskView[];
   /** The confirmed tasks that pass the filters, per status. */
   counts: Record<Status, number>;
-  /** How many confirmed tasks there are at all, filtered or not: told apart from "no task matches" by an empty board. */
-  confirmed: number;
 };
 
 const KIND_ORDER: Record<LaneKind, number> = { hand: 0, meeting: 1, file: 2, channel: 3 };
@@ -139,7 +137,20 @@ export function groupBoard(
     (a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || (a.label ?? '').localeCompare(b.label ?? '') || a.key.localeCompare(b.key),
   );
   const drafts = tasks.filter((task) => task.state === 'draft' && task.source !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  return { lanes: ordered, drafts, counts, confirmed: confirmed.length };
+  return { lanes: ordered, drafts, counts };
+}
+
+/** The cell (`lane/status`) each confirmed task on the board sits in: what `useGlide` compares to see a card move. */
+export function cellsOf(board: BoardData | undefined): ReadonlyMap<string, string> {
+  const cells = new Map<string, string>();
+  for (const lane of board?.lanes ?? []) {
+    for (const status of STATUSES) {
+      for (const task of lane.cells[status]) {
+        cells.set(task.id, `${lane.key}/${status}`);
+      }
+    }
+  }
+  return cells;
 }
 
 const NO_PINS: readonly string[] = [];
