@@ -1,0 +1,15 @@
+{
+  "method": "POST",
+  "path": "/v1/audio/transcriptions",
+  "request_sha256": "1450cd362435a166b2aea3d709dd29278dd7a804c19082eba4b4a2c0379d2fed",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "text": "สวัสดีครับทุกคน วันนี้เราจะคุยเรื่องแผนการรีลีสครับ Good morning everyone, the mobile app launch is on Friday. ตอนนี้ QA เหลือบัคสองตัวครับ",
+    "usage": null,
+    "language": "English",
+    "duration": null,
+    "words": null,
+    "segments": null
+  }
+}

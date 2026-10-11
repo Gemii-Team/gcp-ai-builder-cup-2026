@@ -1,0 +1,52 @@
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "request_sha256": "95a7e90043471e39429b116801c8877cb0ccf3e4d8f3384aac0efc60b93fdf7c",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "id": "chatcmpl-440bd5f6-958f-49e8-968f-5bab25f9b983",
+    "created": 1791756231,
+    "model": "Qwen3.8",
+    "object": "chat.completion",
+    "system_fingerprint": "vllm-0.30.0-c36416d3",
+    "choices": [
+      {
+        "finish_reason": "tool_calls",
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "{\"query\": \"dark mode decision\"}",
+                "name": "search_knowledge"
+              },
+              "id": "chatcmpl-tool-8573ba54ec390aef",
+              "type": "function"
+            }
+          ],
+          "reasoning_content": "The user is asking about a decision made regarding dark mode. I need to search the workspace's knowledge to find relevant information about dark mode decisions.\n",
+          "provider_specific_fields": {
+            "refusal": null,
+            "reasoning": "The user is asking about a decision made regarding dark mode. I need to search the workspace's knowledge to find relevant information about dark mode decisions.\n"
+          },
+          "content": null
+        },
+        "provider_specific_fields": {
+          "stop_reason": null,
+          "routed_experts": null,
+          "token_ids": null
+        }
+      }
+    ],
+    "usage": {
+      "completion_tokens": 60,
+      "prompt_tokens": 484,
+      "total_tokens": 544,
+      "completion_tokens_details": {
+        "reasoning_tokens": 30
+      }
+    }
+  }
+}

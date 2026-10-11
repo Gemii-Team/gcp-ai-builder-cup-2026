@@ -1,0 +1,42 @@
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "request_sha256": "fce251d66928be6d80d946dc8aedd54bef72776963c94cb6cc67a600ea146c3f",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "id": "chatcmpl-17868f2b-5f5a-4366-bea0-eeae2744e644",
+    "created": 1791756200,
+    "model": "Qwen3.8",
+    "object": "chat.completion",
+    "system_fingerprint": "vllm-0.30.0-c36416d3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\n  \"action_items\": [\n    {\n      \"due_hint\": \"next:fri\",\n      \"entry_refs\": [3],\n      \"owner_hint\": \"Nok\",\n      \"title\": \"Update the release notes\"\n    },\n    {\n      \"due_hint\": \"+1d\",\n      \"entry_refs\": [4],\n      \"owner_hint\": \"John\",\n      \"title\": \"Tell the QA team\"\n    }\n  ],\n  \"decisions\": [\n    {\n      \"entry_refs\": [1, 2],\n      \"text\": \"Dark mode ถูกเลื่อนไป v1.1 แทนที่จะปล่อยใน v1.0\"\n    }\n  ],\n  \"summary\": \"ทีมพูดคุยเรื่อง dark mode กับแผน release แล้วตกลงเลื่อน dark mode ไป v1.1 แทน v1.0 Nok รับไป update release notes ภายในวันศุกร์หน้า ส่วน John จะแจ้งทีม QA ในวันถัดไป\"\n}",
+          "role": "assistant",
+          "reasoning_content": "Let me analyze this meeting transcript. The meeting is in Thai (with some English). Let me identify the key points:\n\n[0] Malee: Hello everyone, today we will talk about dark mode and release.\n[1] John: I think we should ship dark mode in v1.1, not v1.0.\n[2] Malee: Agreed, we move dark mode to v1.1.\n[3] Nok: I will update the release notes by next Friday.\n[4] John: And I'll tell the QA team tomorrow.\n\nNow let me structure the output:\n\n**Summary:** The team discussed dark mode and release planning. They decided to move dark mode to v1.1 instead of v1.0. Nok and John took action items regarding release notes and QA communication.\n\n**Decisions:**\n- Dark mode is moved to v1.1 (not v1.0) - said in entries [1] and [2]\n\n**Action items:**\n1. Nok: Update release notes by next Friday. Meeting date is Friday 2026-10-09. \"Next Friday\" would be 2026-10-16. So due_hint: 2026-10-16\n2. John: Tell the QA team tomorrow. Meeting date is Friday 2026-10-09. \"Tomorrow\" would be Saturday 2026-10-10. So due_hint: +1d\n\nLet me write the response in the language of the meeting, which is Thai (with English terms kept as-is).\n\nWait, the instruction says \"Write in the language of the meeting; keep names and Latin terms as they were said.\" The meeting is primarily in Thai with some English. Let me write in Thai.\n\nLet me reconsider the due dates:\n- Meeting date: Friday 2026-10-09\n- \"next Friday\" = 2026-10-16\n- \"tomorrow\" = +1d (which is 2026-10-10)\n\nFor due_hint format: one of YYYY-MM-DD, +Nd, next:fri, eow or none.\n\n- \"next Friday\" → next:fri or 2026-10-16. I'll use next:fri since that's how it was expressed.\n- \"tomorrow\" → +1d\n\nLet me write the JSON now.\n",
+          "provider_specific_fields": {
+            "refusal": null,
+            "reasoning": "Let me analyze this meeting transcript. The meeting is in Thai (with some English). Let me identify the key points:\n\n[0] Malee: Hello everyone, today we will talk about dark mode and release.\n[1] John: I think we should ship dark mode in v1.1, not v1.0.\n[2] Malee: Agreed, we move dark mode to v1.1.\n[3] Nok: I will update the release notes by next Friday.\n[4] John: And I'll tell the QA team tomorrow.\n\nNow let me structure the output:\n\n**Summary:** The team discussed dark mode and release planning. They decided to move dark mode to v1.1 instead of v1.0. Nok and John took action items regarding release notes and QA communication.\n\n**Decisions:**\n- Dark mode is moved to v1.1 (not v1.0) - said in entries [1] and [2]\n\n**Action items:**\n1. Nok: Update release notes by next Friday. Meeting date is Friday 2026-10-09. \"Next Friday\" would be 2026-10-16. So due_hint: 2026-10-16\n2. John: Tell the QA team tomorrow. Meeting date is Friday 2026-10-09. \"Tomorrow\" would be Saturday 2026-10-10. So due_hint: +1d\n\nLet me write the response in the language of the meeting, which is Thai (with English terms kept as-is).\n\nWait, the instruction says \"Write in the language of the meeting; keep names and Latin terms as they were said.\" The meeting is primarily in Thai with some English. Let me write in Thai.\n\nLet me reconsider the due dates:\n- Meeting date: Friday 2026-10-09\n- \"next Friday\" = 2026-10-16\n- \"tomorrow\" = +1d (which is 2026-10-10)\n\nFor due_hint format: one of YYYY-MM-DD, +Nd, next:fri, eow or none.\n\n- \"next Friday\" → next:fri or 2026-10-16. I'll use next:fri since that's how it was expressed.\n- \"tomorrow\" → +1d\n\nLet me write the JSON now.\n"
+          }
+        },
+        "provider_specific_fields": {
+          "stop_reason": null,
+          "routed_experts": null,
+          "token_ids": null
+        }
+      }
+    ],
+    "usage": {
+      "completion_tokens": 746,
+      "prompt_tokens": 338,
+      "total_tokens": 1084,
+      "completion_tokens_details": {
+        "reasoning_tokens": 537
+      }
+    }
+  }
+}

@@ -14,6 +14,7 @@ import (
 
 	"kiwi/internal/platform/config"
 	"kiwi/internal/platform/httpx"
+	"kiwi/internal/platform/llm/llmfactory"
 )
 
 const listenAddr = ":8080"
@@ -47,8 +48,10 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	return 0
 }
 
-// serve loads the configuration for KIWI_ROLES and serves the health endpoints
-// until SIGINT or SIGTERM.
+// serve loads the configuration for KIWI_ROLES, refuses a model provider that must not
+// run (llmfactory.MustNew exits on one), and serves the health endpoints until SIGINT or
+// SIGTERM. The provider check comes right after the configuration is loaded and before
+// anything is dialled; keep it there when serve starts opening Postgres and Valkey.
 func serve(ctx context.Context, args []string) error {
 	if len(args) > 0 {
 		return fmt.Errorf("takes no arguments, got %q", args)
@@ -57,6 +60,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	_ = llmfactory.MustNew(cfg) // L27 hands the client to the composition root
 	srv := httpx.New(listenAddr, nil)
 	srv.SetReady(true)
 	slog.Info("serving", "roles", cfg.Roles, "addr", listenAddr)
