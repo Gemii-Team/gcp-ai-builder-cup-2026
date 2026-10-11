@@ -54,9 +54,10 @@ const (
 // an agent: created_by_id is authz.AgentID(jobCreator).
 const jobCreator = "system"
 
-// fromRefPattern is the REF of the answer a task was made from: three capitals,
-// a dash and the four-digit number refs.Next hands out.
-var fromRefPattern = regexp.MustCompile(`^[A-Z]{3}-\d{4}$`)
+// fromRefPattern is the REF of the answer a task was made from: three capitals, a
+// dash and the number refs.Next hands out, which is unpadded and unbounded, so it
+// has four digits only until the workspace's 9999th REF of that kind.
+var fromRefPattern = regexp.MustCompile(`^[A-Z]{3}-\d{4,}$`)
 
 // protoJSON is how events are carried on the outbox: field names as in the .proto,
 // which is what outbox.Enqueue reads workspace_id by.
@@ -143,8 +144,9 @@ func (s *service) requireMember(ctx context.Context, ws, channelID, userID uuid.
 
 // ---- list -------------------------------------------------------------------
 
-// ListTasks implements Service. A state or a status that is unspecified in the
-// filter is errs.ErrInvalid.
+// ListTasks implements Service. A state that is unspecified in the filter is
+// errs.ErrInvalid. A system actor holds no task.read, so it may list no tasks, in
+// one channel or in all.
 func (s *service) ListTasks(ctx context.Context, a authz.Actor, q ListTasksQuery) ([]*tasksv1.Task, error) {
 	states, err := stateTexts(q.States)
 	if err != nil {
@@ -160,6 +162,11 @@ func (s *service) ListTasks(ctx context.Context, a authz.Actor, q ListTasksQuery
 	} else {
 		if err := requireActor(a); err != nil {
 			return nil, err
+		}
+		// The bound to the actor's channels stands in for task.read of each of them,
+		// which the authz table grants users and agents but not jobs.
+		if a.Kind == authz.ActorSystem {
+			return nil, fmt.Errorf("tasks: a %s actor may not list tasks: %w", a.Kind, errs.ErrForbidden)
 		}
 		if channels, err = s.memberChannels(ctx, a.WorkspaceID, a.EffectiveUserID()); err != nil {
 			return nil, fmt.Errorf("tasks: list member channels: %w", err)
@@ -265,8 +272,14 @@ func (s *service) CreateDraft(ctx context.Context, a authz.Actor, req *tasksv1.C
 }
 
 // CreateDraftTx implements Service. tx must be bound to the actor's workspace
-// (db.InWorkspace). The authorization lookup runs on its own pooled connection,
-// not on tx.
+// (db.InWorkspace). The authorization and assignee lookups run on their own pooled
+// connections, not on tx.
+//
+// A pipeline must draft into ONE channel per transaction. insert locks the channel's
+// To do lane and then allocates the REF, and the TSK counter row stays locked until
+// tx ends: a transaction that drafts into a second channel asks for that lane's lock
+// while holding the counter, and deadlocks against a concurrent draft that holds the
+// second lane and waits for the counter.
 func (s *service) CreateDraftTx(ctx context.Context, tx pgx.Tx, a authz.Actor, req *tasksv1.CreateTaskRequest) (*tasksv1.Task, error) {
 	n, err := s.newTask(ctx, a, req, authz.ActTaskWriteDraft, true)
 	if err != nil {
@@ -416,7 +429,8 @@ func creator(a authz.Actor) (kind string, id uuid.UUID) {
 // insert stores n as a new task at the end of the To do lane of its channel and
 // announces it, all in tx. The lane is locked first so that concurrent creations
 // get distinct positions, and the REF is allocated last so that its counter row is
-// held for as short a time as possible.
+// held for as short a time as possible. The lock order is lane, then counter: see
+// CreateDraftTx for what that means for a caller that drafts into several channels.
 func insert(ctx context.Context, tx pgx.Tx, a authz.Actor, state string, n newTask) (*tasksv1.Task, error) {
 	q := store.New(tx)
 	if err := q.LockLane(ctx, laneKey(n.channelID, statusTodo)); err != nil {
@@ -503,7 +517,11 @@ func (s *service) UpdateTask(ctx context.Context, a authz.Actor, req *tasksv1.Up
 // MoveTask implements Service. The card goes after the task after_id and before the
 // task before_id, both of which must be in the destination status of the card's
 // channel; an empty one is an open end, and two empty ones append the card to the
-// lane. Only the moved row is written.
+// lane. The ids are where the client believes the card goes, and the lane may have
+// changed since: the card is placed between the two cards that really are adjacent,
+// drafts included. A single named neighbour takes the lane's real card on the other
+// side as the other bound, and two named neighbours with a card between them are
+// errs.ErrConflict. Only the moved row is written.
 func (s *service) MoveTask(ctx context.Context, a authz.Actor, req *tasksv1.MoveTaskRequest) (*tasksv1.Task, error) {
 	id, err := parseID(req.GetId(), "task id")
 	if err != nil {
@@ -533,20 +551,7 @@ func (s *service) MoveTask(ctx context.Context, a authz.Actor, req *tasksv1.Move
 		if err := q.LockLane(ctx, laneKey(cur.ChannelID, status)); err != nil {
 			return store.TasksTask{}, fmt.Errorf("tasks: lock lane: %w", err)
 		}
-		lo, err := neighbour(ctx, q, cur.ChannelID, status, after)
-		if err != nil {
-			return store.TasksTask{}, err
-		}
-		hi, err := neighbour(ctx, q, cur.ChannelID, status, before)
-		if err != nil {
-			return store.TasksTask{}, err
-		}
-		if after == uuid.Nil && before == uuid.Nil {
-			if lo, err = lastPosition(ctx, q, cur.ChannelID, status, id); err != nil {
-				return store.TasksTask{}, err
-			}
-		}
-		position, err := positionBetween(lo, hi)
+		position, err := placement(ctx, q, cur.ChannelID, status, id, after, before)
 		if err != nil {
 			return store.TasksTask{}, fmt.Errorf("tasks: move task %s: %w", id, err)
 		}
@@ -556,15 +561,29 @@ func (s *service) MoveTask(ctx context.Context, a authz.Actor, req *tasksv1.Move
 
 // ConfirmDraft implements Service. A draft without an assignee is errs.ErrInvalid
 // and a task that is not a draft, including one a concurrent confirm just sealed,
-// is errs.ErrConflict.
+// is errs.ErrConflict. The sealed card lands at the top of To do, in front of every
+// card of the lane, drafts included, and the task.changed event carries that
+// position.
 func (s *service) ConfirmDraft(ctx context.Context, a authz.Actor, id uuid.UUID) (*tasksv1.Task, error) {
-	if _, err := s.authorize(ctx, a, id, authz.ActTaskConfirm); err != nil {
+	cur, err := s.authorize(ctx, a, id, authz.ActTaskConfirm)
+	if err != nil {
 		return nil, err
 	}
 	var task *tasksv1.Task
-	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
+	err = s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
-		row, err := q.ConfirmDraft(ctx, id)
+		if err := q.LockLane(ctx, laneKey(cur.ChannelID, statusTodo)); err != nil {
+			return fmt.Errorf("tasks: lock lane: %w", err)
+		}
+		first, err := orOpen(q.FirstPosition(ctx, store.FirstPositionParams{ChannelID: cur.ChannelID, Status: statusTodo, ExcludingID: id}))
+		if err != nil {
+			return err
+		}
+		position, err := positionBetween("", first)
+		if err != nil {
+			return fmt.Errorf("tasks: position of a confirmed task: %w", err)
+		}
+		row, err := q.ConfirmDraft(ctx, store.ConfirmDraftParams{ID: id, Position: position})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return explainConfirm(ctx, q, id)
 		}
@@ -665,14 +684,80 @@ func laneKey(channelID uuid.UUID, status string) string { return channelID.Strin
 // lastPosition is the position of the last card of the lane other than excluding;
 // empty for an empty lane.
 func lastPosition(ctx context.Context, q *store.Queries, channelID uuid.UUID, status string, excluding uuid.UUID) (string, error) {
-	pos, err := q.LastPosition(ctx, store.LastPositionParams{ChannelID: channelID, Status: status, ExcludingID: excluding})
+	return orOpen(q.LastPosition(ctx, store.LastPositionParams{ChannelID: channelID, Status: status, ExcludingID: excluding}))
+}
+
+// orOpen turns the result of a lane position query into a position, the empty open
+// end when the lane has no such card.
+func orOpen(pos string, err error) (string, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("tasks: last position: %w", err)
+		return "", fmt.Errorf("tasks: read lane: %w", err)
 	}
 	return pos, nil
+}
+
+// placement is the position of a card moving into the lane (channel, status) after
+// the card after and before the card before, either of which is uuid.Nil for an
+// open end. The caller holds the lane lock.
+//
+// The named cards say where the client wants the card; the lane is what decides.
+// Every card of the lane counts, the drafts the board hides included, and the moving
+// card does not: it is leaving its spot. One named card takes the lane's real
+// neighbour on its other side as the other bound, none takes the end of the lane,
+// and two with a card between them mean the client's view is stale (errs.ErrConflict).
+// So the key lies strictly between two cards that are adjacent right now, and no
+// card of the lane ever holds the same position as another.
+func placement(ctx context.Context, q *store.Queries, channelID uuid.UUID, status string, moving, after, before uuid.UUID) (string, error) {
+	lo, err := neighbour(ctx, q, channelID, status, after)
+	if err != nil {
+		return "", err
+	}
+	hi, err := neighbour(ctx, q, channelID, status, before)
+	if err != nil {
+		return "", err
+	}
+
+	switch {
+	case after != uuid.Nil && before != uuid.Nil:
+		if lo >= hi {
+			return "", fmt.Errorf("tasks: after_id sorts behind before_id: %w", errs.ErrInvalid)
+		}
+		next, err := orOpen(q.NextPosition(ctx, store.NextPositionParams{ChannelID: channelID, Status: status, ExcludingID: moving, AfterPosition: lo}))
+		if err != nil {
+			return "", err
+		}
+		if next != hi {
+			return "", fmt.Errorf("tasks: another card lies between after_id and before_id now: %w", errs.ErrConflict)
+		}
+	case after != uuid.Nil:
+		if hi, err = orOpen(q.NextPosition(ctx, store.NextPositionParams{ChannelID: channelID, Status: status, ExcludingID: moving, AfterPosition: lo})); err != nil {
+			return "", err
+		}
+	case before != uuid.Nil:
+		if lo, err = orOpen(q.PrevPosition(ctx, store.PrevPositionParams{ChannelID: channelID, Status: status, ExcludingID: moving, BeforePosition: hi})); err != nil {
+			return "", err
+		}
+	default:
+		if lo, err = lastPosition(ctx, q, channelID, status, moving); err != nil {
+			return "", err
+		}
+	}
+
+	position, err := positionBetween(lo, hi)
+	if err != nil {
+		return "", err
+	}
+	taken, err := q.PositionTaken(ctx, store.PositionTakenParams{ChannelID: channelID, Status: status, ExcludingID: moving, Position: position})
+	if err != nil {
+		return "", fmt.Errorf("tasks: read lane: %w", err)
+	}
+	if taken {
+		return "", fmt.Errorf("tasks: position %q is already held by a card of the lane: %w", position, errs.ErrConflict)
+	}
+	return position, nil
 }
 
 // neighbour is the position of the card id, which must be in the lane; empty for

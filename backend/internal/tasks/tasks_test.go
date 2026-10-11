@@ -154,12 +154,18 @@ func (f *fixture) seedUser(ws uuid.UUID, name string) uuid.UUID {
 // channel creates a channel of kind in the fixture workspace with the given members.
 func (f *fixture) channel(kind string, members ...uuid.UUID) uuid.UUID {
 	f.t.Helper()
+	return f.channelIn(f.ws, kind, members...)
+}
+
+// channelIn is channel in workspace ws.
+func (f *fixture) channelIn(ws uuid.UUID, kind string, members ...uuid.UUID) uuid.UUID {
+	f.t.Helper()
 	id := uuid.New()
-	f.exec(f.ws, `INSERT INTO chat.channels (id, workspace_id, name, kind) VALUES ($1, $2, $3, $4)`,
-		id, f.ws, "ch-"+id.String()[:8], kind)
+	f.exec(ws, `INSERT INTO chat.channels (id, workspace_id, name, kind) VALUES ($1, $2, $3, $4)`,
+		id, ws, "ch-"+id.String()[:8], kind)
 	for _, m := range members {
-		f.exec(f.ws, `INSERT INTO chat.channel_members (channel_id, user_id, workspace_id, role) VALUES ($1, $2, $3, 'member')`,
-			id, m, f.ws)
+		f.exec(ws, `INSERT INTO chat.channel_members (channel_id, user_id, workspace_id, role) VALUES ($1, $2, $3, 'member')`,
+			id, m, ws)
 	}
 	return id
 }
@@ -295,6 +301,44 @@ func titles(ts []*tasksv1.Task) []string {
 		out[i] = t.GetTitle()
 	}
 	return out
+}
+
+// laneCard is a card of a lane as the database holds it.
+type laneCard struct{ Title, Position string }
+
+// lane reads every card, drafts included, of one status of a channel in byte order
+// of position, straight from the table.
+func (f *fixture) lane(ch uuid.UUID, status string) []laneCard {
+	f.t.Helper()
+	var out []laneCard
+	f.asOwner(f.ws, func(ctx context.Context, tx pgx.Tx) {
+		rows, err := tx.Query(ctx, `SELECT title, position FROM tasks.tasks WHERE channel_id = $1 AND status = $2 ORDER BY position COLLATE "C", id`, ch, status)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[laneCard])
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	})
+	return out
+}
+
+// wantLane fails unless the lane holds exactly the cards of want in that order with
+// all positions distinct: a tie leaves two cards that no later move can separate.
+func (f *fixture) wantLane(ch uuid.UUID, status string, want ...string) {
+	f.t.Helper()
+	got := f.lane(ch, status)
+	titlesGot := make([]string, len(got))
+	for i, c := range got {
+		titlesGot[i] = c.Title
+		if i > 0 && got[i-1].Position >= c.Position {
+			f.t.Fatalf("lane %v: positions %q (%s) and %q (%s) are not strictly increasing", got, got[i-1].Position, got[i-1].Title, c.Position, c.Title)
+		}
+	}
+	if !slices.Equal(titlesGot, want) {
+		f.t.Fatalf("lane = %v, want %v", got, want)
+	}
 }
 
 // ---- position ---------------------------------------------------------------
@@ -891,15 +935,16 @@ func TestCreateTask_RejectsMalformedFromRefOversizeQuoteAndForeignSourceChannel(
 	}
 
 	for name, mod := range map[string]func(*tasksv1.CreateTaskRequest){
-		"from_ref without a number":   fromRef("ANS"),
-		"from_ref lower case":         fromRef("ans-2209"),
-		"from_ref too few digits":     fromRef("ANS-220"),
-		"from_ref too many digits":    fromRef("ANS-22090"),
-		"from_ref with trailing text": fromRef("ANS-2209 "),
-		"quote of 501 runes":          srcWith(func(s *chatv1.Source) { s.Quote = proto.String(thai500 + "ก") }),
-		"source of another channel":   srcWith(func(s *chatv1.Source) { s.ChannelId = otherCh.String() }),
-		"source channel not a UUID":   srcWith(func(s *chatv1.Source) { s.ChannelId = "general" }),
-		"at on a meeting source":      srcWith(func(s *chatv1.Source) { s.At = timestamppb.Now() }),
+		"from_ref without a number":               fromRef("ANS"),
+		"from_ref lower case":                     fromRef("ans-2209"),
+		"from_ref too few digits":                 fromRef("ANS-220"),
+		"from_ref with a letter among the digits": fromRef("ANS-22a09"),
+		"from_ref with a sign":                    fromRef("ANS-+2209"),
+		"from_ref with trailing text":             fromRef("ANS-2209 "),
+		"quote of 501 runes":                      srcWith(func(s *chatv1.Source) { s.Quote = proto.String(thai500 + "ก") }),
+		"source of another channel":               srcWith(func(s *chatv1.Source) { s.ChannelId = otherCh.String() }),
+		"source channel not a UUID":               srcWith(func(s *chatv1.Source) { s.ChannelId = "general" }),
+		"at on a meeting source":                  srcWith(func(s *chatv1.Source) { s.At = timestamppb.Now() }),
 	} {
 		req := &tasksv1.CreateTaskRequest{ChannelId: ch.String(), Title: "x"}
 		mod(req)
@@ -917,6 +962,13 @@ func TestCreateTask_RejectsMalformedFromRefOversizeQuoteAndForeignSourceChannel(
 	// An empty from_ref is no from_ref.
 	if none := f.create(f.user(f.alice), ch, "No answer", fromRef("")); none.FromRef != nil {
 		t.Fatalf("from_ref = %q for an empty one, want unset", none.GetFromRef())
+	}
+	// The counter is unpadded and unbounded: REFs past 9999 have five digits.
+	for _, ref := range []string{"ANS-10000", "ANS-22090", "ANS-1234567"} {
+		got := f.create(f.user(f.alice), ch, "Past 9999 "+ref, fromRef(ref))
+		if got.GetFromRef() != ref {
+			t.Fatalf("from_ref %s came back as %q", ref, got.GetFromRef())
+		}
 	}
 }
 
@@ -1090,6 +1142,365 @@ func TestMoveTask_RejectsNeighboursThatAreNotPlacesInTheDestinationLane(t *testi
 	wantErr(t, err, errs.ErrNotFound, "MoveTask of an unknown task")
 	if got := titles(f.list(alice, ch)); !slices.Equal(got, []string{"A", "B", "C", "Doing"}) {
 		t.Fatalf("order = %v after refused moves, want A B C Doing", got)
+	}
+}
+
+// ---- lane integrity ---------------------------------------------------------
+
+// move moves task to status of its channel as a, placing it after after and before
+// before (either may be nil: an open end).
+func (f *fixture) move(a authz.Actor, task *tasksv1.Task, status tasksv1.TaskStatus, after, before *tasksv1.Task) (*tasksv1.Task, error) {
+	f.t.Helper()
+	req := &tasksv1.MoveTaskRequest{Id: task.GetId(), Status: status}
+	if after != nil {
+		req.AfterId = after.GetId()
+	}
+	if before != nil {
+		req.BeforeId = before.GetId()
+	}
+	return f.svc.MoveTask(f.t.Context(), a, req)
+}
+
+func TestMoveTask_OnlyAfterGiven_TakesTheRealSuccessorAsTheUpperBound(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	alice := f.user(f.alice)
+	a := f.create(alice, ch, "A")
+	f.create(alice, ch, "B")
+	f.create(alice, ch, "C")
+	d := f.create(alice, ch, "D")
+	todo := tasksv1.TaskStatus_TASK_STATUS_TODO
+
+	// A is not the last card: D goes between A and B, not onto B's position.
+	if _, err := f.move(alice, d, todo, a, nil); err != nil {
+		t.Fatalf("move D after A: %v", err)
+	}
+	f.wantLane(ch, "todo", "A", "D", "B", "C")
+}
+
+func TestMoveTask_ToTheTopBehindALeadingDraft_KeepsPositionsDistinct(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	alice := f.user(f.alice)
+	f.draft(ch, "D1") // drafts share the To do positions, the board hides them
+	t1 := f.create(alice, ch, "T1")
+	t2 := f.create(alice, ch, "T2")
+	f.wantLane(ch, "todo", "D1", "T1", "T2")
+
+	// The board knows T1 as the first card; the draft in front of it is invisible there.
+	if _, err := f.move(alice, t2, tasksv1.TaskStatus_TASK_STATUS_TODO, nil, t1); err != nil {
+		t.Fatalf("move T2 to the top: %v", err)
+	}
+	f.wantLane(ch, "todo", "D1", "T2", "T1")
+}
+
+func TestMoveTask_BoundsWithACardInsideThem_ConflictAndNothingWritten(t *testing.T) {
+	f := newFixture(t)
+	alice := f.user(f.alice)
+	todo := tasksv1.TaskStatus_TASK_STATUS_TODO
+
+	// A card sits between the bounds the client named: it was added after the
+	// client's last view.
+	ch := f.channel("public", f.alice)
+	a, b, c := f.create(alice, ch, "A"), f.create(alice, ch, "B"), f.create(alice, ch, "C")
+	d := f.create(alice, ch, "D")
+	before := f.lane(ch, "todo")
+	_, err := f.move(alice, d, todo, a, c)
+	wantErr(t, err, errs.ErrConflict, "move between bounds with B inside")
+	if after := f.lane(ch, "todo"); !slices.Equal(before, after) {
+		t.Fatalf("lane = %v after the refused move, want it untouched: %v", after, before)
+	}
+	// Named adjacent cards still work.
+	if _, err := f.move(alice, d, todo, b, c); err != nil {
+		t.Fatalf("move D between B and C: %v", err)
+	}
+	f.wantLane(ch, "todo", "A", "B", "D", "C")
+
+	// A draft inside the bounds counts as a card of the lane.
+	ch2 := f.channel("public", f.alice)
+	a2 := f.create(alice, ch2, "A2")
+	f.draft(ch2, "X")
+	c2 := f.create(alice, ch2, "C2")
+	b2 := f.create(alice, ch2, "B2")
+	_, err = f.move(alice, b2, todo, a2, c2)
+	wantErr(t, err, errs.ErrConflict, "move between bounds with a draft inside")
+	f.wantLane(ch2, "todo", "A2", "X", "C2", "B2")
+
+	// The moved card itself between the bounds is no obstacle: it is leaving its spot.
+	ch3 := f.channel("public", f.alice)
+	a3, m3, b3 := f.create(alice, ch3, "A3"), f.create(alice, ch3, "M3"), f.create(alice, ch3, "B3")
+	if _, err := f.move(alice, m3, todo, a3, b3); err != nil {
+		t.Fatalf("move M3 to where it already is: %v", err)
+	}
+	f.wantLane(ch3, "todo", "A3", "M3", "B3")
+}
+
+func TestMoveTask_ManyRandomMoves_PlaceTheCardWhereAskedAndNeverTieTwoCards(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	alice := f.user(f.alice)
+	rng := rand.New(rand.NewPCG(7, 8))
+	todo := tasksv1.TaskStatus_TASK_STATUS_TODO
+
+	byTitle := map[string]*tasksv1.Task{}
+	draft := f.draft(ch, "draft") // drafts occupy the lane too
+	byTitle[draft.GetTitle()] = draft
+	movable := make([]*tasksv1.Task, 0, 7)
+	for i := range 7 {
+		task := f.create(alice, ch, fmt.Sprintf("T%d", i))
+		byTitle[task.GetTitle()] = task
+		movable = append(movable, task)
+	}
+
+	for i := range 80 {
+		moved := movable[rng.IntN(len(movable))]
+		// The lane as it is without the moved card, in order.
+		var others []*tasksv1.Task
+		for _, c := range f.lane(ch, "todo") {
+			if c.Title != moved.GetTitle() {
+				others = append(others, byTitle[c.Title])
+			}
+		}
+		// Name an adjacent pair, one neighbour or none, as the clients do. wantAt is
+		// the index among others the moved card must land at.
+		var after, before *tasksv1.Task
+		var wantAt int
+		switch k := rng.IntN(len(others) + 1); rng.IntN(4) {
+		case 0: // after one card
+			if k < len(others) {
+				after, wantAt = others[k], k+1
+				break
+			}
+			wantAt = len(others)
+		case 1: // before one card
+			if k < len(others) {
+				before, wantAt = others[k], k
+				break
+			}
+			wantAt = len(others)
+		case 2: // between two adjacent cards
+			if k > 0 && k < len(others) {
+				after, before, wantAt = others[k-1], others[k], k
+				break
+			}
+			wantAt = len(others)
+		default: // no neighbour: the end of the lane
+			wantAt = len(others)
+		}
+		if _, err := f.move(alice, moved, todo, after, before); err != nil {
+			t.Fatalf("move %d of %s: %v", i, moved.GetTitle(), err)
+		}
+
+		want := make([]string, 0, len(others)+1)
+		for _, o := range others[:wantAt] {
+			want = append(want, o.GetTitle())
+		}
+		want = append(want, moved.GetTitle())
+		for _, o := range others[wantAt:] {
+			want = append(want, o.GetTitle())
+		}
+		f.wantLane(ch, "todo", want...)
+	}
+}
+
+func TestConfirmDraft_LandsAtTheTopOfToDo_AndTheEventCarriesIt(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice, f.bob)
+	alice := f.user(f.alice)
+	f.draft(ch, "D1", withAssignee(f.bob))
+	f.create(alice, ch, "T1")
+	d2 := f.draft(ch, "D2", withAssignee(f.bob))
+	d3 := f.draft(ch, "D3", withAssignee(f.bob))
+	d4 := f.draft(ch, "D4") // no owner
+	f.wantLane(ch, "todo", "D1", "T1", "D2", "D3", "D4")
+
+	sealed2, err := f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(d2.GetId()))
+	if err != nil {
+		t.Fatalf("ConfirmDraft D2: %v", err)
+	}
+	f.wantLane(ch, "todo", "D2", "D1", "T1", "D3", "D4")
+	sealed3, err := f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(d3.GetId()))
+	if err != nil {
+		t.Fatalf("ConfirmDraft D3: %v", err)
+	}
+	f.wantLane(ch, "todo", "D3", "D2", "D1", "T1", "D4")
+	if sealed3.GetPosition() >= sealed2.GetPosition() || sealed2.GetPosition() >= d2.GetPosition() {
+		t.Fatalf("positions: D3 %q, D2 %q, D2 as a draft %q, want each above the last", sealed3.GetPosition(), sealed2.GetPosition(), d2.GetPosition())
+	}
+	evs := f.taskEvents()
+	if last := evs[len(evs)-1].GetTask(); last.GetId() != d3.GetId() || last.GetPosition() != sealed3.GetPosition() ||
+		last.GetState() != tasksv1.TaskState_TASK_STATE_CONFIRMED {
+		t.Fatalf("last task.changed = %v, want the confirmed D3 at position %q", last, sealed3.GetPosition())
+	}
+
+	// A refused confirm moves nothing.
+	_, err = f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(d4.GetId()))
+	wantErr(t, err, errs.ErrInvalid, "confirm without an owner")
+	_, err = f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(d3.GetId()))
+	wantErr(t, err, errs.ErrConflict, "confirm of a confirmed task")
+	f.wantLane(ch, "todo", "D3", "D2", "D1", "T1", "D4")
+}
+
+func TestConfirmDraft_OfADraftMovedAway_LandsInToDo(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice, f.bob)
+	alice := f.user(f.alice)
+	f.create(alice, ch, "T1")
+	d := f.draft(ch, "D", withAssignee(f.bob))
+	if _, err := f.move(alice, d, tasksv1.TaskStatus_TASK_STATUS_DONE, nil, nil); err != nil {
+		t.Fatalf("move the draft to Done: %v", err)
+	}
+
+	sealed, err := f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(d.GetId()))
+	if err != nil {
+		t.Fatalf("ConfirmDraft: %v", err)
+	}
+	if sealed.GetStatus() != tasksv1.TaskStatus_TASK_STATUS_TODO || sealed.GetDoneAt() != nil {
+		t.Fatalf("confirmed card = %v, want To do with no done_at", sealed)
+	}
+	f.wantLane(ch, "todo", "D", "T1")
+	f.wantLane(ch, "done")
+}
+
+func TestConfirmDraft_DifferentDraftsConcurrently_GetDistinctPositions(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice, f.bob)
+	const n = 8
+	ids := make([]uuid.UUID, n)
+	for i := range n {
+		ids[i] = uuid.MustParse(f.draft(ch, fmt.Sprintf("D%d", i), withAssignee(f.bob)).GetId())
+	}
+
+	var wg sync.WaitGroup
+	failed := make([]error, n)
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, failed[i] = f.svc.ConfirmDraft(t.Context(), f.user(f.alice), ids[i])
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range failed {
+		if err != nil {
+			t.Fatalf("ConfirmDraft %d: %v", i, err)
+		}
+	}
+	lane := f.lane(ch, "todo")
+	if len(lane) != n {
+		t.Fatalf("lane = %v, want %d cards", lane, n)
+	}
+	for i := 1; i < len(lane); i++ {
+		if lane[i-1].Position >= lane[i].Position {
+			t.Fatalf("lane = %v: concurrent confirms tied two cards", lane)
+		}
+	}
+}
+
+// ---- authorization and isolation --------------------------------------------
+
+func TestListTasks_SystemActorWorkspaceWide_Forbidden(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	f.create(f.user(f.alice), ch, "Visible to people")
+	job := f.system(f.alice)
+
+	// The authz table gives a job no task.read: neither path may show it tasks.
+	_, err := f.svc.ListTasks(t.Context(), job, ListTasksQuery{})
+	wantErr(t, err, errs.ErrForbidden, "a job's workspace-wide ListTasks")
+	_, err = f.svc.ListTasks(t.Context(), job, ListTasksQuery{ChannelID: &ch})
+	wantErr(t, err, errs.ErrForbidden, "a job's ListTasks of a channel")
+
+	// The agent acts for the user and holds task.read: its workspace-wide list stays bounded to her channels.
+	got, err := f.svc.ListTasks(t.Context(), f.agentFor(f.alice), ListTasksQuery{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("agent's workspace-wide list = %v, %v, want Alice's one task", titles(got), err)
+	}
+}
+
+func TestUpdateMoveConfirmDiscard_AgentAndSystemActorsForbidden(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice, f.bob)
+	alice := f.user(f.alice)
+	task := f.create(alice, ch, "Mine")
+	draft := f.draft(ch, "Proposed", withAssignee(f.bob))
+	draftID := uuid.MustParse(draft.GetId())
+
+	for name, actor := range map[string]authz.Actor{"agent": f.agentFor(f.alice), "system": f.system(f.alice)} {
+		_, err := f.svc.UpdateTask(t.Context(), actor, &tasksv1.UpdateTaskRequest{Id: task.GetId(), Title: proto.String("hijacked")})
+		wantErr(t, err, errs.ErrForbidden, name+" UpdateTask")
+		_, err = f.move(actor, task, tasksv1.TaskStatus_TASK_STATUS_DONE, nil, nil)
+		wantErr(t, err, errs.ErrForbidden, name+" MoveTask")
+		_, err = f.svc.ConfirmDraft(t.Context(), actor, draftID)
+		wantErr(t, err, errs.ErrForbidden, name+" ConfirmDraft")
+		wantErr(t, f.svc.DiscardDraft(t.Context(), actor, draftID), errs.ErrForbidden, name+" DiscardDraft")
+	}
+
+	got := f.list(alice, ch)
+	if len(got) != 2 || got[0].GetTitle() != "Mine" || got[0].GetStatus() != tasksv1.TaskStatus_TASK_STATUS_TODO ||
+		got[1].GetState() != tasksv1.TaskState_TASK_STATE_DRAFT {
+		t.Fatalf("tasks = %v after the refused calls, want the task and the draft untouched", got)
+	}
+}
+
+func TestWorkspaces_AreIsolated(t *testing.T) {
+	f := newFixture(t)
+	alice := f.user(f.alice)
+	ch := f.channel("public", f.alice)
+	mine := f.create(alice, ch, "Mine")
+
+	ws2 := f.seedWorkspace("other.example")
+	zed := f.seedUser(ws2, "Zed")
+	ch2 := f.channelIn(ws2, "public", zed)
+	zedActor := authz.Actor{Kind: authz.ActorUser, WorkspaceID: ws2, UserID: zed}
+	theirs, err := f.svc.CreateTask(t.Context(), zedActor, &tasksv1.CreateTaskRequest{ChannelId: ch2.String(), Title: "Theirs"})
+	if err != nil {
+		t.Fatalf("CreateTask in the other workspace: %v", err)
+	}
+	theirDraft, err := f.svc.CreateDraft(t.Context(), authz.Actor{Kind: authz.ActorSystem, WorkspaceID: ws2, UserID: zed},
+		&tasksv1.CreateTaskRequest{ChannelId: ch2.String(), Title: "Their draft", Source: meetingSource(ch2), AssigneeId: proto.String(zed.String())})
+	if err != nil {
+		t.Fatalf("CreateDraft in the other workspace: %v", err)
+	}
+	// Each workspace numbers its own REFs.
+	if mine.GetRef() != theirs.GetRef() {
+		t.Fatalf("REFs %s and %s, want both workspaces to start at the same number", mine.GetRef(), theirs.GetRef())
+	}
+
+	got, err := f.svc.ListTasks(t.Context(), alice, ListTasksQuery{})
+	if err != nil || !slices.Equal(titles(got), []string{"Mine"}) {
+		t.Fatalf("Alice's workspace-wide list = %v, %v, want only Mine", titles(got), err)
+	}
+	got, err = f.svc.ListTasks(t.Context(), zedActor, ListTasksQuery{})
+	if err != nil || !slices.Equal(titles(got), []string{"Theirs", "Their draft"}) {
+		t.Fatalf("Zed's workspace-wide list = %v, %v, want his two tasks", titles(got), err)
+	}
+	_, err = f.svc.ListTasks(t.Context(), alice, ListTasksQuery{ChannelID: &ch2})
+	wantErr(t, err, errs.ErrForbidden, "ListTasks of the other workspace's channel")
+
+	// Another workspace's task is not there to read, change, move, confirm or discard.
+	_, err = f.svc.UpdateTask(t.Context(), alice, &tasksv1.UpdateTaskRequest{Id: theirs.GetId(), Title: proto.String("hijacked")})
+	wantErr(t, err, errs.ErrNotFound, "UpdateTask of another workspace's task")
+	_, err = f.move(alice, theirs, tasksv1.TaskStatus_TASK_STATUS_DONE, nil, nil)
+	wantErr(t, err, errs.ErrNotFound, "MoveTask of another workspace's task")
+	_, err = f.svc.ConfirmDraft(t.Context(), alice, uuid.MustParse(theirDraft.GetId()))
+	wantErr(t, err, errs.ErrNotFound, "ConfirmDraft of another workspace's draft")
+	wantErr(t, f.svc.DiscardDraft(t.Context(), alice, uuid.MustParse(theirDraft.GetId())), errs.ErrNotFound, "DiscardDraft of another workspace's draft")
+	// ... nor can one be named as a neighbour, a channel to create in, or an assignee.
+	_, err = f.move(alice, mine, tasksv1.TaskStatus_TASK_STATUS_TODO, nil, theirs)
+	wantErr(t, err, errs.ErrInvalid, "MoveTask next to another workspace's task")
+	_, err = f.svc.CreateTask(t.Context(), alice, &tasksv1.CreateTaskRequest{ChannelId: ch2.String(), Title: "x"})
+	wantErr(t, err, errs.ErrForbidden, "CreateTask in another workspace's channel")
+	_, err = f.svc.CreateTask(t.Context(), alice, &tasksv1.CreateTaskRequest{ChannelId: ch.String(), Title: "x", AssigneeId: proto.String(zed.String())})
+	wantErr(t, err, errs.ErrInvalid, "CreateTask for another workspace's user")
+
+	got, err = f.svc.ListTasks(t.Context(), zedActor, ListTasksQuery{})
+	if err != nil || len(got) != 2 || got[0].GetTitle() != "Theirs" || got[0].GetStatus() != tasksv1.TaskStatus_TASK_STATUS_TODO ||
+		got[1].GetState() != tasksv1.TaskState_TASK_STATE_DRAFT {
+		t.Fatalf("Zed's tasks = %v, %v after Alice's attempts, want both untouched", got, err)
 	}
 }
 

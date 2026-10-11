@@ -21,6 +21,44 @@ WHERE channel_id = sqlc.arg(channel_id) AND status = sqlc.arg(status) AND id <> 
 ORDER BY position DESC
 LIMIT 1;
 
+-- name: FirstPosition :one
+-- The position of the first card of a lane other than excluding_id; no row for an
+-- empty lane.
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = sqlc.arg(channel_id) AND status = sqlc.arg(status) AND id <> sqlc.arg(excluding_id)
+ORDER BY position ASC
+LIMIT 1;
+
+-- name: NextPosition :one
+-- The position of the card directly after after_position in a lane, other than
+-- excluding_id; no row when there is none. Drafts are cards of the lane.
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = sqlc.arg(channel_id) AND status = sqlc.arg(status) AND id <> sqlc.arg(excluding_id)
+  AND position > sqlc.arg(after_position)
+ORDER BY position ASC
+LIMIT 1;
+
+-- name: PrevPosition :one
+-- The position of the card directly before before_position in a lane, other than
+-- excluding_id; no row when there is none. Drafts are cards of the lane.
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = sqlc.arg(channel_id) AND status = sqlc.arg(status) AND id <> sqlc.arg(excluding_id)
+  AND position < sqlc.arg(before_position)
+ORDER BY position DESC
+LIMIT 1;
+
+-- name: PositionTaken :one
+-- Whether a card of the lane other than excluding_id already holds position.
+SELECT EXISTS (
+    SELECT 1
+    FROM tasks.tasks
+    WHERE channel_id = sqlc.arg(channel_id) AND status = sqlc.arg(status) AND id <> sqlc.arg(excluding_id)
+      AND position = sqlc.arg(position)
+);
+
 -- name: InsertTask :one
 INSERT INTO tasks.tasks (
     id, workspace_id, channel_id, ref, title, description, state, status, assignee_id, due_at, position,
@@ -68,10 +106,15 @@ RETURNING *;
 
 -- name: ConfirmDraft :one
 -- The state predicate is what makes two concurrent confirms seal the draft once:
--- the second UPDATE waits for the first, re-reads the row and finds no draft.
+-- the second UPDATE waits for the first, re-reads the row and finds no draft. The
+-- sealed card lands at position, the top of To do, which the caller computed under
+-- the lane lock.
 UPDATE tasks.tasks
-SET state = 'confirmed'
-WHERE id = $1 AND state = 'draft' AND assignee_id IS NOT NULL
+SET state    = 'confirmed',
+    status   = 'todo',
+    position = sqlc.arg(position),
+    done_at  = NULL
+WHERE id = sqlc.arg(id) AND state = 'draft' AND assignee_id IS NOT NULL
 RETURNING *;
 
 -- name: DeleteDraft :execrows

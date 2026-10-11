@@ -15,15 +15,25 @@ import (
 
 const confirmDraft = `-- name: ConfirmDraft :one
 UPDATE tasks.tasks
-SET state = 'confirmed'
-WHERE id = $1 AND state = 'draft' AND assignee_id IS NOT NULL
+SET state    = 'confirmed',
+    status   = 'todo',
+    position = $1,
+    done_at  = NULL
+WHERE id = $2 AND state = 'draft' AND assignee_id IS NOT NULL
 RETURNING id, workspace_id, channel_id, ref, title, description, state, status, assignee_id, due_at, done_at, created_at, position, source_kind, source_id, source_anchor, source_meta, from_ref, created_by_kind, created_by_id
 `
 
+type ConfirmDraftParams struct {
+	Position string
+	ID       uuid.UUID
+}
+
 // The state predicate is what makes two concurrent confirms seal the draft once:
-// the second UPDATE waits for the first, re-reads the row and finds no draft.
-func (q *Queries) ConfirmDraft(ctx context.Context, id uuid.UUID) (TasksTask, error) {
-	row := q.db.QueryRow(ctx, confirmDraft, id)
+// the second UPDATE waits for the first, re-reads the row and finds no draft. The
+// sealed card lands at position, the top of To do, which the caller computed under
+// the lane lock.
+func (q *Queries) ConfirmDraft(ctx context.Context, arg ConfirmDraftParams) (TasksTask, error) {
+	row := q.db.QueryRow(ctx, confirmDraft, arg.Position, arg.ID)
 	var i TasksTask
 	err := row.Scan(
 		&i.ID,
@@ -61,6 +71,29 @@ func (q *Queries) DeleteDraft(ctx context.Context, id uuid.UUID) (int64, error) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const firstPosition = `-- name: FirstPosition :one
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = $1 AND status = $2 AND id <> $3
+ORDER BY position ASC
+LIMIT 1
+`
+
+type FirstPositionParams struct {
+	ChannelID   uuid.UUID
+	Status      string
+	ExcludingID uuid.UUID
+}
+
+// The position of the first card of a lane other than excluding_id; no row for an
+// empty lane.
+func (q *Queries) FirstPosition(ctx context.Context, arg FirstPositionParams) (string, error) {
+	row := q.db.QueryRow(ctx, firstPosition, arg.ChannelID, arg.Status, arg.ExcludingID)
+	var position string
+	err := row.Scan(&position)
+	return position, err
 }
 
 const getTask = `-- name: GetTask :one
@@ -319,6 +352,95 @@ func (q *Queries) MoveTask(ctx context.Context, arg MoveTaskParams) (TasksTask, 
 		&i.CreatedByID,
 	)
 	return i, err
+}
+
+const nextPosition = `-- name: NextPosition :one
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = $1 AND status = $2 AND id <> $3
+  AND position > $4
+ORDER BY position ASC
+LIMIT 1
+`
+
+type NextPositionParams struct {
+	ChannelID     uuid.UUID
+	Status        string
+	ExcludingID   uuid.UUID
+	AfterPosition string
+}
+
+// The position of the card directly after after_position in a lane, other than
+// excluding_id; no row when there is none. Drafts are cards of the lane.
+func (q *Queries) NextPosition(ctx context.Context, arg NextPositionParams) (string, error) {
+	row := q.db.QueryRow(ctx, nextPosition,
+		arg.ChannelID,
+		arg.Status,
+		arg.ExcludingID,
+		arg.AfterPosition,
+	)
+	var position string
+	err := row.Scan(&position)
+	return position, err
+}
+
+const positionTaken = `-- name: PositionTaken :one
+SELECT EXISTS (
+    SELECT 1
+    FROM tasks.tasks
+    WHERE channel_id = $1 AND status = $2 AND id <> $3
+      AND position = $4
+)
+`
+
+type PositionTakenParams struct {
+	ChannelID   uuid.UUID
+	Status      string
+	ExcludingID uuid.UUID
+	Position    string
+}
+
+// Whether a card of the lane other than excluding_id already holds position.
+func (q *Queries) PositionTaken(ctx context.Context, arg PositionTakenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, positionTaken,
+		arg.ChannelID,
+		arg.Status,
+		arg.ExcludingID,
+		arg.Position,
+	)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const prevPosition = `-- name: PrevPosition :one
+SELECT position
+FROM tasks.tasks
+WHERE channel_id = $1 AND status = $2 AND id <> $3
+  AND position < $4
+ORDER BY position DESC
+LIMIT 1
+`
+
+type PrevPositionParams struct {
+	ChannelID      uuid.UUID
+	Status         string
+	ExcludingID    uuid.UUID
+	BeforePosition string
+}
+
+// The position of the card directly before before_position in a lane, other than
+// excluding_id; no row when there is none. Drafts are cards of the lane.
+func (q *Queries) PrevPosition(ctx context.Context, arg PrevPositionParams) (string, error) {
+	row := q.db.QueryRow(ctx, prevPosition,
+		arg.ChannelID,
+		arg.Status,
+		arg.ExcludingID,
+		arg.BeforePosition,
+	)
+	var position string
+	err := row.Scan(&position)
+	return position, err
 }
 
 const updateTask = `-- name: UpdateTask :one
