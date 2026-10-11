@@ -1,4 +1,5 @@
 import { cx } from '../cx';
+import { useLabels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { ExcerptRow } from './ExcerptContext';
 import { OffsetLink } from './SourceLinks';
@@ -10,8 +11,6 @@ export type Track = {
   offsetMs: number | null;
   entryIdx: number | null;
 };
-
-const LABEL = { decision: 'Decision', open_question: 'Open question' } as const;
 
 type TracksProps = {
   tracks: readonly Track[];
@@ -25,12 +24,13 @@ type TracksProps = {
  * is visually hidden on wide screens (still read by assistive tech) and shows again where rows reflow on phones.
  */
 export function Tracks({ tracks, meetingId, title }: TracksProps) {
+  const labels = useLabels();
   return (
     <ul className="kiwi-tracks">
       {tracks.map((track, index) => (
         <ExcerptRow key={index} as="li" className="kiwi-track" data-kind={track.kind}>
           <span className="kiwi-track-label">
-            <span className={cx(tracks[index - 1]?.kind === track.kind && 'kiwi-dup')}>{LABEL[track.kind]}</span>
+            <span className={cx(tracks[index - 1]?.kind === track.kind && 'kiwi-dup')}>{labels.node(track.kind === 'decision' ? 'decision' : 'openQuestion')}</span>
           </span>
           <span className="kiwi-track-text">
             <LangRuns text={track.text} />

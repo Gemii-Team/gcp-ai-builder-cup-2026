@@ -1,5 +1,6 @@
 import { useId, type SVGProps } from 'react';
 import { cx } from './cx';
+import { useLabels } from './labels';
 
 // Brand drawings ported from .impeccable/brand and the prototypes. In the app they are drawn with token
 // classes (Ink Teal, Slip Paper, Seal Green ...) rather than literal colours, so a palette change moves them.
@@ -60,13 +61,14 @@ export function MarkSmall({ size, label, ...rest }: MarkSmallProps) {
  */
 export function Seal({ className, ...rest }: DrawingProps) {
   const arc = useId();
+  const labels = useLabels();
   return (
     <svg
       viewBox="0 0 80 80"
       width="80"
       height="80"
       role="img"
-      aria-label="Confirmed"
+      aria-label={labels.text('confirmed')}
       className={cx('[transform:rotate(-8deg)]', className)}
       {...rest}
     >
@@ -83,9 +85,15 @@ export function Seal({ className, ...rest }: DrawingProps) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <text className="fill-seal-ink font-sans" fontSize="11" fontWeight="700" letterSpacing=".5" textAnchor="middle">
+      <text
+        className="fill-seal-ink font-sans"
+        fontSize="11"
+        fontWeight="700"
+        letterSpacing={labels.lang === 'en' ? '.5' : undefined}
+        textAnchor="middle"
+      >
         <textPath href={`#${arc}`} startOffset="50%">
-          CONFIRMED
+          {labels.text('confirmedStamp')}
         </textPath>
       </text>
     </svg>

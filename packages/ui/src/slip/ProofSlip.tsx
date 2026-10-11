@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { formatClock } from '../format';
+import { useLabels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { Numeral } from '../Numeral';
 import type { Source } from './ExcerptContext';
@@ -32,6 +33,7 @@ type ProofSlipProps = {
  * `ExcerptProvider` above it.
  */
 export function ProofSlip({ ref, title, meta, summary, tracks, sources, generatedAt, draftCount, meetingId }: ProofSlipProps) {
+  const labels = useLabels();
   return (
     <Slip>
       <SlipBody>
@@ -57,13 +59,7 @@ export function ProofSlip({ ref, title, meta, summary, tracks, sources, generate
         )}
         {draftCount !== undefined && (
           <p className="kiwi-ft" data-zero={draftCount === 0 || undefined}>
-            {draftCount === 0 ? (
-              'No drafts waiting'
-            ) : (
-              <>
-                <Numeral>{draftCount}</Numeral> {draftCount === 1 ? 'draft' : 'drafts'} to confirm
-              </>
-            )}
+            {draftCount === 0 ? labels.node('noDraftsWaiting') : labels.node('draftsToConfirm', { count: draftCount })}
           </p>
         )}
       </SlipBody>
@@ -71,12 +67,10 @@ export function ProofSlip({ ref, title, meta, summary, tracks, sources, generate
       <Stub>
         <StubRow>
           <RefCode code={ref} />
-          <span>
-            Generated <Numeral>{formatClock(generatedAt)}</Numeral>
-          </span>
+          <span>{labels.node('generated', { time: <Numeral>{formatClock(generatedAt)}</Numeral> })}</span>
         </StubRow>
         {sources.length > 0 && (
-          <ol className="kiwi-srcs" aria-label="Sources">
+          <ol className="kiwi-srcs" aria-label={labels.text('sources')}>
             {sources.map((source, index) => (
               <SourceRow key={index} source={source} />
             ))}

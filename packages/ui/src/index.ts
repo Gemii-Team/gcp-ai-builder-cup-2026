@@ -6,6 +6,7 @@ export { Button } from './Button';
 export { dateToDueAt, dueAtToDate, formatClock, formatDay, formatOffset, formatSize } from './format';
 export { Icon, type IconName } from './icons';
 export { IconButton } from './IconButton';
+export { LabelsProvider, useLabels, type Labels, type UiLabels, type UiLang } from './labels';
 export { EnMarker, LangRuns, Rich, langRuns } from './LangRuns';
 export { Mark, MarkSmall, Mascot, Seal } from './marks';
 export { Menu, MenuItem, MenuRadioItem } from './Menu';

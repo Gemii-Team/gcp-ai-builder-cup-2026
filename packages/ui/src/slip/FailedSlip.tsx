@@ -1,6 +1,7 @@
 import { Button } from '../Button';
 import { formatClock } from '../format';
 import { Icon } from '../icons';
+import { useLabels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { Numeral } from '../Numeral';
 import { Perforation } from './Perforation';
@@ -19,6 +20,7 @@ type FailedSlipProps = {
  * It carries no REF, since no output was issued.
  */
 export function FailedSlip({ reason, failedAt, onRetry }: FailedSlipProps) {
+  const labels = useLabels();
   return (
     <Slip tone="failed">
       <SlipBody>
@@ -33,11 +35,9 @@ export function FailedSlip({ reason, failedAt, onRetry }: FailedSlipProps) {
       <Stub>
         <StubRow>
           <Button size="sm" onClick={onRetry}>
-            Retry
+            {labels.node('retry')}
           </Button>
-          <span>
-            Failed <Numeral>{formatClock(failedAt)}</Numeral>
-          </span>
+          <span>{labels.node('failed', { time: <Numeral>{formatClock(failedAt)}</Numeral> })}</span>
         </StubRow>
       </Stub>
     </Slip>

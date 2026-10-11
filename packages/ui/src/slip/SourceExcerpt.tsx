@@ -1,35 +1,38 @@
 import { formatOffset } from '../format';
+import { useLabels, type Labels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { Numeral } from '../Numeral';
 import type { Excerpt, OpenExcerpt, Source } from './ExcerptContext';
 import { Pending } from './Pending';
 
 /** The name of the excerpt group, known from the source before its content has loaded. */
-function groupName(source: Source): string {
+function groupName(labels: Labels, source: Source): string {
   switch (source.kind) {
-    case 'meeting':
-      return `Transcript excerpt at ${formatOffset(source.offsetMs) ?? ''}`.trim();
+    case 'meeting': {
+      const offset = formatOffset(source.offsetMs);
+      return offset === null ? labels.text('transcriptExcerpt') : labels.text('transcriptExcerptAt', { time: offset });
+    }
     case 'file':
-      return `Document excerpt, ${source.label} page ${source.page ?? ''}`.trim();
+      return source.page === undefined
+        ? labels.text('documentExcerptNoPage', { file: source.label })
+        : labels.text('documentExcerpt', { file: source.label, page: source.page });
     case 'message':
-      return `Message excerpt from ${source.label}`;
+      return labels.text('messageExcerpt', { author: source.label });
   }
 }
 
 function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
+  const labels = useLabels();
   switch (excerpt.kind) {
     case 'transcript': {
       const offset = formatOffset(excerpt.offsetMs);
+      const title = <LangRuns text={excerpt.title} />;
       return (
         <>
           <p className="kiwi-ex-h">
-            Transcript · <LangRuns text={excerpt.title} />
-            {offset !== null && (
-              <>
-                {' · '}
-                <Numeral>{offset}</Numeral>
-              </>
-            )}
+            {offset === null
+              ? labels.node('transcriptHeaderUntimed', { title })
+              : labels.node('transcriptHeader', { title, time: <Numeral>{offset}</Numeral> })}
           </p>
           {excerpt.lines.map((line, index) => {
             const at = formatOffset(line.offsetMs);
@@ -50,12 +53,17 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
         </>
       );
     }
-    case 'message':
+    case 'message': {
+      const params = {
+        channel: <LangRuns text={excerpt.channel} />,
+        time: <Numeral>{excerpt.time}</Numeral>,
+      };
       return (
         <>
           <p className="kiwi-ex-h">
-            <LangRuns text={`Message · #${excerpt.channel} · ${excerpt.day === undefined ? '' : `${excerpt.day} `}`} />
-            <Numeral>{excerpt.time}</Numeral>
+            {excerpt.day === undefined
+              ? labels.node('messageHeaderToday', params)
+              : labels.node('messageHeader', { ...params, day: <LangRuns text={excerpt.day} /> })}
           </p>
           <div className="kiwi-ex-l">
             <b>
@@ -68,12 +76,13 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
           </div>
         </>
       );
-    case 'document':
+    }
+    case 'document': {
+      const ref = <Numeral lang="en">{`REF ${excerpt.ref}`}</Numeral>;
       return (
         <>
           <p className="kiwi-ex-h">
-            <LangRuns text={`Document · ${excerpt.file} · p. `} />
-            <Numeral>{excerpt.page}</Numeral>
+            {labels.node('documentHeader', { file: <LangRuns text={excerpt.file} />, page: excerpt.page })}
           </p>
           {excerpt.quote !== undefined && (
             <p className="kiwi-ex-t kiwi-ex-q">
@@ -81,18 +90,13 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
             </p>
           )}
           <p className="kiwi-ex-m">
-            Page <Numeral>{excerpt.page}</Numeral>
-            {excerpt.pages !== undefined && (
-              <>
-                {' of '}
-                <Numeral>{excerpt.pages}</Numeral>
-              </>
-            )}
-            {' · '}
-            <Numeral>REF {excerpt.ref}</Numeral>
+            {excerpt.pages === undefined
+              ? labels.node('documentPageNoCount', { page: excerpt.page, ref })
+              : labels.node('documentPage', { page: excerpt.page, pages: excerpt.pages, ref })}
           </p>
         </>
       );
+    }
   }
 }
 
@@ -101,17 +105,18 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
  * edge (a content divider, not a perforation). Close, and Escape through the provider, return focus to the link.
  */
 export function SourceExcerpt({ panel, onClose }: { panel: OpenExcerpt; onClose: () => void }) {
+  const labels = useLabels();
   return (
-    <div id={panel.panelId} role="group" aria-label={groupName(panel.source)} className="kiwi-ex">
-      {panel.status === 'loading' && <Pending label="Loading the excerpt…" />}
+    <div id={panel.panelId} role="group" aria-label={groupName(labels, panel.source)} className="kiwi-ex">
+      {panel.status === 'loading' && <Pending label={labels.text('excerptLoading')} />}
       {panel.status === 'error' && (
         <p role="alert" className="kiwi-ex-error">
-          Couldn't load this excerpt.
+          {labels.node('excerptError')}
         </p>
       )}
       {panel.status === 'ready' && <ExcerptBody excerpt={panel.excerpt} />}
       <button type="button" className="kiwi-ex-x" onClick={onClose}>
-        Close
+        {labels.node('close')}
       </button>
     </div>
   );
