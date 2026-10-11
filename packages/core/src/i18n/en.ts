@@ -103,6 +103,7 @@ export const en = {
   followUpOn: 'Follow up on {file}',
   taskMadeAnnouncement: 'Task {code} created: {title}. It is on the Board under To do.',
   aiDrafts: 'AI drafts',
+  summarizedBy: 'Summarized by K.I.W.I.',
 };
 
 /** The shape every language table must fill: each key of `en`, a plural key with both forms. */

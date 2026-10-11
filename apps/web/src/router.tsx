@@ -1,7 +1,11 @@
 import { createRouter } from '@tanstack/react-router';
 import { rootRoute } from './routes/__root';
+import { appRoute } from './routes/app';
+import { channelRoute } from './routes/channel';
+import { indexRoute } from './routes/index';
 
-const routeTree = rootRoute.addChildren([]);
+// Every route added here is also added to the service worker's navigation allowlist (`pwaRoutes.ts`).
+const routeTree = rootRoute.addChildren([appRoute.addChildren([indexRoute, channelRoute])]);
 
 export const router = createRouter({ routeTree });
 

@@ -1,9 +1,10 @@
+import { useEffect, useRef } from 'react';
 import { formatOffset } from '../format';
 import { useLabels, type Labels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { Numeral } from '../Numeral';
 import type { Excerpt, OpenExcerpt, Source } from './ExcerptContext';
-import { Pending } from './Pending';
+import { Pending, usePrefersReducedMotion } from './Pending';
 
 /** The name of the excerpt group, known from the source before its content has loaded. */
 function groupName(labels: Labels, source: Source): string {
@@ -102,12 +103,20 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
 
 /**
  * The moment a source points at, opened in place under the row that asked for it: Counter Hover with a dashed top
- * edge (a content divider, not a perforation). Close, and Escape through the provider, return focus to the link.
+ * edge (a content divider, not a perforation). Close, and Escape through the provider, return focus to the link. It
+ * scrolls itself into view when it opens and again when its content arrives, so one opened at the foot of a scroller is
+ * never left below the fold.
  */
 export function SourceExcerpt({ panel, onClose }: { panel: OpenExcerpt; onClose: () => void }) {
   const labels = useLabels();
+  const reduced = usePrefersReducedMotion();
+  const group = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Not every environment can scroll (jsdom has no `scrollIntoView`).
+    group.current?.scrollIntoView?.({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [panel.status, reduced]);
   return (
-    <div id={panel.panelId} role="group" aria-label={groupName(labels, panel.source)} className="kiwi-ex">
+    <div ref={group} id={panel.panelId} role="group" aria-label={groupName(labels, panel.source)} className="kiwi-ex">
       {panel.status === 'loading' && <Pending label={labels.text('excerptLoading')} />}
       {panel.status === 'error' && (
         <p role="alert" className="kiwi-ex-error">

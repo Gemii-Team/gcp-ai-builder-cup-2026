@@ -99,4 +99,5 @@ export const th: I18nTable = {
   followUpOn: 'ติดตามเรื่อง {file}',
   taskMadeAnnouncement: 'สร้างงาน {code} แล้ว: {title} อยู่บนบอร์ดในช่องต้องทำ',
   aiDrafts: 'ฉบับร่างจาก <en>AI</en>',
+  summarizedBy: 'สรุปโดย <en>K.I.W.I.</en>',
 };

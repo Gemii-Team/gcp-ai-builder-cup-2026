@@ -71,3 +71,16 @@ export function renderApp({
   render(<RouterProvider router={router} />);
   return { api, client, queryClient, router, user };
 }
+
+/** A component that needs the providers but no router and no shell: a message row, the composer. */
+export function renderPlain(ui: ReactNode, { api = seedApi(createStubApi()), queryClient = createTestQueryClient() }: Pick<RenderOptions, 'api' | 'queryClient'> = {}) {
+  const user = userEvent.setup();
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ApiProvider api={api}>
+        <AppLanguage>{ui}</AppLanguage>
+      </ApiProvider>
+    </QueryClientProvider>,
+  );
+  return { api, queryClient, user };
+}

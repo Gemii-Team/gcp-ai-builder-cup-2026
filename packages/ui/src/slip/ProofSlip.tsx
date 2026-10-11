@@ -20,6 +20,10 @@ type ProofSlipProps = {
   summary: ReactNode;
   tracks?: readonly Track[];
   sources: readonly Source[];
+  /** The citation number of each source row, by position: an answer's rows read `[1]`, `[2]`. A summary's are not numbered. */
+  sourceNumbers?: readonly number[];
+  /** The citation whose marker is pressed: its row takes Citation Wash. */
+  hitNumber?: number | null;
   generatedAt: Date | string;
   /** Drafts this slip made that still wait on a person; the footer is shown only when the count is known. */
   draftCount?: number;
@@ -32,7 +36,7 @@ type ProofSlipProps = {
  * generated and the sources it rests on. Offsets and pages in it open their excerpt in place, so the slip needs an
  * `ExcerptProvider` above it.
  */
-export function ProofSlip({ ref, title, meta, summary, tracks, sources, generatedAt, draftCount, meetingId }: ProofSlipProps) {
+export function ProofSlip({ ref, title, meta, summary, tracks, sources, sourceNumbers, hitNumber, generatedAt, draftCount, meetingId }: ProofSlipProps) {
   const labels = useLabels();
   return (
     <Slip>
@@ -72,7 +76,7 @@ export function ProofSlip({ ref, title, meta, summary, tracks, sources, generate
         {sources.length > 0 && (
           <ol className="kiwi-srcs" aria-label={labels.text('sources')}>
             {sources.map((source, index) => (
-              <SourceRow key={index} source={source} />
+              <SourceRow key={index} source={source} n={sourceNumbers?.[index]} hit={hitNumber !== undefined && hitNumber !== null && sourceNumbers?.[index] === hitNumber} />
             ))}
           </ol>
         )}
