@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package kiwi.events.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kiwi/chat/v1/chat.proto";
+import "kiwi/files/v1/files.proto";
+import "kiwi/meetings/v1/meetings.proto";
+import "kiwi/tasks/v1/tasks.proto";
+
+// Domain events carried on the transactional outbox and the bus as protojson
+// (UseProtoNames). Field 1 of every message is `string workspace_id`; handlers
+// run their effects inside that workspace. Each top-level message has exactly
+// one topic in backend/internal/platform/events (TestEveryEventMessageHasATopic).
+
+// ChatMessageCreated is published as chat.message.created.
+message ChatMessageCreated {
+  string workspace_id = 1;
+  string channel_id = 2;
+  kiwi.chat.v1.Message message = 3;
+}
+
+// AgentInvoke is published as agent.invoke. channel_id and trigger_message_id
+// are empty for an Ask-panel run.
+message AgentInvoke {
+  string workspace_id = 1;
+  string run_id = 2;
+  string agent = 3;
+  string channel_id = 4;
+  string trigger_message_id = 5;
+  string on_behalf_of = 6;
+}
+
+// DocUploaded is published as doc.uploaded.
+message DocUploaded {
+  string workspace_id = 1;
+  string channel_id = 2;
+  string file_id = 3;
+  string uploaded_by = 4;
+}
+
+// MeetingIngest is published as meeting.ingest; attempt counts re-reads.
+message MeetingIngest {
+  string workspace_id = 1;
+  string meeting_id = 2;
+  string transcript_name = 3;
+  int32 attempt = 4;
+}
+
+// MeetingTranscribe is published as meeting.transcribe (recording fallback).
+message MeetingTranscribe {
+  string workspace_id = 1;
+  string meeting_id = 2;
+  string file_id = 3;
+}
+
+// MeetingTranscriptCheck is published as meeting.transcript_check.
+message MeetingTranscriptCheck {
+  string workspace_id = 1;
+  string meeting_id = 2;
+}
+
+// EmbedIndex is published as embed.index. source_kind is "chat", "meeting" or
+// "doc"; channel_id is empty for a workspace-wide source; window_start is set
+// for a chat window.
+message EmbedIndex {
+  string workspace_id = 1;
+  string source_kind = 2;
+  string source_id = 3;
+  string channel_id = 4;
+  google.protobuf.Timestamp window_start = 5;
+}
+
+// TaskDraftRequested is published as task.draft: one meeting's action items.
+message TaskDraftRequested {
+  string workspace_id = 1;
+  string meeting_id = 2;
+  string meeting_title = 3;
+  string channel_id = 4;
+  string owner_user_id = 5;
+  repeated Item items = 6;
+
+  // Item is one action item; offset_ms is unset when the transcript has no timing.
+  message Item {
+    string title = 1;
+    string owner_hint = 2;
+    string due_hint = 3;
+    int32 entry_idx = 4;
+    optional int64 offset_ms = 5;
+  }
+}
+
+// TaskChanged is published as task.changed.
+message TaskChanged {
+  string workspace_id = 1;
+  string channel_id = 2;
+  kiwi.tasks.v1.Task task = 3;
+}
+
+// FileStatusChanged is published as file.status_changed.
+message FileStatusChanged {
+  string workspace_id = 1;
+  string file_id = 2;
+  string channel_id = 3;
+  kiwi.files.v1.FileStatus status = 4;
+  string failure_reason = 5;
+}
+
+// MeetingSummaryReady is published as meeting.summary_ready.
+message MeetingSummaryReady {
+  string workspace_id = 1;
+  string meeting_id = 2;
+  string channel_id = 3;
+  kiwi.meetings.v1.MeetingStatus status = 4;
+  string failure_reason = 5;
+}
+
+// MembershipChanged is published as membership.changed.
+message MembershipChanged {
+  string workspace_id = 1;
+  string channel_id = 2;
+  string user_id = 3;
+  kiwi.chat.v1.MembershipChange change = 4;
+}

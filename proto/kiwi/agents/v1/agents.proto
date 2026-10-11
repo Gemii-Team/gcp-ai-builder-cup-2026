@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package kiwi.agents.v1;
+
+import "kiwi/chat/v1/artifact.proto";
+
+// AgentService is served under /api (Connect, POST, protobuf or JSON).
+service AgentService {
+  // StartRun creates an Ask-panel run as the calling user and enqueues agent.invoke.
+  rpc StartRun(StartRunRequest) returns (StartRunResponse);
+  // GetRun returns a run to the user who started it.
+  rpc GetRun(GetRunRequest) returns (GetRunResponse);
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_QUEUED = 1;
+  RUN_STATUS_RUNNING = 2;
+  RUN_STATUS_DONE = 3;
+  RUN_STATUS_FAILED = 4;
+}
+
+// Run is one agent invocation. ref is the ANS-... REF code, issued whenever the
+// run produced an answer (found or not found), never for a failed run.
+message Run {
+  string id = 1;
+  string agent = 2;
+  RunStatus status = 3;
+  string question = 4;
+  optional string channel_id = 5;
+  kiwi.chat.v1.Artifact answer = 6;
+  string failure_reason = 7;
+  string ref = 8;
+}
+
+message StartRunRequest {
+  string agent = 1;
+  string question = 2;
+  optional string channel_id = 3;
+}
+
+message StartRunResponse {
+  Run run = 1;
+}
+
+message GetRunRequest {
+  string run_id = 1;
+}
+
+message GetRunResponse {
+  Run run = 1;
+}

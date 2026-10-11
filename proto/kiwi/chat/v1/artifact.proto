@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package kiwi.chat.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ArtifactKind says what an AI slip is.
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_MEETING_SUMMARY = 1;
+  ARTIFACT_KIND_DOC_SUMMARY = 2;
+  ARTIFACT_KIND_ANSWER = 3;
+  // NOT_FOUND is a completed answer (it has a REF and scope_channel_ids), not a failure.
+  ARTIFACT_KIND_NOT_FOUND = 4;
+  ARTIFACT_KIND_CHANNEL_SUMMARY = 5;
+}
+
+// TrackKind classifies a line of a meeting summary.
+enum TrackKind {
+  TRACK_KIND_UNSPECIFIED = 0;
+  TRACK_KIND_DECISION = 1;
+  TRACK_KIND_OPEN_QUESTION = 2;
+}
+
+// SourceKind is where a cited or task-source passage lives.
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_MEETING = 1;
+  SOURCE_KIND_FILE = 2;
+  SOURCE_KIND_MESSAGE = 3;
+}
+
+// Artifact is a ready AI output attached to a message. Only ready artifacts are
+// stored; pending and failed states come from file and meeting status events.
+message Artifact {
+  ArtifactKind kind = 1;
+  // ref is the REF code, e.g. MTG-1001. A failed attempt issues none.
+  string ref = 2;
+  string title = 3;
+  string meta = 4;
+  string body_markdown = 5;
+  repeated Track tracks = 6;
+  repeated Source sources = 7;
+  repeated Citation citations = 8;
+  // scope_channel_ids lists the channels that were searched (ANSWER and NOT_FOUND).
+  repeated string scope_channel_ids = 9;
+  google.protobuf.Timestamp generated_at = 10;
+  optional string meeting_id = 11;
+  optional string file_id = 12;
+  optional string run_id = 13;
+}
+
+// Track is one decision or open question of a meeting summary.
+message Track {
+  TrackKind kind = 1;
+  string text = 2;
+  // offset_ms and entry_idx are unset when the transcript has no timing.
+  optional int64 offset_ms = 3;
+  optional int32 entry_idx = 4;
+}
+
+// Source is the typed reference behind a citation, a slip row or a task. It is
+// defined once here and imported by tasks.proto.
+message Source {
+  SourceKind kind = 1;
+  string id = 2;
+  // anchor: meeting "<entry idx>", message "<seq>", file "page:<n>".
+  string anchor = 3;
+  // label: the meeting title, the file name, or a message's author name.
+  string label = 4;
+  string channel_id = 5;
+  // at is a MESSAGE source's message created_at.
+  google.protobuf.Timestamp at = 6;
+  optional int64 offset_ms = 7;
+  optional int32 page = 8;
+  // quote is the cited passage of a document or message source (<= 500 runes),
+  // set only on a task's source.
+  optional string quote = 9;
+}
+
+// Citation is a numbered, validated reference from an answer to a source.
+message Citation {
+  int32 n = 1;
+  string chunk_id = 2;
+  string quote = 3;
+  Source source = 4;
+}

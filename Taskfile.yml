@@ -27,3 +27,11 @@ tasks:
         fi
       - cd backend && golangci-lint run
       - pnpm -r lint
+
+  gen:
+    desc: Generate Go and TypeScript code from proto/ (buf generate)
+    preconditions:
+      - sh: test -x packages/api-client/node_modules/.bin/protoc-gen-es
+        msg: protoc-gen-es is not installed; run `task setup` (pnpm install) first
+    cmds:
+      - buf generate

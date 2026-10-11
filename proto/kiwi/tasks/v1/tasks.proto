@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package kiwi.tasks.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kiwi/chat/v1/artifact.proto";
+
+// TaskService is served under /api (Connect, POST, protobuf or JSON).
+service TaskService {
+  // ListTasks without channel_id returns every task of the channels the caller belongs to.
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc UpdateTask(UpdateTaskRequest) returns (UpdateTaskResponse);
+  // MoveTask changes status and position, writing only the moved row. An empty
+  // before_id or after_id is an open end of the fractional-index range.
+  rpc MoveTask(MoveTaskRequest) returns (MoveTaskResponse);
+  // ConfirmDraft seals a draft; it needs an assignee.
+  rpc ConfirmDraft(ConfirmDraftRequest) returns (ConfirmDraftResponse);
+  rpc DiscardDraft(DiscardDraftRequest) returns (DiscardDraftResponse);
+}
+
+// TaskState is the review state: nothing an AI drafts takes effect until confirmed.
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_DRAFT = 1;
+  TASK_STATE_CONFIRMED = 2;
+}
+
+// TaskStatus is the Board column.
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_TODO = 1;
+  TASK_STATUS_DOING = 2;
+  TASK_STATUS_DONE = 3;
+}
+
+// CreatedByKind says whether a person or an agent made the task.
+enum CreatedByKind {
+  CREATED_BY_KIND_UNSPECIFIED = 0;
+  CREATED_BY_KIND_USER = 1;
+  CREATED_BY_KIND_AGENT = 2;
+}
+
+// Task is a Board card. A USER-created task with no source was made by hand.
+message Task {
+  string id = 1;
+  string channel_id = 2;
+  string title = 3;
+  string description = 4;
+  TaskState state = 5;
+  TaskStatus status = 6;
+  optional string assignee_id = 7;
+  google.protobuf.Timestamp due_at = 8;
+  // done_at is set when the status becomes DONE and cleared otherwise.
+  google.protobuf.Timestamp done_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  // position is a fractional-index string ordering tasks within (channel_id, status).
+  string position = 11;
+  // ref is the TSK-... REF code.
+  string ref = 12;
+  kiwi.chat.v1.Source source = 13;
+  // from_ref is the REF of the answer a task was made from, e.g. ANS-2209 (display only).
+  optional string from_ref = 14;
+  CreatedByKind created_by_kind = 15;
+  string created_by_id = 16;
+}
+
+message ListTasksRequest {
+  optional string channel_id = 1;
+  repeated TaskState states = 2;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+// CreateTaskRequest: a person-made task is confirmed at once. A request without
+// source makes a task by hand; one from a chat message carries a MESSAGE source;
+// neither may be a draft. An unset state means CONFIRMED.
+message CreateTaskRequest {
+  string channel_id = 1;
+  string title = 2;
+  optional string description = 3;
+  optional string assignee_id = 4;
+  google.protobuf.Timestamp due_at = 5;
+  kiwi.chat.v1.Source source = 6;
+  optional TaskState state = 7;
+  optional string from_ref = 8;
+}
+
+message CreateTaskResponse {
+  Task task = 1;
+}
+
+message UpdateTaskRequest {
+  string id = 1;
+  optional string title = 2;
+  optional string description = 3;
+  optional string assignee_id = 4;
+  google.protobuf.Timestamp due_at = 5;
+  bool clear_assignee = 6;
+  bool clear_due = 7;
+}
+
+message UpdateTaskResponse {
+  Task task = 1;
+}
+
+message MoveTaskRequest {
+  string id = 1;
+  TaskStatus status = 2;
+  string before_id = 3;
+  string after_id = 4;
+}
+
+message MoveTaskResponse {
+  Task task = 1;
+}
+
+message ConfirmDraftRequest {
+  string id = 1;
+}
+
+message ConfirmDraftResponse {
+  Task task = 1;
+}
+
+message DiscardDraftRequest {
+  string id = 1;
+}
+
+message DiscardDraftResponse {}

@@ -28,3 +28,11 @@ application_default_credentials.json
 tfplan
 *.tfvars
 crash.log
+
+# Build and tool output
+node_modules/
+.turbo/
+dist/
+coverage/
+# turbo writes one when run; never commit it
+/AGENTS.md
