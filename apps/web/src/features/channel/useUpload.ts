@@ -8,44 +8,38 @@ import { hasCode } from '../../api/errors';
 import { mapFile, mapMeeting } from '../../api/mappers';
 import { keys } from '../../api/queries';
 import type { MeetingView } from '../../api/types';
-import { baseName, isRecording } from '../../lib/failure';
+import { baseName, failureReasonKey, isRecording, isRejectionReason, rejectionReasonOf } from '../../lib/failure';
+import { mimeOf } from '../../lib/mime';
 
-/** The sentence an upload that did not go through is told in. */
-export type UploadRejection = Extract<I18nKey, 'uploadUnsupported' | 'uploadTooLarge' | 'uploadEmpty' | 'uploadRejected' | 'uploadFailed'>;
+/**
+ * The sentence an upload that did not go through is told in: `uploadRejectedFor` names the server's reason (the same
+ * words a failed file slip uses), `uploadRejected` is a refusal that gave none, `uploadFailed` is a server not reached.
+ */
+export type UploadRejection = { key: 'uploadRejectedFor'; reason: I18nKey } | { key: 'uploadRejected' | 'uploadFailed' };
 
-export type UploadState = { status: 'idle' } | { status: 'uploading'; name: string } | { status: 'rejected'; name: string; reason: UploadRejection };
+export type UploadState = { status: 'idle' } | { status: 'uploading'; name: string } | { status: 'rejected'; name: string; rejection: UploadRejection };
 
-/** The server's short code for a file it refused, as the sentence of the rejection. */
-function fromCode(code: string): UploadRejection {
-  switch (code) {
-    case 'too_large':
-      return 'uploadTooLarge';
-    case 'unsupported_type':
-      return 'uploadUnsupported';
-    case 'empty':
-      return 'uploadEmpty';
-    default:
-      return 'uploadRejected';
-  }
+/** A reason the server named, as the sentence that says it; a reason this build does not know is a refusal with no reason. */
+function forReason(code: string): UploadRejection {
+  return isRejectionReason(code) ? { key: 'uploadRejectedFor', reason: failureReasonKey(code) } : { key: 'uploadRejected' };
 }
 
-/** A refusal (`ErrInvalid`) says what was wrong in its message; one that does not say is simply refused. A failure to reach the server is not a refusal. */
+/**
+ * A refusal (`invalid_argument`) names its reason in the shape `docs: upload rejected (<reason>): <detail>`; the reason is
+ * read from that shape alone, and the server's English detail is never shown. Any other refusal says only that the
+ * server does not accept the file. A failure to reach the server is not a refusal.
+ */
 function fromError(error: unknown): UploadRejection {
   if (!hasCode(error, Code.InvalidArgument) || !(error instanceof ConnectError)) {
-    return 'uploadFailed';
+    return { key: 'uploadFailed' };
   }
-  if (/type|mime|unsupported/i.test(error.rawMessage)) {
-    return 'uploadUnsupported';
-  }
-  if (/large|size|limit/i.test(error.rawMessage)) {
-    return 'uploadTooLarge';
-  }
-  return /empty/i.test(error.rawMessage) ? 'uploadEmpty' : 'uploadRejected';
+  const reason = rejectionReasonOf(error.rawMessage);
+  return reason === null ? { key: 'uploadRejected' } : forReason(reason);
 }
 
 /** Why the storage refused the bytes: the size limit is enforced at the PUT. */
 function fromStatus(status: number): UploadRejection {
-  return status === 413 ? 'uploadTooLarge' : status === 415 ? 'uploadUnsupported' : 'uploadFailed';
+  return status === 413 ? forReason('too_large') : status === 415 ? forReason('unsupported_type') : { key: 'uploadFailed' };
 }
 
 /**
@@ -62,17 +56,18 @@ export function useUpload(channelId: string) {
 
   const upload = useCallback(
     async (file: File) => {
-      const reject = (reason: UploadRejection) => {
-        setState({ status: 'rejected', name: file.name, reason });
+      const reject = (rejection: UploadRejection) => {
+        setState({ status: 'rejected', name: file.name, rejection });
       };
       setState({ status: 'uploading', name: file.name });
-      const recording = isRecording(file.type);
+      const mime = mimeOf(file);
+      const recording = isRecording(mime);
       let step: 'create' | 'put' | 'complete' | 'meeting' = 'create';
       try {
         const created = await api.files.createUpload({
           channelId,
           name: file.name,
-          mime: file.type,
+          mime,
           size: BigInt(file.size),
           purpose: recording ? UploadPurpose.RECORDING : UploadPurpose.ATTACHMENT,
         });
@@ -89,7 +84,7 @@ export function useUpload(channelId: string) {
         }
         queryClient.setQueryData(keys.file(completed.id), mapFile(completed));
         if (completed.status === FileStatus.FAILED) {
-          reject(fromCode(completed.failureReason));
+          reject(forReason(completed.failureReason));
           return;
         }
         if (recording) {
@@ -103,7 +98,7 @@ export function useUpload(channelId: string) {
         }
         setState({ status: 'idle' });
       } catch (error) {
-        reject(step === 'create' || step === 'complete' ? fromError(error) : 'uploadFailed');
+        reject(step === 'create' || step === 'complete' ? fromError(error) : { key: 'uploadFailed' });
       }
     },
     [api, channelId, queryClient],

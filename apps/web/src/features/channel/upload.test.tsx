@@ -20,6 +20,11 @@ import { file, frame, meeting, message } from '../../testing/fixtures';
 import { LOG, openChannel } from '../../testing/openChannel';
 import { createStubApi, type StubApi } from '../../testing/stubApi';
 
+/** Chooses a file the way the picker does, past its accept list: the server decides what it takes. */
+function choose(file: File) {
+  fireEvent.change(screen.getByLabelText('Attach file', { selector: 'input[type="file"]' }), { target: { files: [file] } });
+}
+
 beforeEach(() => {
   localStorage.clear();
   useUiStore.setState({ lang: 'en', readSeq: {}, lastChannelId: null, draftsSheetOpen: false });
@@ -96,16 +101,15 @@ describe('the paperclip', () => {
     expect(click).toHaveBeenCalledOnce();
   });
 
-  it('says why the server refused the type, inline, and sends no bytes', async () => {
+  it('says only that the server does not accept the file when its refusal gives no reason, and sends no bytes', async () => {
     const api = createStubApi();
     const { user, put } = await ready(api);
     api.files.createUpload.mockRejectedValue(new ConnectError('unsupported type', Code.InvalidArgument));
 
     // The picker's accept list greys a .docx out, but a person can still choose any file: the server decides.
-    const docx = new File(['x'], 'notes.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    fireEvent.change(picker(), { target: { files: [docx] } });
+    choose(new File(['x'], 'notes.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't upload notes.docx: this file type isn't supported.");
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't upload notes.docx: the server doesn't accept this file.");
     expect(put).not.toHaveBeenCalled();
     expect(api.files.completeUpload).not.toHaveBeenCalled();
     await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Close' }));

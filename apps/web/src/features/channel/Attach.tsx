@@ -1,7 +1,7 @@
-import { Icon, IconButton, LangRuns } from '@kiwi/ui';
+import { Icon, IconButton, LangRuns, Rich } from '@kiwi/ui';
 import { useRef } from 'react';
 import { useI18n } from '../../i18n';
-import type { UploadState } from './useUpload';
+import type { UploadRejection, UploadState } from './useUpload';
 
 /** What the paperclip offers the file picker: the attachments the server takes, and sound and video, which become a meeting. */
 const ACCEPT = '.pdf,.png,.jpg,.jpeg,.txt,.md,.csv,audio/*,video/*';
@@ -40,6 +40,26 @@ export function AttachButton({ onPick }: { onPick: (file: File) => void }) {
   );
 }
 
+/** Stands where the file name goes while the sentence around it is rendered (a control character no sentence contains). */
+const NAME_SLOT = '\u0001';
+
+/**
+ * One of the sentences that name a file. Its Latin words in Thai (`WAV`, `PCM16`) are tagged `lang="en"` by `Rich`, and
+ * the file name, which is the person's own words, has its Thai runs tagged `lang="th"` by `LangRuns`.
+ */
+function Sentence({ rejection, name }: { rejection: UploadRejection; name: string }) {
+  const { t } = useI18n();
+  const text = t(rejection.key, { name: NAME_SLOT, ...('reason' in rejection ? { reason: t(rejection.reason) } : {}) });
+  const [before = '', after = ''] = text.split(NAME_SLOT);
+  return (
+    <>
+      <Rich text={before} />
+      <LangRuns text={name} />
+      <Rich text={after} />
+    </>
+  );
+}
+
 /** Above the composer: the file being sent, or why the server would not take it, in the one failure family. */
 export function UploadNotice({ state, onDismiss }: { state: UploadState; onDismiss: () => void }) {
   const { plain } = useI18n();
@@ -57,7 +77,9 @@ export function UploadNotice({ state, onDismiss }: { state: UploadState; onDismi
   return (
     <p className="notice" role="alert">
       <Icon name="warning" />
-      <LangRuns text={plain(state.reason, { name: state.name })} />
+      <span>
+        <Sentence rejection={state.rejection} name={state.name} />
+      </span>
       <IconButton label={plain('close')} className="notice-close" onClick={onDismiss}>
         <Icon name="close" />
       </IconButton>
