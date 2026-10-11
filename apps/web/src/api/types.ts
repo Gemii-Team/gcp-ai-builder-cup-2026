@@ -38,6 +38,25 @@ export type ArtifactView = {
   runId?: string;
 };
 
+/** What `AgentService` says about an Ask run. `answer` is an `answer` or `not_found` artifact; a run that failed has none and no REF. */
+export type RunView = {
+  id: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  question: string;
+  channelId: string | null;
+  answer: ArtifactView | null;
+  /** The server's code for why the run failed (`model_unavailable`), empty unless it did. */
+  failureReason: string;
+};
+
+/** One `AgentRunProgress` frame. Streamed text is ephemeral and never shown; a `done` frame carries the validated answer. */
+export type RunProgressView = {
+  runId: string;
+  state: 'running' | 'streaming' | 'done' | 'failed';
+  textDelta: string;
+  answer: ArtifactView | null;
+};
+
 /**
  * `sending`: the request is out. `queued`: the network refused it and the pending queue holds it until the connection
  * is back. `failed`: the server refused it, so it will not be retried by itself. A message the server has stored has none.

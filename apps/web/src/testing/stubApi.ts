@@ -41,6 +41,7 @@ function stubService<Service extends object>(name: string): Stub<Service> {
 
 export function createStubApi(): StubApi {
   return {
+    agents: stubService('agents'),
     chat: stubService('chat'),
     identity: stubService('identity'),
     tasks: stubService('tasks'),

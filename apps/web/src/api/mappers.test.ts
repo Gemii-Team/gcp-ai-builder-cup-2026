@@ -1,9 +1,9 @@
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
-import { ArtifactKind, SourceKind, SourceSchema, TrackKind, TrackSchema } from '@kiwi/api-client';
+import { AgentRunState, ArtifactKind, RunStatus, SourceKind, SourceSchema, TrackKind, TrackSchema } from '@kiwi/api-client';
 import { describe, expect, it } from 'vitest';
-import { agentMessage, artifact, at, channel, message, task } from '../testing/fixtures';
-import { mapArtifact, mapChannel, mapMessage, mapSource, mapTask, mapTrack } from './mappers';
+import { agentMessage, artifact, at, channel, message, run, runFrame, task } from '../testing/fixtures';
+import { mapArtifact, mapChannel, mapMessage, mapRun, mapRunProgress, mapSource, mapTask, mapTrack } from './mappers';
 
 describe('the int64 boundary', () => {
   it('turns seq, size and last_seq into numbers a screen can compare and format', () => {
@@ -113,5 +113,63 @@ describe('tasks', () => {
 
   it('reads a task added by hand as one with no source and no owner', () => {
     expect(mapTask(task())).toMatchObject({ source: null, assigneeId: null, dueAt: null, doneAt: null, fromRef: null });
+  });
+});
+
+describe('Ask runs', () => {
+  const found = artifact({
+    kind: ArtifactKind.ANSWER,
+    ref: 'ANS-2209',
+    bodyMarkdown: 'The launch moved.[1]',
+    scopeChannelIds: ['ch-q4', 'ch-ops'],
+    citations: [{ n: 1, chunkId: 'chunk-1', quote: 'the passage', source: { kind: SourceKind.MEETING, id: 'meeting-1', anchor: '12', label: 'Q4 sync', channelId: 'ch-q4', offsetMs: 761000n } }],
+  });
+
+  it('reads a finished run with its answer, its citations, the channels searched and its REF', () => {
+    const mapped = mapRun(run({ status: RunStatus.DONE, answer: found, channelId: 'ch-q4' }));
+
+    expect(mapped).toMatchObject({ id: 'run-1', status: 'done', channelId: 'ch-q4', failureReason: '' });
+    expect(mapped.answer).toMatchObject({
+      kind: 'answer',
+      ref: 'ANS-2209',
+      scopeChannelIds: ['ch-q4', 'ch-ops'],
+      citations: [{ n: 1, chunkId: 'chunk-1', quote: 'the passage', source: { kind: 'meeting', entryIdx: 12, offsetMs: 761000 } }],
+    });
+  });
+
+  it('reads a not-found answer as an answer with its REF and the channels that were searched, not as a failure', () => {
+    const mapped = mapRun(run({ status: RunStatus.DONE, answer: artifact({ kind: ArtifactKind.NOT_FOUND, ref: 'ANS-2210', scopeChannelIds: ['ch-q4'] }) }));
+
+    expect(mapped.status).toBe('done');
+    expect(mapped.answer).toMatchObject({ kind: 'not_found', ref: 'ANS-2210', scopeChannelIds: ['ch-q4'], citations: [] });
+  });
+
+  it('takes the REF of the run when the answer left its own empty', () => {
+    expect(mapRun(run({ status: RunStatus.DONE, ref: 'ANS-2211', answer: artifact({ kind: ArtifactKind.ANSWER, ref: '' }) })).answer?.ref).toBe('ANS-2211');
+  });
+
+  it('has no answer for a failed run, whose failure reason is the server code, and none for an artifact Ask cannot show', () => {
+    expect(mapRun(run({ status: RunStatus.FAILED, failureReason: 'model_unavailable' }))).toMatchObject({ status: 'failed', answer: null, failureReason: 'model_unavailable' });
+    expect(mapRun(run({ status: RunStatus.DONE, answer: artifact({ kind: ArtifactKind.MEETING_SUMMARY, ref: 'MTG-1014' }) })).answer).toBeNull();
+  });
+
+  it('reads a run that has not started as queued, and one with no channel as unscoped', () => {
+    expect(mapRun(run({ status: RunStatus.UNSPECIFIED }))).toMatchObject({ status: 'queued', channelId: null });
+    expect(mapRun(run({ status: RunStatus.QUEUED, channelId: '' })).channelId).toBeNull();
+  });
+
+  it('reads a progress frame: tool progress, streamed text, the validated answer and the failure', () => {
+    const frame = (init: Parameters<typeof runFrame>[0]) => {
+      const event = runFrame(init).event;
+      if (event.case !== 'agentRunProgress') {
+        throw new Error('not a progress frame');
+      }
+      return mapRunProgress(event.value);
+    };
+
+    expect(frame({ state: AgentRunState.RUNNING })).toMatchObject({ runId: 'run-1', state: 'running', answer: null });
+    expect(frame({ state: AgentRunState.STREAMING, textDelta: 'The launch' })).toMatchObject({ state: 'streaming', textDelta: 'The launch' });
+    expect(frame({ state: AgentRunState.DONE, answer: found }).answer).toMatchObject({ kind: 'answer', ref: 'ANS-2209' });
+    expect(frame({ state: AgentRunState.FAILED }).state).toBe('failed');
   });
 });

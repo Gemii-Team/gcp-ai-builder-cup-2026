@@ -84,6 +84,8 @@ export const th: I18nTable = {
   reasonNoSpeech: 'ไม่พบเสียงพูดในการบันทึก',
   reasonTranscriptTooLong: 'บทถอดเสียงยาวเกินไป',
   reasonModelUnavailable: 'บริการ <en>AI</en> ใช้งานไม่ได้ในขณะนี้ ลองอีกครั้ง',
+  reasonNotReached: 'เชื่อมต่อ <en>K.I.W.I.</en> ไม่ได้',
+  reasonTimedOut: 'ใช้เวลานานเกินไป',
   reasonUnknown: 'เกิดข้อผิดพลาดบางอย่าง',
 
   // Channel: composer, mentions and uploads

@@ -1,5 +1,6 @@
 import { createClient, type Client } from '@connectrpc/connect';
 import {
+  AgentService,
   ChatService,
   createApiTransport,
   FileService,
@@ -13,6 +14,7 @@ import { createContext, createElement, useContext, type ReactNode } from 'react'
 export const API_BASE_URL = '/api';
 
 export type Api = {
+  agents: Client<typeof AgentService>;
   chat: Client<typeof ChatService>;
   identity: Client<typeof IdentityService>;
   tasks: Client<typeof TaskService>;
@@ -23,6 +25,7 @@ export type Api = {
 export function createApi(baseUrl: string = API_BASE_URL): Api {
   const transport = createApiTransport(baseUrl);
   return {
+    agents: createClient(AgentService, transport),
     chat: createClient(ChatService, transport),
     identity: createClient(IdentityService, transport),
     tasks: createClient(TaskService, transport),

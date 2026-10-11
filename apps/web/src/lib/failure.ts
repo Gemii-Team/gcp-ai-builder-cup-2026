@@ -44,6 +44,11 @@ export function failureReasonKey(code: string): I18nKey {
       return 'reasonTranscriptTooLong';
     case 'model_unavailable':
       return 'reasonModelUnavailable';
+    // The two an Ask run can fail with before the server has said anything: the request never arrived, or no answer came in time.
+    case 'not_reached':
+      return 'reasonNotReached';
+    case 'timed_out':
+      return 'reasonTimedOut';
     default:
       return 'reasonUnknown';
   }

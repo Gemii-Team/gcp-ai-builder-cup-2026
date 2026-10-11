@@ -1,6 +1,7 @@
 import type { Timestamp } from '@bufbuild/protobuf/wkt';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import {
+  AgentRunState,
   ArtifactKind,
   AuthorKind,
   ChannelKind,
@@ -9,10 +10,12 @@ import {
   MeetingStatus,
   MemberRole,
   MentionKind,
+  RunStatus,
   SourceKind,
   TaskState,
   TaskStatus,
   TrackKind,
+  type AgentRunProgress,
   type Artifact,
   type Channel,
   type File,
@@ -20,6 +23,7 @@ import {
   type Meeting,
   type Member,
   type Message,
+  type Run,
   type Source as ApiSource,
   type Task,
   type Track as ApiTrack,
@@ -34,6 +38,8 @@ import type {
   FileView,
   MeetingView,
   MemberView,
+  RunProgressView,
+  RunView,
   SessionView,
   TaskView,
   UserView,
@@ -170,6 +176,52 @@ export function mapArtifact(artifact: Artifact): ArtifactView | null {
     ...(artifact.meetingId === undefined ? {} : { meetingId: artifact.meetingId }),
     ...(artifact.fileId === undefined ? {} : { fileId: artifact.fileId }),
     ...(artifact.runId === undefined ? {} : { runId: artifact.runId }),
+  };
+}
+
+/**
+ * The answer of an Ask run: an `answer` or a `not_found` artifact, the only two a run issues, and null for anything else
+ * (no artifact, or one of a kind Ask cannot show). `ref` fills the artifact's own REF when the server left it empty.
+ */
+function mapAnswer(artifact: Artifact | undefined, ref: string): ArtifactView | null {
+  const view = artifact === undefined ? null : mapArtifact(artifact);
+  if (view === null || (view.kind !== 'answer' && view.kind !== 'not_found')) {
+    return null;
+  }
+  return view.ref === '' ? { ...view, ref } : view;
+}
+
+const RUN_STATUSES: Partial<Record<RunStatus, RunView['status']>> = {
+  [RunStatus.RUNNING]: 'running',
+  [RunStatus.DONE]: 'done',
+  [RunStatus.FAILED]: 'failed',
+};
+
+export function mapRun(run: Run): RunView {
+  return {
+    id: run.id,
+    // An unspecified status is a run that has not started yet.
+    status: RUN_STATUSES[run.status] ?? 'queued',
+    question: run.question,
+    channelId: run.channelId === undefined || run.channelId === '' ? null : run.channelId,
+    answer: mapAnswer(run.answer, run.ref),
+    failureReason: run.failureReason,
+  };
+}
+
+const RUN_STATES: Partial<Record<AgentRunState, RunProgressView['state']>> = {
+  [AgentRunState.STREAMING]: 'streaming',
+  [AgentRunState.DONE]: 'done',
+  [AgentRunState.FAILED]: 'failed',
+};
+
+export function mapRunProgress(progress: AgentRunProgress): RunProgressView {
+  return {
+    runId: progress.runId,
+    // An unspecified state is tool progress, like `RUNNING`.
+    state: RUN_STATES[progress.state] ?? 'running',
+    textDelta: progress.textDelta,
+    answer: mapAnswer(progress.answer, ''),
   };
 }
 

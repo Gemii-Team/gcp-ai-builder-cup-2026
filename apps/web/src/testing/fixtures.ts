@@ -3,6 +3,7 @@
 import { create, type DescMessage, type MessageInitShape, type MessageShape } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import {
+  AgentRunProgressSchema,
   ArtifactSchema,
   AuthorKind,
   ChannelKind,
@@ -15,6 +16,8 @@ import {
   MemberRole,
   MemberSchema,
   MessageSchema,
+  RunSchema,
+  RunStatus,
   ServerEventSchema,
   TaskSchema,
   TaskState,
@@ -26,6 +29,7 @@ import {
   type Meeting,
   type Member,
   type Message,
+  type Run,
   type ServerEvent,
   type Task,
   type User,
@@ -143,4 +147,14 @@ export function meeting(init: MessageInitShape<typeof MeetingSchema> = {}): Meet
 
 export function frame(event: ServerEvent['event']): ServerEvent {
   return create(ServerEventSchema, { event });
+}
+
+/** An Ask run as `AgentService` answers: queued, with the question that was asked, until a test says more. */
+export function run(init: MessageInitShape<typeof RunSchema> = {}): Run {
+  return create(RunSchema, { id: 'run-1', agent: 'assistant', status: RunStatus.QUEUED, question: 'What did we decide?', ...init });
+}
+
+/** The `AgentRunProgress` frame the gateway sends on the user topic. */
+export function runFrame(init: MessageInitShape<typeof AgentRunProgressSchema> = {}): ServerEvent {
+  return frame({ case: 'agentRunProgress', value: create(AgentRunProgressSchema, { runId: 'run-1', ...init }) });
 }

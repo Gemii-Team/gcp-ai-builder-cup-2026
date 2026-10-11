@@ -88,6 +88,8 @@ export const en = {
   reasonNoSpeech: 'no speech was found in the recording.',
   reasonTranscriptTooLong: 'the transcript is too long.',
   reasonModelUnavailable: 'the AI service was unavailable. Try again.',
+  reasonNotReached: "K.I.W.I. couldn't be reached.",
+  reasonTimedOut: 'it took too long.',
   reasonUnknown: 'something went wrong.',
 
   // Channel: composer, mentions and uploads
