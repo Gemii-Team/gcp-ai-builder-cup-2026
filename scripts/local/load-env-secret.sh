@@ -51,7 +51,11 @@ while IFS= read -r line || [ -n "$line" ]; do
   printf -v "$name" '%s' "$value"
 done <"$ENV_FILE"
 
-# Overlays that never reach a real service need no real value.
+# Overlays that never reach a real service need no real value. smoke replays the
+# LLM too; mockauth signs in through the mock provider, which takes whatever
+# client id and secret it is presented, so the Google client of overlay local is
+# not needed (a value in .env is still used). The `: "${NAME:=mock}"` form keeps
+# the placeholder from looking like an assignment of a secret.
 if [ "$overlay" = smoke ]; then
   : "${KIWI_LLM_BASE_URL:=mock}"
   : "${KIWI_LLM_API_KEY:=mock}"

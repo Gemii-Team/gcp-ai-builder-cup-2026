@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The default local stack: the `local` overlay with sign-in served by the mock
+# provider (backend/tools/mockoidc) instead of Google. Nothing changes for kiwi
+# but two addresses: the ConfigMap kiwi-config points KIWI_OIDC_ISSUER at the
+# mock as the browser reaches it and KIWI_OIDC_INTERNAL_URL at the mock as the
+# pod reaches it. kiwi accepts both only because KIWI_ENV is local; with
+# KIWI_ENV=prod the process exits at startup.
+namespace: kiwi
+
+resources:
+  - ../local
+  - mockoidc.yaml
+  - ingress-mockoidc.yaml
+
+patches:
+  - path: config-patch.yaml
+
+# Where Tilt pushes the tools image (deploy/local/k3d.yaml); Tilt replaces the tag.
+images:
+  - name: mockoidc
+    newName: kiwi-registry.localhost:5001/mockoidc
+    newTag: dev

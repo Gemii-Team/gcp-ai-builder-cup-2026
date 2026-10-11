@@ -40,6 +40,7 @@ import (
 	"kiwi/internal/testkit/containers"
 	"kiwi/internal/testkit/dbtest"
 	"kiwi/internal/testkit/fakeoidc"
+	"kiwi/internal/testkit/fakeoidc/fakeoidctest"
 )
 
 const (
@@ -103,19 +104,19 @@ func bootValkey() (string, error) {
 }
 
 type settings struct {
-	idp []fakeoidc.Option
+	idp []fakeoidctest.Option
 	cfg func(*config.Config)
 }
 
 type setting func(*settings)
 
-func withIDP(o ...fakeoidc.Option) setting { return func(s *settings) { s.idp = o } }
+func withIDP(o ...fakeoidctest.Option) setting { return func(s *settings) { s.idp = o } }
 
 func withConfig(fn func(*config.Config)) setting { return func(s *settings) { s.cfg = fn } }
 
 // realSubs gives Alice and Bob the long numeric subjects Google issues.
-func realSubs() fakeoidc.Option {
-	return fakeoidc.WithUsers(
+func realSubs() fakeoidctest.Option {
+	return fakeoidctest.WithUsers(
 		fakeoidc.User{Email: fakeoidc.AliceEmail, Name: fakeoidc.AliceName, Sub: aliceSub},
 		fakeoidc.User{Email: fakeoidc.BobEmail, Name: fakeoidc.BobName, Sub: bobSub},
 	)
@@ -127,7 +128,7 @@ type fixture struct {
 	db      *db.DB
 	cache   *cache.Cache
 	rdb     *redis.Client
-	idp     *fakeoidc.Server
+	idp     *fakeoidctest.Server
 	mod     *Module
 	cfg     config.Config
 	handler http.Handler
@@ -139,7 +140,7 @@ type fixture struct {
 // the test says otherwise.
 func newFixture(t *testing.T, opts ...setting) *fixture {
 	t.Helper()
-	s := settings{idp: []fakeoidc.Option{realSubs()}}
+	s := settings{idp: []fakeoidctest.Option{realSubs()}}
 	for _, o := range opts {
 		o(&s)
 	}
@@ -161,7 +162,7 @@ func newFixture(t *testing.T, opts ...setting) *fixture {
 	env := dbtest.Start(t)
 	// The provider redirects only to the callback of PublicURL, as Google does for
 	// a registered client.
-	idp := fakeoidc.New(t, append([]fakeoidc.Option{fakeoidc.WithRedirectURIs(callbackURL)}, s.idp...)...)
+	idp := fakeoidctest.New(t, append([]fakeoidctest.Option{fakeoidctest.WithRedirectURIs(callbackURL)}, s.idp...)...)
 	tokKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
 	rawKey, _ := base64.StdEncoding.DecodeString(tokKey)
 	cfg := config.Config{
@@ -1009,6 +1010,80 @@ func TestCallback_UserOfAnotherWorkspaceIsRejected(t *testing.T) {
 	if got := len(f.users()); got != 1 {
 		t.Fatalf("users = %d, want only the pre-existing one (acme %s got none)", got, acme)
 	}
+}
+
+// mockIDP is the provider the mock sign-in (backend/tools/mockoidc) runs: the
+// seeded demo.example accounts, subject "seed:" + email, stamped with hd.
+func mockIDP(hd string) setting {
+	return withIDP(
+		fakeoidctest.WithHostedDomain(hd),
+		fakeoidctest.WithUsers(
+			fakeoidc.User{Email: "alice@demo.example", Name: "Alice"},
+			fakeoidc.User{Email: "bob@demo.example", Name: "Bob"},
+		),
+	)
+}
+
+// The hd check still runs on the mock's tokens: the mock is a provider, not a
+// way around the Workspace boundary.
+func TestIdentityCallback_MockToken_HDOfAnotherWorkspaceRejected(t *testing.T) {
+	const seededDomain = "demo.example"
+	emails := []string{"alice@demo.example", "bob@demo.example"}
+
+	t.Run("a hosted domain without a workspace is refused", func(t *testing.T) {
+		f := newFixture(t, mockIDP("other.example"))
+		ws, ids, err := EnsureSeedWorkspace(t.Context(), f.db, seededDomain, emails)
+		if err != nil {
+			t.Fatalf("EnsureSeedWorkspace: %v", err)
+		}
+
+		rec := f.signIn("alice@demo.example")
+
+		if got := rec.Header().Get("Location"); !strings.HasPrefix(got, "/signin?error=domain_not_allowed") {
+			t.Fatalf("callback = %q, want domain_not_allowed", got)
+		}
+		if cookieNamed(rec, SessionCookie) != nil {
+			t.Error("a session cookie was set")
+		}
+		if n := f.sessionKeys(); n != 0 {
+			t.Errorf("Valkey holds %d keys, want no session", n)
+		}
+		// Nothing was written: the seeded placeholders are exactly as the seed left them.
+		users := f.users()
+		if len(users) != 2 || f.workspaceCount() != 1 {
+			t.Fatalf("users = %+v, workspaces = %d, want the two placeholders in the one seeded workspace", users, f.workspaceCount())
+		}
+		for i, u := range users {
+			if u.ID != ids[i] || u.WorkspaceID != ws || u.Sub != "seed:"+emails[i] {
+				t.Errorf("user %d = %+v, want the untouched placeholder %s", i, u, ids[i])
+			}
+		}
+	})
+
+	t.Run("the seeded hosted domain signs in as the seeded user", func(t *testing.T) {
+		f := newFixture(t, mockIDP(seededDomain))
+		ws, ids, err := EnsureSeedWorkspace(t.Context(), f.db, seededDomain, emails)
+		if err != nil {
+			t.Fatalf("EnsureSeedWorkspace: %v", err)
+		}
+
+		sid := f.mustSignIn("alice@demo.example")
+
+		users := f.users()
+		if len(users) != 2 {
+			t.Fatalf("users = %+v, want the placeholder adopted, not duplicated", users)
+		}
+		alice := f.userByEmail("alice@demo.example")
+		if alice.ID != ids[0] || alice.WorkspaceID != ws || alice.Sub != "seed:alice@demo.example" || alice.Name != "Alice" {
+			t.Errorf("alice = %+v, want the seeded user %s with the mock's name", alice, ids[0])
+		}
+		if bob := f.userByEmail("bob@demo.example"); bob.ID != ids[1] || bob.Name != "bob" {
+			t.Errorf("bob = %+v, want his placeholder %s untouched", bob, ids[1])
+		}
+		if sess, err := f.mod.Session(t.Context(), sid.Value); err != nil || sess.UserID != ids[0] || sess.WorkspaceID != ws {
+			t.Errorf("session = %+v, %v; want it bound to the seeded user %s", sess, err, ids[0])
+		}
+	})
 }
 
 func TestEnsureSeedWorkspace_IdempotentAndCallbackAdoptsPlaceholders(t *testing.T) {

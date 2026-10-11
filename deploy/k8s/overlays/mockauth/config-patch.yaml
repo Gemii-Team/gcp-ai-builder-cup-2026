@@ -1,0 +1,10 @@
+# The two addresses that make kiwi sign in through the mock. The issuer is what
+# the browser and the tokens say (the Ingress serves /mockoidc on localhost:8080);
+# the internal URL is where the pod discovers the provider and fetches its keys.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiwi-config
+data:
+  KIWI_OIDC_ISSUER: http://localhost:8080/mockoidc
+  KIWI_OIDC_INTERNAL_URL: http://mockoidc:8090/mockoidc

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"kiwi/internal/testkit/fakeoidc"
+	"kiwi/internal/testkit/fakeoidc/fakeoidctest"
 )
 
 // valid is what a Workspace user's token carries.
@@ -24,7 +25,7 @@ var valid = fakeoidc.Claims{
 	EmailVerified: true,
 }
 
-func verifier(t *testing.T, f *fakeoidc.Server) *Verifier {
+func verifier(t *testing.T, f *fakeoidctest.Server) *Verifier {
 	t.Helper()
 	v, err := NewVerifier(t.Context(), f.Issuer(), "", f.ClientID())
 	if err != nil {
@@ -35,7 +36,7 @@ func verifier(t *testing.T, f *fakeoidc.Server) *Verifier {
 
 // forgedClaims are the claims of a valid Workspace token, for tokens signed by
 // someone other than the provider.
-func forgedClaims(f *fakeoidc.Server) map[string]any {
+func forgedClaims(f *fakeoidctest.Server) map[string]any {
 	return map[string]any{
 		"iss": f.Issuer(), "aud": f.ClientID(), "sub": valid.Sub, "email": valid.Email,
 		"email_verified": true, "name": valid.Name, "hd": valid.HD,
@@ -59,7 +60,7 @@ func forge(t *testing.T, header, claims map[string]any, sign func(signingInput s
 
 // forgeHS256 is the algorithm-confusion attack: a token whose HMAC key is the
 // public modulus the provider publishes at its JWKS endpoint.
-func forgeHS256(t *testing.T, f *fakeoidc.Server) string {
+func forgeHS256(t *testing.T, f *fakeoidctest.Server) string {
 	t.Helper()
 	resp, err := http.Get(f.URL + "/jwks")
 	if err != nil {
@@ -87,7 +88,7 @@ func forgeHS256(t *testing.T, f *fakeoidc.Server) string {
 }
 
 func TestVerify_Valid(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{}))
@@ -108,7 +109,7 @@ func TestVerify_Valid(t *testing.T) {
 }
 
 func TestVerify_RejectsWrongAudience(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Audience: "some-other-client"}))
@@ -121,7 +122,7 @@ func TestVerify_RejectsWrongAudience(t *testing.T) {
 }
 
 func TestVerify_RejectsWrongIssuer(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Issuer: "https://accounts.evil.example"})); err == nil {
@@ -130,7 +131,7 @@ func TestVerify_RejectsWrongIssuer(t *testing.T) {
 }
 
 func TestVerify_RejectsExpired(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{ExpiresIn: -time.Minute})); err == nil {
@@ -139,7 +140,7 @@ func TestVerify_RejectsExpired(t *testing.T) {
 }
 
 func TestVerify_RejectsBadSignature(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{WrongKey: true})); err == nil {
@@ -148,7 +149,7 @@ func TestVerify_RejectsBadSignature(t *testing.T) {
 }
 
 func TestVerify_RejectsUnverifiedEmail(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	c := valid
@@ -163,7 +164,7 @@ func TestVerify_RejectsUnverifiedEmail(t *testing.T) {
 }
 
 func TestVerify_MissingHD_ReturnsErrNoHostedDomainWithVerifiedClaims(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	c := valid
@@ -178,7 +179,7 @@ func TestVerify_MissingHD_ReturnsErrNoHostedDomainWithVerifiedClaims(t *testing.
 }
 
 func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	noHDUnverified := valid
@@ -224,7 +225,7 @@ func TestVerify_InternalURLDiscoveryKeepsIssuerCheck(t *testing.T) {
 	// The provider is reached at f.URL but claims another issuer, the way Google's
 	// issuer is not the address of an in-cluster mock.
 	const issuer = "https://accounts.example.test"
-	f := fakeoidc.New(t, fakeoidc.WithIssuer(issuer))
+	f := fakeoidctest.New(t, fakeoidctest.WithIssuer(issuer))
 
 	v, err := NewVerifier(t.Context(), issuer, f.URL, f.ClientID())
 	if err != nil {
@@ -251,7 +252,7 @@ func TestVerify_InternalURLDiscoveryKeepsIssuerCheck(t *testing.T) {
 }
 
 func TestNewVerifier_RejectsIssuerMismatchWithoutInternalURL(t *testing.T) {
-	f := fakeoidc.New(t, fakeoidc.WithIssuer("https://accounts.example.test"))
+	f := fakeoidctest.New(t, fakeoidctest.WithIssuer("https://accounts.example.test"))
 
 	// Discovering directly at f.URL, the document's issuer is not the one asked for.
 	if _, err := NewVerifier(t.Context(), f.URL, "", f.ClientID()); err == nil {
@@ -260,7 +261,7 @@ func TestNewVerifier_RejectsIssuerMismatchWithoutInternalURL(t *testing.T) {
 }
 
 func TestVerify_ExposesTheNonceClaim(t *testing.T) {
-	f := fakeoidc.New(t)
+	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
 	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Nonce: "n-0123456789"}))
@@ -285,7 +286,7 @@ func TestVerify_ExposesTheNonceClaim(t *testing.T) {
 func TestVerify_OnlyRS256IsAcceptedWhateverDiscoveryLists(t *testing.T) {
 	// A discovery document that also lists PS256, and a token the provider's own
 	// published key signed with PS256: valid in every other respect.
-	f := fakeoidc.New(t, fakeoidc.WithAdvertisedAlgs("RS256", "PS256"))
+	f := fakeoidctest.New(t, fakeoidctest.WithAdvertisedAlgs("RS256", "PS256"))
 	v := verifier(t, f)
 
 	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{})); err != nil {

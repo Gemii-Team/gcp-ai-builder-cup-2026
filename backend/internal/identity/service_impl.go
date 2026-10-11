@@ -20,7 +20,6 @@ import (
 	"golang.org/x/oauth2"
 
 	identityv1 "kiwi/gen/kiwi/identity/v1"
-	"kiwi/internal/identity/internal/oidc"
 	"kiwi/internal/identity/internal/store"
 	"kiwi/internal/identity/internal/vault"
 	"kiwi/internal/platform/authz"
@@ -29,6 +28,7 @@ import (
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/errs"
 	"kiwi/internal/platform/google"
+	"kiwi/internal/platform/oidc"
 )
 
 // meetScope is requested on its own, when a user first starts a meeting.

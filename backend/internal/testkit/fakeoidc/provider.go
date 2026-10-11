@@ -1,6 +1,7 @@
 // Package fakeoidc is an OpenID Connect provider shaped like Google's, for tests
-// and for the smoke stack's mock sign-in (backend/tools/mockoidc serves a
-// Provider as a standalone binary).
+// (fakeoidctest.New starts one) and for the local stack's mock sign-in
+// (backend/tools/mockoidc serves a Provider as a standalone binary, which is why
+// this package must not import "testing").
 //
 // It speaks the authorization-code flow with PKCE S256 only: discovery, JWKS,
 // /authorize (which approves the account named by login_hint, or lists the
@@ -61,9 +62,15 @@ type Config struct {
 	// reaches the provider. The provider serves its endpoints under the path of
 	// this URL (for "http://localhost:8080/mockoidc": /mockoidc/authorize, ...),
 	// so the same provider answers on any host that routes that path to it.
-	Issuer       string
+	Issuer string
+	// ClientID and ClientSecret are the only client the provider serves.
 	ClientID     string
 	ClientSecret string
+	// AnyClient serves whatever client presents itself instead, for a mock whose
+	// client id is the backend's business: any non-empty client id and secret are
+	// accepted, a code is bound to the client it was issued to, and the ID token's
+	// audience is the client id presented. It excludes ClientID and ClientSecret.
+	AnyClient bool
 	// HostedDomain is the hd claim of Users.
 	HostedDomain string
 	// Users are Workspace accounts: their ID tokens carry hd.
@@ -125,6 +132,7 @@ type Provider struct {
 
 type authCode struct {
 	user           User
+	clientID       string
 	hd             string
 	scopes         []string
 	challenge      string
@@ -160,7 +168,10 @@ func NewProvider(cfg Config) (*Provider, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("fakeoidc: Issuer must be an absolute http(s) URL without query or fragment")
 	}
-	if cfg.ClientID == "" || cfg.ClientSecret == "" {
+	switch {
+	case cfg.AnyClient && (cfg.ClientID != "" || cfg.ClientSecret != ""):
+		return nil, errors.New("fakeoidc: AnyClient excludes ClientID and ClientSecret")
+	case !cfg.AnyClient && (cfg.ClientID == "" || cfg.ClientSecret == ""):
 		return nil, errors.New("fakeoidc: ClientID and ClientSecret are required")
 	}
 	if len(cfg.Users) > 0 && cfg.HostedDomain == "" {
@@ -357,7 +368,7 @@ func (p *Provider) lookup(email string) (u User, hd string, ok bool) {
 func (p *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// Without a trusted client and redirect target there is nobody to tell by redirect.
-	if q.Get("client_id") != p.cfg.ClientID {
+	if clientID := q.Get("client_id"); clientID == "" || (!p.cfg.AnyClient && clientID != p.cfg.ClientID) {
 		http.Error(w, "unknown client_id", http.StatusBadRequest)
 		return
 	}
@@ -417,6 +428,7 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 		hd:             hd,
 		scopes:         scopes,
 		challenge:      q.Get("code_challenge"),
+		clientID:       q.Get("client_id"),
 		redirectURI:    q.Get("redirect_uri"),
 		nonce:          q.Get("nonce"),
 		offline:        q.Get("access_type") == "offline",
@@ -435,33 +447,51 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 
 var chooserPage = template.Must(template.New("chooser").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mock sign-in</title></head>
-<body><main><h1>Mock sign-in</h1><p>Pick an account. This provider is a stand-in for Google.</p>
-<ul>{{range .}}<li><a href="{{.Href}}">{{.Name}} &lt;{{.Email}}&gt;{{if not .Workspace}} (no hosted domain){{end}}</a></li>{{end}}</ul>
-</main></body></html>`))
+<title>Mock sign-in</title>
+<style>
+body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem 1rem; }
+main { max-width: 28rem; margin: 0 auto; }
+form { margin: 0 0 1rem; }
+button { display: block; width: 100%; min-height: 44px; padding: .5rem 1rem; font: inherit; text-align: left; cursor: pointer; }
+.note { margin: .25rem 0 0; font-size: .875rem; }
+</style></head>
+<body><main><h1>Mock sign-in</h1>
+<p>Pick who to sign in as. This provider is a stand-in for Google; no real account is used.</p>
+{{range .}}<form method="get" action="{{.Action}}">{{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<button type="submit" name="login_hint" value="{{.Email}}">{{.Email}}</button>{{if not .Workspace}}<p class="note">outside the workspace - sign-in is rejected</p>{{end}}</form>
+{{end}}</main></body></html>`))
 
+// chooser lists the accounts without signing anybody in: a button per account
+// sends the same authorization request back with login_hint set to it.
 func (p *Provider) chooser(w http.ResponseWriter, r *http.Request) {
+	type field struct{ Name, Value string }
 	type account struct {
-		Name, Email string
-		Workspace   bool
-		Href        template.URL
+		Action    string
+		Hidden    []field
+		Email     string
+		Workspace bool
 	}
+
+	q := r.URL.Query()
+	names := make([]string, 0, len(q))
+	for name := range q {
+		if name != "login_hint" {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	var hidden []field
+	for _, name := range names {
+		for _, v := range q[name] {
+			hidden = append(hidden, field{name, v})
+		}
+	}
+
 	var accounts []account
-	add := func(u User, workspace bool) {
-		q := r.URL.Query()
-		q.Set("login_hint", u.Email)
-		accounts = append(accounts, account{
-			Name:      u.Name,
-			Email:     u.Email,
-			Workspace: workspace,
-			Href:      template.URL(r.URL.Path + "?" + q.Encode()),
-		})
-	}
 	for _, u := range p.cfg.Users {
-		add(u, true)
+		accounts = append(accounts, account{Action: r.URL.Path, Hidden: hidden, Email: u.Email, Workspace: true})
 	}
 	if o := p.cfg.Outsider; o != nil {
-		add(*o, false)
+		accounts = append(accounts, account{Action: r.URL.Path, Hidden: hidden, Email: o.Email})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -483,14 +513,14 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	} else {
 		id, secret = r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
 	}
-	if id != p.cfg.ClientID || subtle.ConstantTimeCompare([]byte(secret), []byte(p.cfg.ClientSecret)) != 1 {
+	if !p.authenticated(id, secret) {
 		oauthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
 
 	switch r.PostForm.Get("grant_type") {
 	case "authorization_code":
-		p.exchangeCode(w, r)
+		p.exchangeCode(w, r, id)
 	case "refresh_token":
 		p.refreshGrant(w, r)
 	default:
@@ -498,7 +528,16 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *Provider) exchangeCode(w http.ResponseWriter, r *http.Request) {
+// authenticated reports whether id and secret are the credentials of a client
+// the provider serves.
+func (p *Provider) authenticated(id, secret string) bool {
+	if p.cfg.AnyClient {
+		return id != "" && secret != ""
+	}
+	return id == p.cfg.ClientID && subtle.ConstantTimeCompare([]byte(secret), []byte(p.cfg.ClientSecret)) == 1
+}
+
+func (p *Provider) exchangeCode(w http.ResponseWriter, r *http.Request, clientID string) {
 	form := r.PostForm
 	code := form.Get("code")
 
@@ -512,6 +551,9 @@ func (p *Provider) exchangeCode(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !ok || time.Now().After(ac.expires):
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown or expired code")
+		return
+	case ac.clientID != clientID:
+		oauthError(w, http.StatusBadRequest, "invalid_grant", "the code was issued to another client")
 		return
 	case form.Get("redirect_uri") != ac.redirectURI:
 		oauthError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match the authorization request")
@@ -548,7 +590,7 @@ func (p *Provider) exchangeCode(w http.ResponseWriter, r *http.Request) {
 			Name:          ac.user.Name,
 			HD:            ac.hd,
 			EmailVerified: true,
-		}, MintOptions{Nonce: ac.nonce}),
+		}, MintOptions{Nonce: ac.nonce, Audience: ac.clientID}),
 	}
 	if refreshToken != "" {
 		resp["refresh_token"] = refreshToken

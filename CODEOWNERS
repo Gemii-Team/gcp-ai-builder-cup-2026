@@ -18,6 +18,7 @@
 /backend/internal/migrate/               @Gemii-Team/collaboration
 /backend/internal/testkit/               @Gemii-Team/collaboration
 /backend/internal/platform/events/       @Gemii-Team/collaboration
+/backend/internal/platform/oidc/         @Gemii-Team/collaboration
 
 # Web
 /apps/                                   @Gemii-Team/web

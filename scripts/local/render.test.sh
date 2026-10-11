@@ -26,7 +26,7 @@ check() {
   if "$@" >"$WORK/check.out" 2>&1; then ok "$name"; else bad "$name" "$(head -n 5 "$WORK/check.out")"; fi
 }
 
-RENDER="$WORK/render.yaml"
+RENDER="$WORK/render.yaml" # the `local` overlay
 
 # --- the rendered overlay ----------------------------------------------------
 if kustomize build deploy/k8s/overlays/local >"$RENDER" 2>"$WORK/render.err"; then
@@ -42,9 +42,9 @@ else
   bad "kubeconform -strict accepts the rendered overlay" "$(head -n 5 "$WORK/kc.out" 2>/dev/null || echo 'nothing rendered')"
 fi
 
-# doc kind name: print that one document of the rendered stream. kustomize
-# sorts keys, so kind is a top-level line and metadata.name the first
-# two-space-indented `name:`.
+# doc kind name [file]: print that one document of the rendered stream (the
+# `local` render unless a file is given). kustomize sorts keys, so kind is a
+# top-level line and metadata.name the first two-space-indented `name:`.
 doc() {
   awk -v kind="$1" -v name="$2" '
     function flush() { if (k == kind && n == name) printf "%s", buf; buf = ""; k = ""; n = "" }
@@ -53,16 +53,17 @@ doc() {
     /^kind: / { k = $2 }
     /^  name: / && n == "" { n = $2; gsub(/"/, "", n) }
     END { flush() }
-  ' "$RENDER"
+  ' "${3:-$RENDER}"
 }
 
-no_latest() {
-  if grep -n ':latest' "$RENDER"; then return 1; fi
+no_latest() { # [file]
+  local f=${1:-$RENDER}
+  if grep -n ':latest' "$f"; then return 1; fi
   # every image carries a tag or a digest
   local untagged
-  untagged=$(awk '/^ *(- )?image: / { img = $NF; sub(/^[^\/]*\//, "", img); if (img !~ /[:@]/) print $NF }' "$RENDER")
+  untagged=$(awk '/^ *(- )?image: / { img = $NF; sub(/^[^\/]*\//, "", img); if (img !~ /[:@]/) print $NF }' "$f")
   [ -z "$untagged" ] || { printf 'untagged image: %s\n' "$untagged"; return 1; }
-  grep -qE '^ *(- )?image: ' "$RENDER"
+  grep -qE '^ *(- )?image: ' "$f"
 }
 check "no :latest and every image tagged or pinned by digest" no_latest
 
@@ -216,6 +217,127 @@ ingress_routes() {
 }
 check "Ingress (class traefik) routes /api and /ws to kiwi and / to web" ingress_routes
 
+# --- the mockauth overlay -------------------------------------------------------------
+# The default stack signs in through the mock provider (backend/tools/mockoidc):
+# `local` plus mockoidc, and a kiwi that differs from `local` only in the two
+# OIDC addresses. `local` itself, the real Google issuer, must not carry the mock.
+MOCK="$WORK/mockauth.yaml"
+if kustomize build deploy/k8s/overlays/mockauth >"$MOCK" 2>"$WORK/mock.err"; then
+  ok "kustomize build deploy/k8s/overlays/mockauth"
+else
+  bad "kustomize build deploy/k8s/overlays/mockauth" "$(head -n 5 "$WORK/mock.err")"
+  : >"$MOCK"
+fi
+if [ -s "$MOCK" ] && kubeconform -strict -ignore-missing-schemas -summary - <"$MOCK" >"$WORK/kc-mock.out" 2>&1; then
+  ok "kubeconform -strict accepts the rendered mockauth overlay"
+else
+  bad "kubeconform -strict accepts the rendered mockauth overlay" "$(head -n 5 "$WORK/kc-mock.out" 2>/dev/null || echo 'nothing rendered')"
+fi
+check "mockauth: no :latest and every image tagged or pinned by digest" no_latest "$MOCK"
+check "mockauth: no literal secret value in any manifest" no_literal_secrets "$MOCK"
+
+local_has_no_mock() {
+  [ -s "$RENDER" ] || { echo "nothing rendered"; return 1; }
+  if grep -n -i mockoidc "$RENDER"; then echo "the local overlay renders the mock sign-in provider"; return 1; fi
+}
+check "local: renders no mockoidc workload, Service, Ingress path or address" local_has_no_mock
+
+# manifest_env kind name file VAR: the literal value of an env entry.
+manifest_env() {
+  doc "$1" "$2" "$3" | awk -v v="$4" '
+    /^ *- name: / { cur = $3 }
+    cur == v && /^ *value: / { sub(/^ *value: /, ""); gsub(/^"|"$/, ""); print; exit }
+  '
+}
+# config_data file: the data of ConfigMap kiwi-config as sorted KEY=value lines.
+config_data() {
+  doc ConfigMap kiwi-config "$1" | awk '
+    /^data:$/ { d = 1; next }
+    /^[a-z]/ { d = 0 }
+    d && /^  [A-Z0-9_]+: / { k = $1; sub(/:$/, "", k); v = $0; sub(/^  [A-Z0-9_]+: /, "", v); gsub(/^"|"$/, "", v); print k "=" v }
+  ' | sort
+}
+
+mockoidc_workload() {
+  local dep svc rc=0
+  dep=$(doc Deployment mockoidc "$MOCK")
+  svc=$(doc Service mockoidc "$MOCK")
+  [ -n "$dep" ] || { echo "no Deployment mockoidc"; return 1; }
+  [ -n "$svc" ] || { echo "no Service mockoidc"; return 1; }
+  printf '%s\n' "$dep" | grep -qE '^ *image: kiwi-registry\.localhost:5001/mockoidc:[^ :]+$' || { echo "the image is not kiwi-registry.localhost:5001/mockoidc with a tag"; rc=1; }
+  printf '%s\n' "$dep" | grep -qxE ' *- /app/mockoidc' || { echo "the container does not run /app/mockoidc"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *(- )?containerPort: 8090$' || { echo "the container does not listen on 8090"; rc=1; }
+  printf '%s\n' "$svc" | grep -qE '^ *port: 8090$' || { echo "the Service does not expose 8090"; rc=1; }
+  # The mock holds no secret: it never reads kiwi-env, and takes KIWI_ENV from
+  # the ConfigMap so that it refuses to run the day that says prod.
+  if printf '%s\n' "$dep" | grep -qE 'kiwi-env|secretKeyRef|secretRef'; then echo "the mock reads a Secret"; rc=1; fi
+  printf '%s\n' "$dep" | awk '
+    /^ *- name: / { f = ($3 == "KIWI_ENV"); c = 0 }
+    f && /configMapKeyRef:/ { c = 1 }
+    f && c && /^ *name: kiwi-config$/ { ok = 1 }
+    END { exit !ok }
+  ' || { echo "KIWI_ENV does not come from ConfigMap kiwi-config"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *path: /mockoidc/\.well-known/openid-configuration$' || { echo "the probes do not ask the discovery document"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *readOnlyRootFilesystem: true$' || { echo "the root filesystem is not read-only"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *runAsNonRoot: true$' || { echo "the container may run as root"; rc=1; }
+  return "$rc"
+}
+check "mockauth: Deployment and Service mockoidc on 8090, pinned image, no Secret, KIWI_ENV from the ConfigMap" mockoidc_workload
+
+mockoidc_ingress() {
+  local got want rc=0
+  got=$(doc Ingress mockoidc "$MOCK" | awk '
+    /^ *- backend:$/ { svc = "" }
+    /^ *service:$/ { insvc = 1; next }
+    insvc && /^ *name: / { svc = $2; insvc = 0 }
+    /^ *number: / { port = $2; print "port " port }
+    /^ *path: / { print $2 " " svc }
+    /^ *ingressClassName: / { print "class " $2 }
+  ' | sort)
+  want=$(printf '%s\n' '/mockoidc mockoidc' 'port 8090' 'class traefik' | sort)
+  [ "$got" = "$want" ] || { printf 'got:\n%s\nwant:\n%s\n' "$got" "$want"; rc=1; }
+  # The routes of kiwi are the ones of `local`: /mockoidc is the more specific
+  # prefix, so Traefik sends it to the mock and everything else as before.
+  [ "$(doc Ingress kiwi)" = "$(doc Ingress kiwi "$MOCK")" ] || { echo "Ingress kiwi differs between local and mockauth"; rc=1; }
+  return "$rc"
+}
+check "mockauth: Ingress (class traefik) routes /mockoidc to mockoidc:8090 and leaves the routes of kiwi alone" mockoidc_ingress
+
+mockoidc_matches_kiwi() {
+  local issuer public mock_issuer mock_redirect value name rc=0
+  issuer=$(config_data "$MOCK" | sed -n 's/^KIWI_OIDC_ISSUER=//p')
+  public=$(config_data "$MOCK" | sed -n 's/^KIWI_PUBLIC_URL=//p')
+  [ -n "$issuer" ] && [ -n "$public" ] || { echo "kiwi-config has no KIWI_OIDC_ISSUER or KIWI_PUBLIC_URL"; return 1; }
+  mock_issuer=$(manifest_env Deployment mockoidc "$MOCK" MOCKOIDC_ISSUER)
+  mock_redirect=$(manifest_env Deployment mockoidc "$MOCK" MOCKOIDC_REDIRECT_URIS)
+  [ "$mock_issuer" = "$issuer" ] || { echo "MOCKOIDC_ISSUER is not the KIWI_OIDC_ISSUER $issuer"; rc=1; }
+  [ "$mock_redirect" = "$public/api/auth/callback" ] || { echo "MOCKOIDC_REDIRECT_URIS is not the callback of KIWI_PUBLIC_URL $public"; rc=1; }
+  for name in MOCKOIDC_HD MOCKOIDC_USERS MOCKOIDC_OUTSIDER; do
+    value=$(manifest_env Deployment mockoidc "$MOCK" "$name")
+    [ -n "$value" ] || { echo "$name is not set"; rc=1; }
+  done
+  return "$rc"
+}
+check "mockauth: the mock mints the issuer kiwi verifies and redirects only to kiwi's callback" mockoidc_matches_kiwi
+
+kiwi_env_differs_only_in_oidc() {
+  local changed rc=0 pair kind name
+  { [ -s "$RENDER" ] && [ -s "$MOCK" ]; } || { echo "nothing rendered"; return 1; }
+  changed=$(diff <(config_data "$RENDER") <(config_data "$MOCK") | sed -nE 's/^[<>] ([A-Z0-9_]+)=.*/\1/p' | sort -u | tr '\n' ' ')
+  [ "$changed" = "KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER " ] || { printf 'kiwi-config differs in: %s\nwant: KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER\n' "$changed"; rc=1; }
+  # The workloads that read it are the same documents.
+  for pair in "Deployment kiwi" "Job migrate" "Deployment valkey" "Deployment postgres"; do
+    read -r kind name <<<"$pair"
+    [ "$(doc "$kind" "$name")" = "$(doc "$kind" "$name" "$MOCK")" ] || { echo "$kind $name differs between local and mockauth"; rc=1; }
+  done
+  config_data "$MOCK" | grep -qxF 'KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc' || { echo "KIWI_OIDC_ISSUER is not http://localhost:8080/mockoidc"; rc=1; }
+  config_data "$MOCK" | grep -qxF 'KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc' || { echo "KIWI_OIDC_INTERNAL_URL is not http://mockoidc:8090/mockoidc"; rc=1; }
+  # The mock addresses are accepted only because this stays local.
+  config_data "$MOCK" | grep -qxF 'KIWI_ENV=local' || { echo "KIWI_ENV is not local"; rc=1; }
+  return "$rc"
+}
+check "mockauth: the kiwi environment differs from local only in KIWI_OIDC_ISSUER and KIWI_OIDC_INTERNAL_URL" kiwi_env_differs_only_in_oidc
+
 # --- the Postgres bootstrap and its probe ----------------------------------------
 # Pinned here and, from the other side, by backend/internal/testkit/dbtest
 # (TestRoles_MatchLocalPostgresInit): a role added or widened in only one of the
@@ -300,16 +422,49 @@ tilt_build_deps() { # [Tiltfile]
 tilt_migrations_dep() { tilt_build_deps "${1:-Tiltfile}" | grep -qxF "'backend/db/migrations',"; }
 check "Tiltfile: backend/db/migrations is a dependency of the kiwi image build, so a migration change re-creates the migrate Job" tilt_migrations_dep
 
-# An `if overlay != 'local':` line, outside comments, whose next line calls fail(.
+# An `if overlay not in [...]:` line, outside comments, whose next line calls fail(.
 tilt_overlay_guard() { # [Tiltfile]
   awk '
     /^[ \t]*#/ { next }
     want { if ($0 ~ /^[ \t]+fail\(/) ok = 1; want = 0 }
-    /^if overlay != \047local\047:$/ { want = 1; found = 1 }
+    /^if overlay not in \[.*\]:$/ { want = 1; found = 1 }
     END { exit !(found && ok) }
   ' "${1:-Tiltfile}"
 }
-check "Tiltfile: an overlay other than local is refused with fail()" tilt_overlay_guard
+check "Tiltfile: an overlay other than local or mockauth is refused with fail()" tilt_overlay_guard
+
+# The overlays the guard accepts, as the Tiltfile lists them.
+tilt_accepts_overlays() { # [Tiltfile]
+  grep -vE '^[ \t]*#' "${1:-Tiltfile}" | grep -qxF "if overlay not in ['local', 'mockauth']:"
+}
+check "Tiltfile: accepts exactly the overlays local and mockauth" tilt_accepts_overlays
+
+# mockauth builds the mock provider from the tools stage of backend/Dockerfile.
+tilt_builds_mockoidc() { # [Tiltfile]
+  awk '
+    /^[ \t]*#/ { next }
+    /^if overlay == \047mockauth\047:$/ { inblk = 1; next }
+    /^[^ \t]/ { inblk = 0 }
+    inblk && /REGISTRY \+ \047\/mockoidc\047/ { img = 1 }
+    inblk && /command=.*docker build .*--target tools/ { tgt = 1 }
+    END { exit !(img && tgt) }
+  ' "${1:-Tiltfile}"
+}
+check "Tiltfile: the mockauth overlay builds the mockoidc image from the tools target of backend/Dockerfile" tilt_builds_mockoidc
+
+# kiwi verifies tokens against the mock at startup, so under mockauth it waits for it.
+tilt_kiwi_waits_for_mock() { # [Tiltfile]
+  awk '
+    /^[ \t]*#/ { next }
+    /^auth_deps = \[\047mockoidc\047\] if overlay == \047mockauth\047 else \[\]$/ { def = 1 }
+    /^k8s_resource\($/ { incall = 1; name = ""; next }
+    incall && name == "" { n = $0; gsub(/[ \047,"]/, "", n); name = n; next }
+    incall && name == "kiwi" && /resource_deps=.*\+ auth_deps,?$/ { use = 1 }
+    /^\)$/ { incall = 0 }
+    END { exit !(def && use) }
+  ' "${1:-Tiltfile}"
+}
+check "Tiltfile: kiwi waits for mockoidc under the mockauth overlay" tilt_kiwi_waits_for_mock
 
 # The guards themselves: each mutated copy of the Tiltfile must be refused.
 tilt_mutant() { # name check-function sed-script
@@ -320,9 +475,14 @@ tilt_mutant() { # name check-function sed-script
 }
 tilt_mutant "migrations dependency removed (the comment naming it stays) is refused" tilt_migrations_dep "/^ *'backend\/db\/migrations',\$/d"
 tilt_mutant "migrations dependency commented out is refused" tilt_migrations_dep "s/^( *)'backend\/db\/migrations',\$/\1# 'backend\/db\/migrations',/"
-tilt_mutant "overlay guard deleted is refused" tilt_overlay_guard "/^if overlay != 'local':\$/,+1d"
+tilt_mutant "overlay guard deleted is refused" tilt_overlay_guard "/^if overlay not in \[.*\]:\$/,+1d"
 tilt_mutant "overlay guard that no longer calls fail() is refused" tilt_overlay_guard "s/^( +)fail\(/\1print(/"
-tilt_mutant "overlay guard commented out is refused" tilt_overlay_guard "s/^if overlay != 'local':\$/# &/"
+tilt_mutant "overlay guard commented out is refused" tilt_overlay_guard "s/^if overlay not in \[.*\]:\$/# &/"
+tilt_mutant "an overlay list that admits smoke is refused" tilt_accepts_overlays "s/'mockauth'\]/'mockauth', 'smoke']/"
+tilt_mutant "mockoidc built from another target is refused" tilt_builds_mockoidc "s/--target tools/--target kiwi/"
+tilt_mutant "mockoidc image build removed is refused" tilt_builds_mockoidc "s/REGISTRY \+ '\/mockoidc'/REGISTRY + '\/other'/"
+tilt_mutant "kiwi not waiting for mockoidc is refused" tilt_kiwi_waits_for_mock "s/ \+ auth_deps//"
+tilt_mutant "auth_deps that no longer names mockoidc is refused" tilt_kiwi_waits_for_mock "s/auth_deps = \['mockoidc'\]/auth_deps = []/"
 tilt_mutant "kiwi not waiting for ollama-pull is refused" tilt_orders "s/'migrate', 'ollama-pull', 'valkey'/'migrate', 'valkey'/"
 tilt_mutant "migrate not waiting for postgres is refused" tilt_orders "s/resource_deps=\['postgres'\]/resource_deps=[]/"
 
@@ -336,6 +496,16 @@ tasks_listed() {
   return "$rc"
 }
 check "Taskfile lists local:up, local:down, seed and reindex" tasks_listed
+
+local_up_defaults_to_mockauth() {
+  awk '
+    /^  local:up:$/ { inblk = 1; next }
+    /^  [a-z]/ { inblk = 0 }
+    inblk && /OVERLAY: .\{\{\.OVERLAY \| default "mockauth"\}\}.$/ { ok = 1 }
+    END { exit !ok }
+  ' Taskfile.yml
+}
+check "Taskfile: local:up defaults to the mockauth overlay" local_up_defaults_to_mockauth
 
 # --- the env scripts --------------------------------------------------------------
 STUB="$WORK/stub"
@@ -463,6 +633,27 @@ load_secret mockauth KIWI_LLM_API_KEY=
 verdict=ok
 [ "$RC" -ne 0 ] && contains "$OUT" KIWI_LLM_API_KEY || verdict=bad
 expect "load-env-secret mockauth: a missing LLM variable still stops" "$verdict" "rc=$RC" "$OUT"
+
+load_secret mockauth KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+grep -qx 'KIWI_OAUTH_CLIENT_ID=mock' "$COPY" || verdict=bad
+grep -qx 'KIWI_OAUTH_CLIENT_SECRET=mock' "$COPY" || verdict=bad
+expect "load-env-secret mockauth: succeeds with no OAuth variable in .env at all" "$verdict" "rc=$RC" "$OUT"
+
+load_secret mockauth KIWI_OAUTH_CLIENT_ID=client-id-from-env
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+grep -qx 'KIWI_OAUTH_CLIENT_ID=client-id-from-env' "$COPY" || verdict=bad
+expect "load-env-secret mockauth: a client id set in .env is kept (the mock takes whichever it is presented)" "$verdict" "rc=$RC" "$OUT"
+
+load_secret local KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+contains "$OUT" KIWI_OAUTH_CLIENT_ID || verdict=bad
+contains "$OUT" KIWI_OAUTH_CLIENT_SECRET || verdict=bad
+[ ! -s "$LOG" ] || verdict=bad
+expect "load-env-secret local: absent OAuth variables are named and nothing is applied (the real client is required)" "$verdict" "rc=$RC" "$OUT"
 
 load_secret smoke KIWI_LLM_BASE_URL= KIWI_LLM_API_KEY= KIWI_LLM_MODEL_FLASH= KIWI_LLM_MODEL_PRO= KIWI_ASR_MODEL= KIWI_OAUTH_CLIENT_ID= KIWI_OAUTH_CLIENT_SECRET=
 verdict=ok

@@ -10,10 +10,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"kiwi/internal/identity/internal/oidc"
 	"kiwi/internal/identity/internal/store"
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/errs"
+	"kiwi/internal/platform/oidc"
 )
 
 // This file is the identity domain's only db.System caller (see the allowlist in

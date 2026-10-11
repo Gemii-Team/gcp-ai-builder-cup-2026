@@ -1,12 +1,16 @@
 # -*- mode: Python -*-
 # The local stack on the k3d cluster. `task local:up` starts it:
-#   tilt up -- --overlay local
+#   tilt up -- --overlay mockauth
+# mockauth, the default, signs in through the mock provider (backend/tools/mockoidc).
+# `--overlay local` signs in with Google and needs the real KIWI_OAUTH_* of the
+# kiwi-local client in .env.
 #
 # Start order, on the first start only: postgres -> migrate -> kiwi,
-# ollama -> ollama-pull -> kiwi, valkey -> kiwi. resource_deps make a resource
-# wait until its dependencies are ready (a Job is ready once it has completed);
-# they do not order later updates: after a code change kiwi and migrate are
-# rebuilt and redeployed in parallel.
+# ollama -> ollama-pull -> kiwi, valkey -> kiwi and, under mockauth,
+# mockoidc -> kiwi. resource_deps make a resource wait until its dependencies
+# are ready (a Job is ready once it has completed); they do not order later
+# updates: after a code change kiwi and migrate are rebuilt and redeployed in
+# parallel.
 #
 # The ConfigMap kiwi-config reaches the pod through envFrom, so editing it
 # changes nothing in a running kiwi. Restart it to pick the change up:
@@ -17,9 +21,12 @@ REGISTRY = 'kiwi-registry.localhost:5001'
 
 config.define_string('overlay')
 cfg = config.parse()
-overlay = cfg.get('overlay', 'local')
-if overlay != 'local':
-    fail("overlay '%s' is not available yet: only 'local' is accepted" % overlay)
+overlay = cfg.get('overlay', 'mockauth')
+if overlay not in ['local', 'mockauth']:
+    fail("overlay '%s' is not available: use 'local' or 'mockauth'" % overlay)
+
+# kiwi checks its sign-in provider at startup, so it waits for the mock.
+auth_deps = ['mockoidc'] if overlay == 'mockauth' else []
 
 # Everything here is meant for the local cluster and nothing else.
 if k8s_context() != KUBE_CONTEXT:
@@ -58,6 +65,29 @@ custom_build(
     ignore=['**/*_test.go', 'backend/**/testdata'],
 )
 
+if overlay == 'mockauth':
+    # mockoidc: the mock sign-in provider, built from the `tools` stage of
+    # backend/Dockerfile (a Go build inside Docker, cached by layer). It links only
+    # the fakeoidc package, so only a change there or under tools/ rebuilds it.
+    custom_build(
+        REGISTRY + '/mockoidc',
+        command='docker build -q --target tools -t $EXPECTED_REF backend',
+        deps=[
+            'backend/tools',
+            'backend/internal/testkit/fakeoidc',
+            'backend/Dockerfile',
+            'backend/go.mod',
+            'backend/go.sum',
+        ],
+        ignore=['**/*_test.go', 'backend/internal/testkit/fakeoidc/fakeoidctest'],
+    )
+    k8s_resource(
+        'mockoidc',
+        objects=['mockoidc:ingress'],
+        links=[link('http://localhost:8080/mockoidc/.well-known/openid-configuration', 'mock sign-in')],
+        labels=['deps'],
+    )
+
 k8s_resource(
     'postgres',
     objects=['postgres-data:persistentvolumeclaim', 'postgres-init:configmap'],
@@ -90,7 +120,7 @@ k8s_resource(
 k8s_resource(
     'kiwi',
     objects=['kiwi-config:configmap', 'kiwi-data:persistentvolumeclaim', 'kiwi:ingress'],
-    resource_deps=['migrate', 'ollama-pull', 'valkey'],
+    resource_deps=['migrate', 'ollama-pull', 'valkey'] + auth_deps,
     links=[link('http://localhost:8080', 'K.I.W.I.')],
     labels=['app'],
 )
