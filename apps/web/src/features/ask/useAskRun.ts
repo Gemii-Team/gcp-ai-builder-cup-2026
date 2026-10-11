@@ -24,6 +24,9 @@ export type AskOutcome =
   | { kind: 'answered'; answer: ArtifactView }
   | { kind: 'failed'; reason: string; at: string };
 
+/** How a question ended: with an answer (found or not found) or without one. */
+export type AskSettled = Exclude<AskOutcome, { kind: 'pending' }>;
+
 /** One question of the thread and what became of it. A not-found answer is `answered`: it has a REF and is no failure. */
 export type AskExchange = {
   id: string;
@@ -34,18 +37,16 @@ export type AskExchange = {
   outcome: AskOutcome;
 };
 
-type Settled = Exclude<AskOutcome, { kind: 'pending' }>;
-
 type Follow = {
   api: Api;
   realtime: RealtimeClient;
   question: string;
   channelId: string | null;
   onPhase: (phase: 'writing') => void;
-  onSettled: (outcome: Settled) => void;
+  onSettled: (outcome: AskSettled) => void;
 };
 
-const failed = (reason: string): Settled => ({ kind: 'failed', reason, at: new Date().toISOString() });
+const failed = (reason: string): AskSettled => ({ kind: 'failed', reason, at: new Date().toISOString() });
 
 /**
  * Starts a run and follows it to its end, from whichever arrives first: the `AgentRunProgress` frame that carries the
@@ -83,7 +84,7 @@ function followRun({ api, realtime, question, channelId, onPhase, onSettled }: F
     abort.abort();
   }
 
-  function finish(outcome: Settled) {
+  function finish(outcome: AskSettled) {
     if (!settled) {
       stop();
       onSettled(outcome);
@@ -200,15 +201,19 @@ function followRun({ api, realtime, question, channelId, onPhase, onSettled }: F
  * The Ask thread's data: the questions asked in this visit, newest first, each with its run followed to an outcome.
  * Asking again while a run is still going leaves that run going: each question is followed on its own. Retry starts a
  * NEW run for a failed question and drops the old one. Every timer, subscription and request ends when the screen
- * unmounts, and when a retry supersedes a run.
+ * unmounts, and when a retry supersedes a run. `onSettled` hears of each run that ends, once, with its exchange's id.
  */
-export function useAskRun() {
+export function useAskRun(onSettled?: (id: string, outcome: AskSettled) => void) {
   const api = useApi();
   const { client: realtime } = useRealtime();
   const [exchanges, setExchanges] = useState<AskExchange[]>([]);
   const [asked] = useState(() => new Map<string, { question: string; channelId: string | null }>());
   const [following] = useState(() => new Map<string, () => void>());
   const serial = useRef(0);
+  const heard = useRef(onSettled);
+  useEffect(() => {
+    heard.current = onSettled;
+  });
 
   const patch = useCallback((id: string, outcome: AskOutcome) => {
     setExchanges((list) => list.map((exchange) => (exchange.id === id ? { ...exchange, outcome } : exchange)));
@@ -230,6 +235,7 @@ export function useAskRun() {
           onSettled: (outcome) => {
             following.delete(id);
             patch(id, outcome);
+            heard.current?.(id, outcome);
           },
         }),
       );

@@ -122,10 +122,10 @@ export function useMakeTask(answer: ArtifactView) {
     }
   }
 
-  /** Deletes the draft, which frees the button to make another. A draft that is already gone counts as discarded. */
-  async function discard(): Promise<void> {
+  /** Deletes the draft, which frees the button to make another. A draft that is already gone counts as discarded. Resolves with whether it is gone. */
+  async function discard(): Promise<boolean> {
     if (draft === null) {
-      return;
+      return false;
     }
     setFailure(null);
     try {
@@ -133,11 +133,12 @@ export function useMakeTask(answer: ArtifactView) {
     } catch (error) {
       if (!hasCode(error, Code.NotFound)) {
         setFailure('discard');
-        return;
+        return false;
       }
     }
     removeTask(queryClient, draft);
     setDraft(null);
+    return true;
   }
 
   /** Saves the owner (or title) of the draft: a rejection reaches the draft slip, which says so. */

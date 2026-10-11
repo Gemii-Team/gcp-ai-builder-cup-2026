@@ -33,7 +33,7 @@ const ANSWER = artifact({
 });
 
 /** The hook in the signed-in shell's providers, on a fake realtime client and a stubbed API where every run call answers by hand. */
-function setup() {
+function setup(onSettled?: Parameters<typeof useAskRun>[0]) {
   const api = seedApi(createStubApi(), { channels: [channel()] });
   const client = new FakeRealtimeClient();
   const Base = hookWrapper(api, createTestQueryClient());
@@ -44,7 +44,7 @@ function setup() {
       </Base>
     );
   }
-  const hook = renderHook(() => useAskRun(), { wrapper: Wrapper });
+  const hook = renderHook(() => useAskRun(onSettled), { wrapper: Wrapper });
   const started = (id = 'run-1', status = RunStatus.QUEUED) => api.agents.startRun.mockResolvedValue(create(StartRunResponseSchema, { run: run({ id, status }) }));
   const outcome = () => hook.result.current.exchanges[0]?.outcome;
   async function ask(question = QUESTION, channelId: string | null = null) {
@@ -273,6 +273,23 @@ describe('useAskRun', () => {
       ['First question', 'answered'],
     ]);
     expect(api.agents.startRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells onSettled once of each run that ends, with its exchange id, and of nothing else', async () => {
+    const settled: [string, string][] = [];
+    const { api, ask, emit, started } = setup((id, outcome) => {
+      settled.push([id, outcome.kind]);
+    });
+    started('run-1');
+    const id = await ask();
+
+    emit({ state: AgentRunState.RUNNING });
+    expect(settled).toEqual([]);
+    emit({ state: AgentRunState.DONE, answer: ANSWER });
+    emit({ state: AgentRunState.DONE, answer: ANSWER });
+
+    expect(settled).toEqual([[id, 'answered']]);
+    expect(api.agents.getRun).not.toHaveBeenCalled();
   });
 
   it('holds no timer and no request once the screen is gone', async () => {

@@ -214,9 +214,11 @@ describe('useMakeTask', () => {
     expect(queryClient.getQueryData<TaskView[]>(keys.channelTasks('ch-q4'))).toBeUndefined();
     queryClient.setQueryData(keys.tasks(), [mapTask(draft)]);
 
+    let gone: boolean | undefined;
     await act(async () => {
-      await result.current.discard();
+      gone = await result.current.discard();
     });
+    expect(gone).toBe(true);
 
     expect(api.tasks.discardDraft.mock.calls[0]?.[0]).toEqual({ id: 'draft-1' });
     expect(result.current.draft).toBeNull();
@@ -230,16 +232,19 @@ describe('useMakeTask', () => {
     });
     api.tasks.discardDraft.mockRejectedValueOnce(new ConnectError('down', Code.Unavailable));
 
+    let gone: boolean | undefined;
     await act(async () => {
-      await result.current.discard();
+      gone = await result.current.discard();
     });
+    expect(gone).toBe(false);
     expect(result.current.failure).toBe('discard');
     expect(result.current.draft).not.toBeNull();
 
     api.tasks.discardDraft.mockRejectedValueOnce(new ConnectError('gone', Code.NotFound));
     await act(async () => {
-      await result.current.discard();
+      gone = await result.current.discard();
     });
+    expect(gone).toBe(true);
     expect(result.current.draft).toBeNull();
     expect(result.current.failure).toBeNull();
   });

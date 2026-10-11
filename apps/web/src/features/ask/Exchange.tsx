@@ -4,7 +4,7 @@ import type { ArtifactView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { failureReasonKey } from '../../lib/failure';
 import { initialOf } from '../../lib/text';
-import { AnswerSlip } from './AnswerSlip';
+import { AnswerBlock } from './AnswerBlock';
 import { NotFoundSlip } from './NotFoundSlip';
 import type { AskExchange } from './useAskRun';
 
@@ -17,10 +17,18 @@ type ExchangeProps = {
   channelCount: number;
   /** The citation of this answer whose marker is pressed. */
   pressed: number | null;
+  /** The sources of this answer are the ones on show. */
+  selected: boolean;
   onPress: (n: number) => void;
+  /** Puts this answer's sources on show. */
+  onSelect: () => void;
+  /** The Sources button: puts this answer's sources on show, and on a phone opens the sheet. */
+  onSources: () => void;
   onRetry: () => void;
   /** Puts the question back in the field. */
   onEdit: () => void;
+  /** Says something in the screen's live region. */
+  say: (text: string) => void;
 };
 
 /** The label of the assistant's row: which language the answer is in (any Thai character makes it Thai), or that nothing was found. */
@@ -36,7 +44,7 @@ function kindKey(answer: ArtifactView): 'askKindNotFound' | 'askKindThai' | 'ask
  * mark, `@assistant`, a Carbon Copy kind label and the time) and under it what came of the question: two calm pending steps,
  * an answer slip, a not-found slip (an answer, not a failure) or a failed slip with Retry.
  */
-export function Exchange({ exchange, asker, channelNames, channelCount, pressed, onPress, onRetry, onEdit }: ExchangeProps) {
+export function Exchange({ exchange, asker, channelNames, channelCount, pressed, selected, onPress, onSelect, onSources, onRetry, onEdit, say }: ExchangeProps) {
   const { t } = useI18n();
   const questionId = useId();
   const { outcome } = exchange;
@@ -45,7 +53,18 @@ export function Exchange({ exchange, asker, channelNames, channelCount, pressed,
   const settledAt = answer?.generatedAt ?? (outcome.kind === 'failed' ? outcome.at : null);
 
   return (
-    <article className="ak-qa" data-exchange={exchange.id} aria-labelledby={questionId}>
+    <article
+      className="ak-qa"
+      data-exchange={exchange.id}
+      data-selected={selected || undefined}
+      aria-labelledby={questionId}
+      onClick={(event) => {
+        // Pressing the answer itself, anywhere but on a control, puts its sources on show.
+        if (answer?.kind === 'answer' && event.target instanceof Element && event.target.closest('a, button, select, input') === null) {
+          onSelect();
+        }
+      }}
+    >
       <div className="ak-row">
         <span className="av" aria-hidden="true">
           {initialOf(asker)}
@@ -88,7 +107,9 @@ export function Exchange({ exchange, asker, channelNames, channelCount, pressed,
         {answer?.kind === 'not_found' && (
           <NotFoundSlip answer={answer} channelNames={channelNames} onEdit={onEdit} teamHref={exchange.channelId === null ? '/' : `/c/${exchange.channelId}`} />
         )}
-        {answer?.kind === 'answer' && <AnswerSlip answer={answer} channelNames={channelNames} pressed={pressed} onPress={onPress} />}
+        {answer?.kind === 'answer' && (
+          <AnswerBlock answer={answer} channelNames={channelNames} pressed={pressed} onPress={onPress} selected={selected} onSources={onSources} say={say} />
+        )}
       </div>
     </article>
   );
