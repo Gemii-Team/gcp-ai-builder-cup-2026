@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { SPA_NAVIGATION_ALLOWLIST } from './src/pwaRoutes';
 
 export default defineConfig({
   plugins: [
@@ -33,8 +34,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         cleanupOutdatedCaches: true,
         navigateFallback: 'index.html',
-        // Navigations the API or the probes answer must reach the network, never the cached shell.
-        navigateFallbackDenylist: [/^\/(?:api|healthz|readyz)(?:\/|$)/],
+        // Only the SPA's own routes get the cached shell; every other navigation (/api/auth/login and the OIDC
+        // issuer it redirects to, /api/blob, the probes) reaches the network. See src/pwaRoutes.ts.
+        navigateFallbackAllowlist: SPA_NAVIGATION_ALLOWLIST,
       },
     }),
   ],
