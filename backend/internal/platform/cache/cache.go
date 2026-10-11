@@ -4,7 +4,8 @@
 //
 // Keys follow spec §3.3, where {x} stands for the value of x:
 // sess:{id}, rtt:{ticket}, members:{channel}. OAuth login state, which §3.3
-// does not list, is oauth:{state}.
+// does not list, is oauth:{state}, and the invalidation counter that keeps a stale
+// members fill out is members:{channel}:epoch.
 package cache
 
 import (

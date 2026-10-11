@@ -414,6 +414,64 @@ func TestMembersCache_InvalidateRemoves(t *testing.T) {
 	requireMembers(t, c, ch2, false)
 }
 
+func TestMembersCache_StaleFillIsRefusedAfterInvalidate(t *testing.T) {
+	c := open(t, Options{})
+	ctx := context.Background()
+	ch, other := uuid.New(), uuid.New()
+	a, b := uuid.New(), uuid.New()
+
+	epoch, err := c.MembersEpoch(ctx, ch)
+	if err != nil {
+		t.Fatalf("MembersEpoch: %v", err)
+	}
+	if epoch != 0 {
+		t.Fatalf("epoch of a never-invalidated channel = %d, want 0", epoch)
+	}
+	// A reader that sampled the epoch fills the set when nothing was invalidated since.
+	stored, err := c.SetMembersAtEpoch(ctx, ch, epoch, []uuid.UUID{a, b, a})
+	if err != nil || !stored {
+		t.Fatalf("SetMembersAtEpoch = %v, %v, want stored", stored, err)
+	}
+	requireMembers(t, c, ch, true, a, b)
+	if ttl := c.rdb.PTTL(ctx, "members:"+ch.String()).Val(); ttl <= 0 || ttl > membersBackstopTTL {
+		t.Errorf("TTL of the filled set = %v, want a positive backstop up to %v", ttl, membersBackstopTTL)
+	}
+
+	// A slow reader sampled the epoch, then Postgres changed and the set was invalidated.
+	slow, err := c.MembersEpoch(ctx, ch)
+	if err != nil {
+		t.Fatalf("MembersEpoch: %v", err)
+	}
+	if err := c.InvalidateMembers(ctx, ch); err != nil {
+		t.Fatalf("InvalidateMembers: %v", err)
+	}
+	requireMembers(t, c, ch, false)
+	if now, _ := c.MembersEpoch(ctx, ch); now != slow+1 {
+		t.Fatalf("epoch after one invalidation = %d, want %d", now, slow+1)
+	}
+	stored, err = c.SetMembersAtEpoch(ctx, ch, slow, []uuid.UUID{a, b})
+	if err != nil || stored {
+		t.Fatalf("stale SetMembersAtEpoch = %v, %v, want refused without error", stored, err)
+	}
+	requireMembers(t, c, ch, false) // the stale fill did not stick
+
+	// A reader that sampled after the invalidation fills it; other channels are independent.
+	fresh, _ := c.MembersEpoch(ctx, ch)
+	if stored, err = c.SetMembersAtEpoch(ctx, ch, fresh, []uuid.UUID{a}); err != nil || !stored {
+		t.Fatalf("fresh SetMembersAtEpoch = %v, %v, want stored", stored, err)
+	}
+	requireMembers(t, c, ch, true, a)
+	if e, _ := c.MembersEpoch(ctx, other); e != 0 {
+		t.Fatalf("another channel's epoch = %d, want 0", e)
+	}
+
+	// An empty set stores nothing but is not an error when the epoch still matches.
+	if stored, err = c.SetMembersAtEpoch(ctx, other, 0, nil); err != nil || !stored {
+		t.Fatalf("SetMembersAtEpoch(nil) = %v, %v, want accepted", stored, err)
+	}
+	requireMembers(t, c, other, false)
+}
+
 func recv(t *testing.T, sub *Subscription) Frame {
 	t.Helper()
 	select {
