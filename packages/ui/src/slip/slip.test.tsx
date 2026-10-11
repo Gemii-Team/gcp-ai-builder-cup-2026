@@ -732,4 +732,22 @@ describe('FailedSlip', () => {
     render(<FailedSlip reason="สรุป สัญญา.pdf ไม่สำเร็จ" failedAt="2026-10-11T07:31:00Z" onRetry={() => undefined} />);
     expect(screen.getByText('สรุป สัญญา.pdf ไม่สำเร็จ')).toHaveAttribute('lang', 'th');
   });
+
+  it('shows a reason the app has already rendered as it is, so the Latin words it tagged lang="en" keep their tag', () => {
+    render(
+      <FailedSlip
+        reason={
+          <>
+            สรุปไม่ได้: การบันทึกเสียงต้องเป็นไฟล์ <span lang="en">WAV</span> (<span lang="en">PCM16</span>)
+          </>
+        }
+        failedAt="2026-10-11T07:31:00Z"
+        onRetry={() => undefined}
+      />,
+    );
+    expect(screen.getByText('WAV')).toHaveAttribute('lang', 'en');
+    expect(screen.getByText('PCM16')).toHaveAttribute('lang', 'en');
+    // A node is not run through the Thai tagger a second time: nothing is wrapped around the prose it holds.
+    expect(screen.getByText(/สรุปไม่ได้/)).not.toHaveAttribute('lang');
+  });
 });
