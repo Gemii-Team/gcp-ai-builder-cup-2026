@@ -26,8 +26,10 @@ type Service interface {
 	// With q.ChannelID set it needs authz.ActTaskRead on that channel; without it the
 	// result is bounded to the channels the actor is a member of.
 	ListTasks(ctx context.Context, a authz.Actor, q ListTasksQuery) ([]*tasksv1.Task, error)
-	// CreateTask creates a confirmed task, or a draft when the request asks for one;
-	// it needs authz.ActTaskWrite, and a draft takes the authz.ActTaskWriteDraft path.
+	// CreateTask is the user path, called through the API. A confirmed task (state
+	// unset or CONFIRMED) needs authz.ActTaskWrite; state DRAFT takes the CreateDraft
+	// path and needs authz.ActTaskWriteDraft. Agent actors, and system actors whose
+	// allowlist has no authz.ActTaskWrite, can only CreateDraft.
 	CreateTask(ctx context.Context, a authz.Actor, req *tasksv1.CreateTaskRequest) (*tasksv1.Task, error)
 	// CreateDraft creates an AI-proposed draft task for a person to confirm; it needs
 	// authz.ActTaskWriteDraft.

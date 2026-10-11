@@ -2,6 +2,7 @@ package fakellm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"slices"
@@ -120,15 +121,87 @@ func TestTranscribe_QueueAndRecording(t *testing.T) {
 	}
 }
 
-func TestCancelledContext_FailsWithItsError(t *testing.T) {
+func TestCancelledContext_FailsWithItsErrorAndKeepsQueuedReplies(t *testing.T) {
 	c := fakellm.New()
-	c.QueueGenerate(fakellm.GenerateReply{Result: llm.Result{Text: "never"}})
-	ctx, cancel := context.WithCancel(context.Background())
+	c.QueueGenerate(fakellm.GenerateReply{Result: llm.Result{Text: "queued generate"}})
+	c.QueueEmbed(fakellm.EmbedReply{Vectors: [][]float32{{1}}})
+	c.QueueTranscribe(fakellm.TranscribeReply{Entries: []llm.TranscriptEntry{{Text: "queued transcribe"}}})
+	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := c.Generate(ctx, llm.Request{}); !errors.Is(err, context.Canceled) {
+	if _, err := c.Generate(cancelled, llm.Request{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Generate error = %v, want context.Canceled", err)
 	}
+	if _, err := c.Stream(cancelled, llm.Request{}, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %v, want context.Canceled", err)
+	}
+	if _, err := c.Embed(cancelled, []string{"x"}, llm.EmbedDocument); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Embed error = %v, want context.Canceled", err)
+	}
+	if _, err := c.Transcribe(cancelled, llm.Audio{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Transcribe error = %v, want context.Canceled", err)
+	}
+
+	// The cancelled calls were recorded but consumed nothing.
+	if got := len(c.GenerateCalls()) + len(c.StreamCalls()) + len(c.EmbedCalls()) + len(c.TranscribeCalls()); got != 4 {
+		t.Fatalf("recorded %d cancelled calls, want 4", got)
+	}
+	live := context.Background()
+	if res, err := c.Generate(live, llm.Request{}); err != nil || res.Text != "queued generate" {
+		t.Fatalf("Generate after cancelled calls = (%q, %v), want the queued reply", res.Text, err)
+	}
+	if got, err := c.Embed(live, []string{"x"}, llm.EmbedDocument); err != nil || len(got) != 1 || !slices.Equal(got[0], []float32{1}) {
+		t.Fatalf("Embed after cancelled calls = (%v, %v), want the queued reply", got, err)
+	}
+	if got, err := c.Transcribe(live, llm.Audio{}); err != nil || len(got) != 1 || got[0].Text != "queued transcribe" {
+		t.Fatalf("Transcribe after cancelled calls = (%v, %v), want the queued reply", got, err)
+	}
+}
+
+func TestRecordedCalls_AreDeepCopies(t *testing.T) {
+	c := fakellm.New()
+	c.HandleGenerate(func(context.Context, llm.Request) (llm.Result, error) { return llm.Result{}, nil })
+	c.HandleTranscribe(func(context.Context, llm.Audio) ([]llm.TranscriptEntry, error) { return nil, nil })
+
+	data := []byte("image-bytes")
+	params := json.RawMessage(`{"type":"object"}`)
+	schema := &llm.Schema{Name: "s", JSON: json.RawMessage(`{"type":"string"}`)}
+	audio := []byte("riff")
+	req := llm.Request{
+		Parts:  []llm.Part{{Data: data, MIME: "image/png"}},
+		Tools:  []llm.Tool{{Name: "t", Parameters: params}},
+		Schema: schema,
+	}
+	_, _ = c.Generate(context.Background(), req)
+	_, _ = c.Stream(context.Background(), req, nil)
+	_, _ = c.Transcribe(context.Background(), llm.Audio{Data: audio})
+
+	// The caller reuses its buffers and mutates the request after the call.
+	data[0], params[2], schema.JSON[2], audio[0] = 'X', 'X', 'X', 'X'
+	schema.Name = "changed"
+	req.Parts[0].MIME = "changed"
+
+	check := func(name string, got llm.Request) {
+		t.Helper()
+		if string(got.Parts[0].Data) != "image-bytes" || got.Parts[0].MIME != "image/png" {
+			t.Errorf("%s: recorded part = %q %q, want it unchanged", name, got.Parts[0].Data, got.Parts[0].MIME)
+		}
+		if string(got.Tools[0].Parameters) != `{"type":"object"}` {
+			t.Errorf("%s: recorded tool parameters = %s, want them unchanged", name, got.Tools[0].Parameters)
+		}
+		if got.Schema.Name != "s" || string(got.Schema.JSON) != `{"type":"string"}` {
+			t.Errorf("%s: recorded schema = %+v, want it unchanged", name, got.Schema)
+		}
+	}
+	check("Generate", c.GenerateCalls()[0])
+	check("Stream", c.StreamCalls()[0])
+	if got := c.TranscribeCalls()[0].Data; string(got) != "riff" {
+		t.Errorf("recorded audio = %q, want it unchanged", got)
+	}
+
+	// And mutating what a getter returned does not change the record either.
+	c.GenerateCalls()[0].Parts[0].Data[0] = 'Y'
+	check("Generate after mutating a returned copy", c.GenerateCalls()[0])
 }
 
 func TestConcurrentCalls_AreRecordedWithoutRaces(t *testing.T) {

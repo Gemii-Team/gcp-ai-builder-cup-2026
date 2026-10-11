@@ -34,7 +34,8 @@ type Service interface {
 	// RetryAnalysis queues the analysis of a failed file again; it needs
 	// authz.ActFileWrite.
 	RetryAnalysis(ctx context.Context, a authz.Actor, fileID uuid.UUID) error
-	// ExtractPages returns the file's text page by page, for indexing; it needs
-	// authz.ActFileRead.
+	// ExtractPages returns the file's text page by page, for indexing. For a system
+	// actor (the indexer) it needs authz.ActKnowledgeIndex; for a user or agent actor
+	// it needs the ordinary membership-based authz.ActFileRead on the file's channel.
 	ExtractPages(ctx context.Context, a authz.Actor, fileID uuid.UUID) ([]Page, error)
 }

@@ -24,7 +24,9 @@ type MemoryOptions struct {
 	// means 1s, 5s, 30s, 2m. Tests pass []time.Duration{0} to retry at once.
 	Backoff []time.Duration
 	// OnDead is called when a consumer has failed MaxAttempts times, with the last
-	// message and error. Empty means the failure is logged at ERROR.
+	// message and error. Consumers of one message settle in parallel, so OnDead can be
+	// called concurrently, one goroutine per consumer, and must be safe for that.
+	// Empty means the failure is logged at ERROR.
 	OnDead func(consumer string, m Message, err error)
 }
 
@@ -41,6 +43,11 @@ type Memory struct {
 	mu   sync.RWMutex
 	subs []*subscription
 }
+
+var (
+	_ Publisher  = (*Memory)(nil)
+	_ Subscriber = (*Memory)(nil)
+)
 
 type subscription struct {
 	name    string

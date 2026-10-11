@@ -248,6 +248,31 @@ func TestMemory_CancelledContext_ReturnsErrorWithoutDeadLetter(t *testing.T) {
 		}
 	})
 
+	// On shutdown a handler fails because its context was cancelled. If that was its
+	// last attempt the message must not be dead-lettered and Publish must not return
+	// nil: the outbox relay would mark the row published and the message would be lost.
+	t.Run("when the handler fails its last attempt and the context ended meanwhile", func(t *testing.T) {
+		opt := instant(t) // OnDead fails the test
+		opt.MaxAttempts = 1
+		m := bus.NewMemory(opt)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var calls int
+		m.Register("c", []string{"t"}, func(context.Context, bus.Message) error {
+			calls++
+			cancel()
+			return errBoom
+		})
+
+		err := m.Publish(ctx, bus.Message{ID: "1", Topic: "t"})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Publish error = %v, want context.Canceled", err)
+		}
+		if calls != 1 {
+			t.Fatalf("handler calls = %d, want 1", calls)
+		}
+	})
+
 	t.Run("while waiting for the next retry", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			opt := instant(t)

@@ -27,8 +27,10 @@ type Service interface {
 	// GetTranscriptExcerpt returns transcript entry entryIdx with radius entries on
 	// each side; it needs authz.ActMeetingRead.
 	GetTranscriptExcerpt(ctx context.Context, a authz.Actor, meetingID uuid.UUID, entryIdx, radius int32) (*meetingsv1.Excerpt, error)
-	// TranscriptEntries returns every transcript entry of the meeting in order; it
-	// needs authz.ActMeetingRead.
+	// TranscriptEntries returns every transcript entry of the meeting in order, for
+	// indexing. For a system actor (the indexer) it needs authz.ActKnowledgeIndex; for
+	// a user or agent actor it needs the ordinary membership-based
+	// authz.ActMeetingRead on the meeting's channel.
 	TranscriptEntries(ctx context.Context, a authz.Actor, meetingID uuid.UUID) ([]*meetingsv1.Entry, error)
 	// RetrySummary queues the summary of a failed meeting again; it needs
 	// authz.ActMeetingWrite.

@@ -1,8 +1,9 @@
 // Package fakegoogle is a scriptable google.Client for tests. Each method answers
 // from its queue of replies first, then from its handler, and fails with
 // ErrUnscripted when it has neither; to script a poll that changes over time, queue
-// one reply per poll. Every call is recorded. All methods are safe for concurrent
-// use.
+// one reply per poll. Every call is recorded; a call whose context is already done is
+// recorded, returns ctx.Err() and leaves the queued replies untouched. All methods
+// are safe for concurrent use.
 package fakegoogle
 
 import (
@@ -119,13 +120,14 @@ func (c *Client) Calls() []Call {
 func (c *Client) CreateMeetSpace(ctx context.Context, userID uuid.UUID, enableTranscription bool) (google.Space, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, Call{Method: "CreateMeetSpace", UserID: userID, EnableTranscription: enableTranscription})
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return google.Space{}, err
+	}
 	reply, queued := pop(&c.spaceQueue)
 	handler := c.onCreateMeetSpace
 	c.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
-		return google.Space{}, err
-	}
 	switch {
 	case queued:
 		return reply.Space, reply.Err
@@ -139,13 +141,14 @@ func (c *Client) CreateMeetSpace(ctx context.Context, userID uuid.UUID, enableTr
 func (c *Client) ListConferences(ctx context.Context, userID uuid.UUID, spaceName string) ([]google.Conference, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, Call{Method: "ListConferences", UserID: userID, Name: spaceName})
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
 	reply, queued := pop(&c.conferencesQueue)
 	handler := c.onListConferences
 	c.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	switch {
 	case queued:
 		return reply.Conferences, reply.Err
@@ -159,13 +162,14 @@ func (c *Client) ListConferences(ctx context.Context, userID uuid.UUID, spaceNam
 func (c *Client) ListTranscriptEntries(ctx context.Context, userID uuid.UUID, transcriptName string) ([]google.Entry, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, Call{Method: "ListTranscriptEntries", UserID: userID, Name: transcriptName})
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
 	reply, queued := pop(&c.entriesQueue)
 	handler := c.onListTranscriptEntries
 	c.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	switch {
 	case queued:
 		return reply.Entries, reply.Err

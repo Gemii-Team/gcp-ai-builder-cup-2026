@@ -4,7 +4,7 @@
 # `--target tools` builds the smoke-only servers under tools/ instead (added with
 # the smoke harness; until then that target has nothing to build).
 
-FROM golang:1.25 AS build
+FROM golang:1.26 AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download

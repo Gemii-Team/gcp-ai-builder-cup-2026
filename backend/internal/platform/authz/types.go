@@ -49,7 +49,9 @@ func (a Actor) EffectiveUserID() uuid.UUID {
 // Action is something an actor may be allowed to do.
 type Action string
 
-// Actions an actor can be authorized for.
+// Actions an actor can be authorized for. ActKnowledgeIndex also covers what the
+// indexer, a system actor, reads to build its chunks (docs.ExtractPages,
+// meetings.TranscriptEntries).
 const (
 	ActChannelRead     Action = "channel.read"
 	ActChannelJoin     Action = "channel.join"
