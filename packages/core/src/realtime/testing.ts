@@ -114,9 +114,9 @@ export const settle = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
 
 /**
  * A realtime client on fake timers and fake sockets. Call `vi.useFakeTimers()` first. The backoff draws 0, so a
- * reconnect is due at once; `cursors` seeds the cursor store.
+ * reconnect is due at once; `cursors` seeds the cursor store; `resyncTimeoutMs` overrides the client's default.
  */
-export function harness(cursors: Record<string, number> = {}) {
+export function harness(cursors: Record<string, number> = {}, { resyncTimeoutMs }: { resyncTimeoutMs?: number } = {}) {
   FakeWebSocket.instances = [];
   const cursorStore = createMemoryCursorStore();
   for (const [channelId, seq] of Object.entries(cursors)) {
@@ -124,11 +124,12 @@ export function harness(cursors: Record<string, number> = {}) {
   }
   let tickets = 0;
   const issueTicket = vi.fn<() => Promise<string>>(() => Promise.resolve(`t${String(++tickets)}`));
-  const resync = vi.fn<(cursors: Cursor[]) => Promise<ChannelDelta[]>>(() => Promise.resolve([]));
+  const resync = vi.fn<(cursors: Cursor[], signal: AbortSignal) => Promise<ChannelDelta[]>>(() => Promise.resolve([]));
   const client = createRealtimeClient({
     issueTicket,
     wsUrl: 'ws://kiwi.test/ws',
     resync,
+    resyncTimeoutMs,
     cursorStore,
     backoff: { random: () => 0 },
     WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,

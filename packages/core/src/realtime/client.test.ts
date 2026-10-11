@@ -329,3 +329,143 @@ describe('connection', () => {
     expect(socket.pings()).toBe(3);
   });
 });
+
+describe('a resync that never answers', () => {
+  const DEADLINE_MS = 15_000;
+  // The harness's backoff draws 0, but fake timers turn a 0 ms timer set during a tick into 1 ms: the reconnect is due 1 ms after the failure.
+  const RECONNECT_MS = 1;
+
+  /** Channel `a` at cursor 5 on an open socket, then a frame for seq 8 whose resync never settles (`late` settles it). */
+  async function hang(resyncTimeoutMs?: number) {
+    const h = harness({ a: 5 }, { resyncTimeoutMs });
+    const first = await h.open(['a']);
+    const late = Promise.withResolvers<ChannelDelta[]>();
+    h.resync.mockReturnValueOnce(late.promise);
+    first.serverSend(messageCreated('a', 8));
+    await settle();
+    expect(h.resync).toHaveBeenCalledTimes(1);
+    return { h, first, late };
+  }
+
+  it('closes the socket at the deadline, and the next connection catches up exactly once and in order', async () => {
+    const { h, first } = await hang();
+    const statuses: string[] = [];
+    h.client.onStatus((status) => statuses.push(status));
+
+    await settle(DEADLINE_MS - 1);
+    expect(first.readyState).toBe(1);
+    expect(h.client.status).toBe('open');
+    expect(h.issueTicket).toHaveBeenCalledTimes(1);
+
+    h.resync.mockResolvedValueOnce([delta('a', [6, 7, 8])]);
+    await settle(1);
+    expect(first.readyState).toBe(3);
+    expect(h.client.status).toBe('connecting');
+    await settle(RECONNECT_MS);
+    expect(h.issueTicket).toHaveBeenCalledTimes(2);
+    const second = latestSocket();
+    expect(second.url).toBe('ws://kiwi.test/ws?ticket=t2');
+    second.serverOpen();
+    await settle();
+
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8']);
+    expect(cursorPairs(h.resync.mock.calls[1][0])).toEqual([['a', 5n]]);
+    expect(h.resync).toHaveBeenCalledTimes(2);
+    expect(statuses).toEqual(['connecting', 'open']);
+  });
+
+  it('honours resyncTimeoutMs', async () => {
+    const { h, first } = await hang(1_000);
+
+    await settle(999);
+    expect(first.readyState).toBe(1);
+    await settle(1);
+    expect(first.readyState).toBe(3);
+    expect(h.client.status).toBe('connecting');
+  });
+
+  it('ignores what the abandoned call finally returns, and does not report its late failure', async () => {
+    const { h, late } = await hang();
+    h.resync.mockResolvedValueOnce([delta('a', [6, 7, 8])]);
+    await settle(DEADLINE_MS + RECONNECT_MS);
+    latestSocket().serverOpen();
+    await settle();
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8']);
+
+    late.resolve([delta('a', [6, 7, 8, 9])]);
+    await settle();
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8']);
+    expect(h.cursorStore.get('a')).toBe(8);
+  });
+
+  it('does not report an unhandled rejection when the abandoned call later fails', async () => {
+    const { late } = await hang();
+    await settle(DEADLINE_MS + RECONNECT_MS);
+
+    late.reject(new Error('the request died after the client gave up on it'));
+    await settle();
+  });
+
+  it('drops the frames queued behind the hung call instead of resyncing once for each', async () => {
+    const { h, first } = await hang();
+    first.serverSend(messageCreated('a', 9));
+    first.serverSend(messageCreated('a', 10));
+    first.serverSend(messageCreated('a', 11));
+    await settle();
+
+    h.resync.mockResolvedValueOnce([delta('a', [6, 7, 8, 9, 10, 11])]);
+    await settle(DEADLINE_MS + RECONNECT_MS);
+    // The abandoned attempt asked once; its three queued frames asked for nothing.
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(h.resync).toHaveBeenCalledTimes(1);
+    expect(h.events).toEqual([]);
+
+    latestSocket().serverOpen();
+    await settle();
+
+    expect(h.resync).toHaveBeenCalledTimes(2);
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8', 'a:9', 'a:10', 'a:11']);
+  });
+
+  it('aborts the signal it gave resync when the deadline passes', async () => {
+    const { h } = await hang();
+    const signal = h.resync.mock.calls[0][1];
+
+    expect(signal.aborted).toBe(false);
+    await settle(DEADLINE_MS - 1);
+    expect(signal.aborted).toBe(false);
+    await settle(1);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('aborts the signal on close(), and a later connect() is not blocked by the abandoned call', async () => {
+    const { h } = await hang();
+    const signal = h.resync.mock.calls[0][1];
+
+    h.client.close();
+    expect(signal.aborted).toBe(true);
+    expect(h.client.status).toBe('closed');
+
+    h.resync.mockResolvedValueOnce([delta('a', [6, 7, 8])]);
+    h.client.connect();
+    await settle();
+    latestSocket().serverOpen();
+    await settle();
+
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8']);
+    expect(h.client.status).toBe('open');
+  });
+
+  it('leaves no deadline timer behind once resync has answered', async () => {
+    const h = harness({ a: 5 });
+    const socket = await h.open(['a']);
+    const timersWhenIdle = vi.getTimerCount();
+
+    h.resync.mockResolvedValueOnce([delta('a', [6, 7, 8])]);
+    socket.serverSend(messageCreated('a', 8));
+    await settle();
+
+    expect(summarize(h.events)).toEqual(['a:6', 'a:7', 'a:8']);
+    expect(vi.getTimerCount()).toBe(timersWhenIdle);
+  });
+});

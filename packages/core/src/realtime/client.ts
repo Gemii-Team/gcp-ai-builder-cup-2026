@@ -31,8 +31,16 @@ export type RealtimeOptions = {
   issueTicket: () => Promise<string>;
   /** The gateway's WebSocket URL, absolute (`wss://host/ws`; a relative one throws a TypeError at creation); the ticket is added as `?ticket=`. */
   wsUrl: string;
-  /** `ChatService.SyncChannels`: what each cursor is missing, per channel. */
-  resync: (cursors: Cursor[]) => Promise<ChannelDelta[]>;
+  /**
+   * `ChatService.SyncChannels`: what each cursor is missing, per channel. The client waits at most `resyncTimeoutMs`
+   * for the answer; a call that rejects or has not answered by then counts as failed: the socket is closed and the
+   * reconnect, with a new ticket, resyncs every subscribed channel from the stored cursors. A late answer of an abandoned
+   * call is ignored. `signal` is aborted when the call is abandoned (deadline, failure, `close()`, a dropped socket):
+   * pass it to the request so the HTTP call is really dropped; a function that ignores it still cannot block the client.
+   */
+  resync: (cursors: Cursor[], signal: AbortSignal) => Promise<ChannelDelta[]>;
+  /** How long one `resync` call may take before it counts as failed. Default 15 000 ms. */
+  resyncTimeoutMs?: number;
   cursorStore: CursorStore;
   backoff?: BackoffOptions;
   WebSocketImpl?: typeof WebSocket;
@@ -56,6 +64,7 @@ export type RealtimeClient = {
 };
 
 const PING_INTERVAL_MS = 25_000;
+const DEFAULT_RESYNC_TIMEOUT_MS = 15_000;
 const CLOSE_GOING_AWAY = 1001;
 const PING_FRAME = toBinary(ClientFrameSchema, create(ClientFrameSchema, { frame: { case: 'ping', value: create(PingSchema) } }));
 
@@ -75,20 +84,26 @@ function notify<T>(handlers: Set<(value: T) => void>, value: T) {
 /**
  * The realtime client. Frames are hints, the API is the truth: per channel it tracks the last `seq` it delivered, drops
  * a frame at or below it, and on a frame beyond `cursor + 1` fetches the missing range through `resync` and delivers it
- * in order. Frames and resync results pass through one queue, so nothing is delivered out of order or twice, and a failed
- * resync closes the socket so the reconnect resyncs everything from the stored cursors.
+ * in order. Frames and resync results pass through one queue, so nothing is delivered out of order or twice. A resync
+ * that fails or does not answer in time ends the connection, and the reconnect resyncs everything from the stored cursors.
  */
 export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
   const wsUrl = new URL(o.wsUrl);
   const backoff = createBackoff(o.backoff);
+  const resyncTimeoutMs = o.resyncTimeoutMs ?? DEFAULT_RESYNC_TIMEOUT_MS;
   const subscribed = new Set<string>();
   const handlers = new Set<(event: RealtimeEvent) => void>();
   const statusHandlers = new Set<(status: ConnectionStatus) => void>();
 
   let status: ConnectionStatus = 'closed';
   let socket: WebSocket | undefined;
-  /** Bumped for every attempt and by `close()`: a callback of an earlier attempt sees it moved on and does nothing. */
+  /**
+   * The id of the current connection attempt. Every callback and queued task carries the id it was made for and does
+   * nothing once this has moved on, which is how a dead connection's leftovers are dropped.
+   */
   let attempt = 0;
+  /** Aborted when the current attempt ends, so the `resync` call it may have in flight is dropped. */
+  let attemptSignal = new AbortController();
   /** Failed attempts in a row: the exponent of the backoff. Cleared once a connection has caught up. */
   let failures = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -103,32 +118,77 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
   }
 
   /**
-   * Runs `task` after everything queued before it. A failure closes the socket of attempt `owner` (unless a newer one
-   * has replaced it), so the reconnect rebuilds the state from the stored cursors.
+   * Ends the current attempt: its queued tasks are skipped, its `resync` call is aborted, its timers stop. Returns the
+   * socket it had, for the caller to close.
    */
-  function enqueue(task: () => Promise<void>, owner: number) {
-    queue = queue.then(task).catch(() => {
-      if (owner === attempt) {
-        socket?.close();
-      }
-    });
+  function endAttempt(): WebSocket | undefined {
+    attempt++;
+    attemptSignal.abort();
+    attemptSignal = new AbortController();
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
+    clearInterval(pingTimer);
+    pingTimer = undefined;
+    const ws = socket;
+    socket = undefined;
+    return ws;
   }
 
-  /** Whether `close()` was called: read through a function so a check made before an `await` is not reused after it. */
-  const isClosed = () => status === 'closed';
+  /** Attempt `owner` failed: close its socket and reconnect after the backoff. A newer attempt is left alone. */
+  function fail(owner: number) {
+    if (owner === attempt) {
+      const ws = endAttempt();
+      setStatus('connecting');
+      scheduleRetry(backoff.delay(failures++));
+      ws?.close();
+    }
+  }
+
+  /**
+   * Runs `task` after everything queued before it, unless attempt `owner` has ended by then. A task that fails ends the
+   * attempt, so the reconnect rebuilds the state from the stored cursors.
+   */
+  function enqueue(task: () => Promise<void>, owner: number) {
+    queue = queue
+      .then(() => (owner === attempt ? task() : undefined))
+      .catch(() => {
+        fail(owner);
+      });
+  }
+
+  /** `o.resync`, abandoned when `signal` aborts or after `resyncTimeoutMs`; its timer and listener never outlive the call. */
+  async function resyncWithin(cursors: Cursor[], signal: AbortSignal): Promise<ChannelDelta[]> {
+    let abandon: (error: Error) => void = () => undefined;
+    const abandoned = new Promise<never>((_, reject) => {
+      abandon = reject;
+    });
+    const deadline = setTimeout(() => {
+      abandon(new Error(`resync did not answer within ${String(resyncTimeoutMs)} ms`));
+    }, resyncTimeoutMs);
+    const onAbort = () => {
+      abandon(new Error('resync was abandoned'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      return await Promise.race([o.resync(cursors, signal), abandoned]);
+    } finally {
+      clearTimeout(deadline);
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
 
   function deliver(message: Message) {
     notify(handlers, create(ServerEventSchema, { event: { case: 'messageCreated', value: message } }));
   }
 
-  /** Fetches what each channel's cursor is missing and delivers it. */
-  async function catchUp(channelIds: string[]) {
+  /** Fetches what each channel's cursor is missing and delivers it, for attempt `owner`. */
+  async function catchUp(channelIds: string[], owner: number) {
     if (channelIds.length === 0) {
       return;
     }
     const cursors = channelIds.map((channelId) => create(CursorSchema, { channelId, lastSeq: BigInt(o.cursorStore.get(channelId)) }));
-    const deltas = await o.resync(cursors);
-    if (isClosed()) {
+    const deltas = await resyncWithin(cursors, attemptSignal.signal);
+    if (owner !== attempt) {
       return;
     }
     for (const { channelId, messages, reload } of deltas) {
@@ -150,10 +210,7 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
     }
   }
 
-  async function receive(event: ServerEvent) {
-    if (isClosed()) {
-      return;
-    }
+  async function receive(event: ServerEvent, owner: number) {
     if (event.event.case !== 'messageCreated') {
       notify(handlers, event);
       return;
@@ -161,10 +218,10 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
     const message = event.event.value;
     const seq = toSafeNumber(message.seq);
     if (seq > o.cursorStore.get(message.channelId) + 1) {
-      await catchUp([message.channelId]);
+      await catchUp([message.channelId], owner);
     }
     // Next in line, or already delivered by the catch-up, or a duplicate: only the first is news.
-    if (!isClosed() && seq === o.cursorStore.get(message.channelId) + 1) {
+    if (owner === attempt && seq === o.cursorStore.get(message.channelId) + 1) {
       o.cursorStore.advance(message.channelId, seq);
       notify(handlers, event);
     }
@@ -182,13 +239,6 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
       retryTimer = undefined;
       void open();
     }, delayMs);
-  }
-
-  function stopTimers() {
-    clearTimeout(retryTimer);
-    retryTimer = undefined;
-    clearInterval(pingTimer);
-    pingTimer = undefined;
   }
 
   async function open() {
@@ -221,7 +271,7 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
       const channelIds = [...subscribed];
       subscribeOnSocket(channelIds);
       enqueue(async () => {
-        await catchUp(channelIds);
+        await catchUp(channelIds, mine);
         // A connection that caught up is a good one: only then does the backoff start over.
         if (mine === attempt) {
           failures = 0;
@@ -239,14 +289,13 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
       } catch {
         return;
       }
-      enqueue(() => receive(event), mine);
+      enqueue(() => receive(event, mine), mine);
     };
     ws.onclose = ({ code }) => {
       if (mine !== attempt) {
         return;
       }
-      stopTimers();
-      socket = undefined;
+      endAttempt();
       setStatus('connecting');
       scheduleRetry(code === CLOSE_GOING_AWAY ? backoff.goingAway() : backoff.delay(failures++));
     };
@@ -260,10 +309,7 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
       }
     },
     close() {
-      attempt++;
-      stopTimers();
-      const ws = socket;
-      socket = undefined;
+      const ws = endAttempt();
       setStatus('closed');
       ws?.close(1000);
     },
@@ -273,8 +319,9 @@ export function createRealtimeClient(o: RealtimeOptions): RealtimeClient {
         subscribed.add(channelId);
       }
       if (status === 'open' && added.length > 0) {
+        const owner = attempt;
         subscribeOnSocket(added);
-        enqueue(() => catchUp(added), attempt);
+        enqueue(() => catchUp(added, owner), owner);
       }
     },
     on(handler) {
