@@ -396,6 +396,22 @@ describe('MessageLink', () => {
     await within(excerpt).findByText('Confirmed.');
     expect(excerpt).toHaveTextContent('Message · #q4-launch · 14:02');
   });
+
+  it('shows a message with no time without one, never a wrong one', async () => {
+    const user = userEvent.setup();
+    const untimed: Source = { kind: 'message', id: 'message-1', label: 'Arthit K.', channelId: 'channel-1', seq: 41 };
+    withExcerpts(
+      <ExcerptRow>
+        <MessageLink source={untimed} channel="q4-launch" />
+      </ExcerptRow>,
+      () => Promise.resolve<Excerpt>({ kind: 'message', channel: 'q4-launch', author: 'Arthit K.', text: 'Confirmed.' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Message in #q4-launch' }));
+    const excerpt = await screen.findByRole('group', { name: /Message excerpt/ });
+    await within(excerpt).findByText('Confirmed.');
+    expect(excerpt).toHaveTextContent('Message · #q4-launch');
+    expect(excerpt).not.toHaveTextContent(/\d\d:\d\d/);
+  });
 });
 
 describe('ProofSlip', () => {

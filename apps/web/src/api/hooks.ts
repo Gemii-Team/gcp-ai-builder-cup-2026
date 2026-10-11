@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useApi } from './client';
-import { channelsQuery, channelTasksQuery, fileQuery, meetingQuery, membersQuery, meQuery, usersQuery } from './queries';
+import { channelsQuery, channelTasksQuery, fileQuery, meetingQuery, membersQuery, meQuery, tasksQuery, usersQuery } from './queries';
 
 /** The signed-in user and workspace: the one `GetMe` query. */
 export function useMe() {
@@ -17,6 +17,11 @@ export function useChannels() {
 
 export function useMembers(channelId: string) {
   return useQuery(membersQuery(useApi(), channelId));
+}
+
+/** Every task of the channels the person belongs to: the one workspace-wide `ListTasks` the Board reads. */
+export function useTasks() {
+  return useQuery(tasksQuery(useApi()));
 }
 
 export function useChannelTasks(channelId: string) {

@@ -60,7 +60,7 @@ export function renderApp({
     id: 'app',
     component: () => (shell ? <AppShell client={client} /> : <Outlet />),
   });
-  const screens = [...routes, ...OTHER_SCREENS].map(({ path: screenPath, element }) =>
+  const screens = [...routes, ...OTHER_SCREENS.filter((other) => !routes.some((route) => route.path === other.path))].map(({ path: screenPath, element }) =>
     createRoute({ getParentRoute: () => layout, path: screenPath, component: () => element }),
   );
   const router = createRouter({
@@ -83,4 +83,17 @@ export function renderPlain(ui: ReactNode, { api = seedApi(createStubApi()), que
     </QueryClientProvider>,
   );
   return { api, queryClient, user };
+}
+
+/** The providers a hook needs (query cache, API clients, language), as the `wrapper` of `renderHook`. */
+export function hookWrapper(api: StubApi, queryClient: QueryClient) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ApiProvider api={api}>
+          <AppLanguage>{children}</AppLanguage>
+        </ApiProvider>
+      </QueryClientProvider>
+    );
+  };
 }

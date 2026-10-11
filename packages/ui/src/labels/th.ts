@@ -44,6 +44,7 @@ export const th: UiLabels = {
   transcriptHeaderUntimed: 'บทถอดเสียง · {title}',
   messageHeader: 'ข้อความ · #{channel} · {day} {time}',
   messageHeaderToday: 'ข้อความ · #{channel} · {time}',
+  messageHeaderUntimed: 'ข้อความ · #{channel}',
   documentHeader: 'เอกสาร · {file} · หน้า {page}',
   documentPage: 'หน้า {page} จาก {pages} · {ref}',
   documentPageNoCount: 'หน้า {page} · {ref}',

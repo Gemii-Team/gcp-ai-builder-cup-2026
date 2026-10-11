@@ -38,7 +38,7 @@ export type Excerpt =
       offsetMs: number | null;
       lines: { speaker: string | null; offsetMs: number | null; text: string }[];
     }
-  | { kind: 'message'; channel: string; day?: string; time: string; author: string; text: string }
+  | { kind: 'message'; channel: string; day?: string; /** Absent when the message's time is unknown: the excerpt then shows none. */ time?: string; author: string; text: string }
   | { kind: 'document'; file: string; ref: string; page: number; pages?: number; quote?: string };
 
 /** The one excerpt that is open: which link and row asked for it, and how far its loading has got. */

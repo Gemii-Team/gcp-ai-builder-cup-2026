@@ -48,6 +48,7 @@ export const en = {
   transcriptHeaderUntimed: 'Transcript · {title}',
   messageHeader: 'Message · #{channel} · {day} {time}',
   messageHeaderToday: 'Message · #{channel} · {time}',
+  messageHeaderUntimed: 'Message · #{channel}',
   documentHeader: 'Document · {file} · p. {page}',
   documentPage: 'Page {page} of {pages} · {ref}',
   documentPageNoCount: 'Page {page} · {ref}',

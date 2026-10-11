@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { formatOffset } from '../format';
 import { useLabels, type Labels } from '../labels';
 import { LangRuns } from '../LangRuns';
@@ -55,22 +55,25 @@ function ExcerptBody({ excerpt }: { excerpt: Excerpt }) {
       );
     }
     case 'message': {
-      const params = {
-        channel: <LangRuns text={excerpt.channel} />,
-        time: <Numeral>{excerpt.time}</Numeral>,
-      };
+      const channel = <LangRuns text={excerpt.channel} />;
+      // A message with no time is shown without one: the header and the line say nothing, never a wrong time.
+      const time = excerpt.time === undefined ? undefined : <Numeral>{excerpt.time}</Numeral>;
+      let header: ReactNode;
+      if (time === undefined) {
+        header = labels.node('messageHeaderUntimed', { channel });
+      } else if (excerpt.day === undefined) {
+        header = labels.node('messageHeaderToday', { channel, time });
+      } else {
+        header = labels.node('messageHeader', { channel, time, day: <LangRuns text={excerpt.day} /> });
+      }
       return (
         <>
-          <p className="kiwi-ex-h">
-            {excerpt.day === undefined
-              ? labels.node('messageHeaderToday', params)
-              : labels.node('messageHeader', { ...params, day: <LangRuns text={excerpt.day} /> })}
-          </p>
+          <p className="kiwi-ex-h">{header}</p>
           <div className="kiwi-ex-l">
             <b>
               <LangRuns text={excerpt.author} />
             </b>
-            <Numeral className="kiwi-ex-off text-carbon-copy">{excerpt.time}</Numeral>
+            {excerpt.time !== undefined && <Numeral className="kiwi-ex-off text-carbon-copy">{excerpt.time}</Numeral>}
             <span className="kiwi-ex-t">
               <LangRuns text={excerpt.text} />
             </span>

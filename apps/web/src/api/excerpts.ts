@@ -72,13 +72,13 @@ export function createExcerptLoader(api: Api, queryClient: QueryClient, lang: Ui
       }
       case 'message': {
         const channel = queryClient.getQueryData<ChannelView[]>(keys.channels())?.find((c) => c.id === source.channelId);
-        const at = source.at ?? new Date(0).toISOString();
-        const day = dayOf(at, lang);
+        // A source with no `at` has no known time: the excerpt names none (and no day) rather than a wrong one.
+        const day = source.at === undefined ? undefined : dayOf(source.at, lang);
         return {
           kind: 'message',
           channel: channel?.name ?? '',
           ...(day === undefined ? {} : { day }),
-          time: formatClock(at),
+          ...(source.at === undefined ? {} : { time: formatClock(source.at) }),
           author: source.label,
           text: await messageText(api, queryClient, source),
         };

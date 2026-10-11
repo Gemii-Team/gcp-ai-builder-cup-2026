@@ -1,12 +1,11 @@
-import { Code } from '@connectrpc/connect';
 import { formatDay, type BoardCounts, type DraftPatch, type DraftTask, type Member, type SealedTask } from '@kiwi/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useApi } from '../../api/client';
-import { hasCode } from '../../api/errors';
+import { confirmDraft } from '../../api/confirmDraft';
 import { useChannelTasks, useMe, useMembers } from '../../api/hooks';
 import { mapTask } from '../../api/mappers';
-import { keys, removeTask, writeTask } from '../../api/queries';
+import { writeTask } from '../../api/queries';
 import type { ChannelView, TaskView } from '../../api/types';
 import { useI18n } from '../../i18n';
 
@@ -42,36 +41,23 @@ export function useChannelDrafts(channel: ChannelView, ownerNameOf: (userId: str
   }
 
   async function onConfirm(id: string) {
-    try {
-      const { task } = await api.tasks.confirmDraft({ id });
-      if (task === undefined) {
-        throw new Error('ConfirmDraft answered without a task.');
-      }
-      const view = mapTask(task);
-      writeTask(queryClient, view);
-      const { source } = view;
-      if (source !== null) {
-        const ownerName = view.assigneeId === null ? undefined : ownerNameOf(view.assigneeId);
-        setSealed((slips) => [
-          {
-            id: view.id,
-            ref: view.ref,
-            title: view.title,
-            ...(ownerName === undefined ? {} : { ownerName }),
-            ...dueLabel(view),
-            source,
-            confirmedBy: me?.user.name ?? '',
-            confirmedAt: new Date().toISOString(),
-          },
-          ...slips,
-        ]);
-      }
-    } catch (error) {
-      if (hasCode(error, Code.NotFound) || hasCode(error, Code.Aborted)) {
-        removeTask(queryClient, { id, channelId: channel.id });
-        void queryClient.invalidateQueries({ queryKey: keys.tasks() });
-      }
-      throw error;
+    const view = await confirmDraft(api, queryClient, { id, channelId: channel.id });
+    const { source } = view;
+    if (source !== null) {
+      const ownerName = view.assigneeId === null ? undefined : ownerNameOf(view.assigneeId);
+      setSealed((slips) => [
+        {
+          id: view.id,
+          ref: view.ref,
+          title: view.title,
+          ...(ownerName === undefined ? {} : { ownerName }),
+          ...dueLabel(view),
+          source,
+          confirmedBy: me?.user.name ?? '',
+          confirmedAt: new Date().toISOString(),
+        },
+        ...slips,
+      ]);
     }
   }
 
