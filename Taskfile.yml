@@ -38,3 +38,28 @@ tasks:
       # sqlc cannot skip a domain whose query file does not exist yet, so the
       # script hands it a config with only the domains that have one.
       - bash scripts/gen-sqlc.sh
+
+  local:up:
+    desc: Create the k3d cluster, load .env into Secret kiwi-env and start Tilt (OVERLAY=local)
+    vars:
+      OVERLAY: '{{.OVERLAY | default "local"}}'
+    cmds:
+      - bash scripts/local/k3d-up.sh
+      - bash scripts/local/gen-env.sh
+      - bash scripts/local/load-env-secret.sh {{.OVERLAY}}
+      - tilt up -- --overlay {{.OVERLAY}}
+
+  local:down:
+    desc: Delete the k3d cluster, its registry and its volumes
+    cmds:
+      - k3d cluster delete kiwi
+
+  seed:
+    desc: Seed the workspace in the running cluster (flags after --, e.g. task seed -- --members a@b.c)
+    cmds:
+      - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi seed {{.CLI_ARGS}}
+
+  reindex:
+    desc: Rebuild the knowledge embeddings in the running cluster (after changing KIWI_EMBED_MODEL)
+    cmds:
+      - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi reindex {{.CLI_ARGS}}

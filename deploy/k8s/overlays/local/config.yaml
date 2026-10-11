@@ -1,0 +1,19 @@
+# The non-secret half of the process configuration. Secret values (LLM, OAuth,
+# keys, database URLs) are in the Secret kiwi-env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiwi-config
+  labels:
+    app.kubernetes.io/name: kiwi
+    app.kubernetes.io/part-of: kiwi
+data:
+  KIWI_ENV: local
+  KIWI_ROLES: api,realtime,worker,agents
+  KIWI_PUBLIC_URL: http://localhost:8080
+  KIWI_BUS_PROVIDER: memory
+  KIWI_BLOB_URL: file:///data/blobs
+  KIWI_VALKEY_URL: redis://valkey:6379
+  KIWI_LLM_PROVIDER: openai
+  KIWI_EMBED_BASE_URL: http://ollama:11434
+  KIWI_EMBED_MODEL: embeddinggemma

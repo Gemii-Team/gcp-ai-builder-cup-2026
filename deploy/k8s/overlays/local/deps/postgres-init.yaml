@@ -1,0 +1,26 @@
+# Environment bootstrap (not a migration: roles carry passwords). It runs once,
+# on the first start of an empty data directory: the database kiwi owned by
+# kiwi_owner, the pgvector extension (only a superuser may install it), and the
+# four roles the migrations grant to. Every role takes the password from the
+# environment (KIWI_DB_PASSWORD); this file holds no secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kiwi
+data:
+  10-kiwi-bootstrap.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 --no-psqlrc --username "$POSTGRES_USER" --dbname postgres <<'SQL'
+    \set pw `printf %s "$KIWI_DB_PASSWORD"`
+    CREATE ROLE kiwi_owner LOGIN PASSWORD :'pw';
+    CREATE ROLE kiwi_app LOGIN PASSWORD :'pw';
+    CREATE ROLE kiwi_system LOGIN BYPASSRLS PASSWORD :'pw';
+    CREATE ROLE kiwi_ro LOGIN PASSWORD :'pw';
+    CREATE DATABASE kiwi OWNER kiwi_owner;
+    \connect kiwi
+    CREATE EXTENSION vector;
+    SQL

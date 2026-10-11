@@ -1,0 +1,35 @@
+# The k3d Traefik serves http://localhost:8080 (k3d maps 8080 to its port 80).
+# The API and the WebSocket go to kiwi; everything else is the web app.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kiwi
+  labels:
+    app.kubernetes.io/name: kiwi
+    app.kubernetes.io/part-of: kiwi
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: kiwi
+                port:
+                  number: 8080
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: kiwi
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80

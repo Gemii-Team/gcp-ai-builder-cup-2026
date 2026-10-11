@@ -1,0 +1,114 @@
+# -*- mode: Python -*-
+# The local stack on the k3d cluster. `task local:up` starts it:
+#   tilt up -- --overlay local
+#
+# Start order: postgres -> migrate -> kiwi, ollama -> ollama-pull -> kiwi,
+# valkey -> kiwi. Each resource waits until its dependencies are ready; a Job
+# is ready when it has completed.
+
+KUBE_CONTEXT = 'k3d-kiwi'
+REGISTRY = 'kiwi-registry.localhost:5001'
+
+config.define_string('overlay')
+cfg = config.parse()
+overlay = cfg.get('overlay', 'local')
+if overlay != 'local':
+    fail("overlay '%s' is not available yet: only 'local' is accepted" % overlay)
+
+# Everything here is meant for the local cluster and nothing else.
+if k8s_context() != KUBE_CONTEXT:
+    fail("kubectl context is '%s', expected '%s'; run `task local:up`" % (k8s_context(), KUBE_CONTEXT))
+
+# The web app lives in apps/web, which may not be in this checkout yet.
+web_enabled = os.path.exists('apps/web/package.json')
+
+objects = kustomize('deploy/k8s/overlays/' + overlay)
+if not web_enabled:
+    _, objects = filter_yaml(objects, labels={'app.kubernetes.io/name': 'web'})
+k8s_yaml(objects)
+
+# kiwi: cross-compile on the host and wrap the binary in a one-layer image. The
+# runtime image is distroless (no shell, no tar), so Tilt's live_update cannot
+# sync into it; a rebuild is a compile and a COPY. The embedded migrations are
+# part of the binary, so a change under backend/db/migrations rebuilds this
+# image, which re-creates the migrate Job (same image) and so applies them.
+custom_build(
+    REGISTRY + '/kiwi',
+    command=' && '.join([
+        'out=$(mktemp -d)',
+        '(cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$out/kiwi" ./cmd/kiwi)',
+        'docker build -q -t $EXPECTED_REF -f deploy/local/kiwi.Dockerfile "$out"',
+        'rm -rf "$out"',
+    ]),
+    deps=[
+        'backend/cmd',
+        'backend/internal',
+        'backend/db/migrations',
+        'backend/gen',
+        'backend/go.mod',
+        'backend/go.sum',
+        'deploy/local/kiwi.Dockerfile',
+    ],
+    ignore=['**/*_test.go', 'backend/**/testdata'],
+)
+
+k8s_resource(
+    'postgres',
+    objects=['postgres-data:persistentvolumeclaim', 'postgres-init:configmap'],
+    labels=['deps'],
+)
+
+k8s_resource(
+    'valkey',
+    labels=['deps'],
+)
+
+k8s_resource(
+    'ollama',
+    objects=['ollama-data:persistentvolumeclaim'],
+    labels=['deps'],
+)
+
+k8s_resource(
+    'ollama-pull',
+    resource_deps=['ollama'],
+    labels=['deps'],
+)
+
+k8s_resource(
+    'migrate',
+    resource_deps=['postgres'],
+    labels=['app'],
+)
+
+k8s_resource(
+    'kiwi',
+    objects=['kiwi-config:configmap', 'kiwi-data:persistentvolumeclaim', 'kiwi:ingress'],
+    resource_deps=['migrate', 'ollama-pull', 'valkey'],
+    links=[link('http://localhost:8080', 'K.I.W.I.')],
+    labels=['app'],
+)
+
+if web_enabled:
+    # The host builds the bundle; a change is synced into the running Caddy
+    # container (apps/web/Dockerfile serves /srv) instead of rebuilding the image.
+    local_resource(
+        'web-build',
+        cmd='pnpm --filter web build',
+        deps=['apps/web/src', 'apps/web/public', 'apps/web/index.html', 'apps/web/vite.config.ts', 'packages'],
+        ignore=['**/node_modules', '**/dist'],
+        labels=['web'],
+    )
+    docker_build(
+        REGISTRY + '/web',
+        '.',
+        dockerfile='apps/web/Dockerfile',
+        only=['apps/web', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json'],
+        ignore=['**/node_modules'],
+        live_update=[sync('apps/web/dist', '/srv')],
+    )
+    k8s_resource(
+        'web',
+        resource_deps=['web-build', 'kiwi'],
+        labels=['app'],
+    )

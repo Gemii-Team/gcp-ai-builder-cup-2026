@@ -1,0 +1,26 @@
+# The local cluster: `task local:up` creates it, `task local:down` deletes it.
+# One server and one agent on a pinned k3s; the bundled Traefik is the ingress
+# controller, reachable at http://localhost:8080 (the overlay's Ingress and
+# KIWI_PUBLIC_URL assume that port).
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: kiwi
+servers: 1
+agents: 1
+image: rancher/k3s:v1.34.12-k3s1
+ports:
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+# The registry Tilt pushes the kiwi and web images to. k3d wires it into every
+# node and advertises it in the kube-public/local-registry-hosting ConfigMap.
+registries:
+  create:
+    name: kiwi-registry.localhost
+    host: 0.0.0.0
+    hostPort: "5001"
+options:
+  k3d:
+    wait: true
+    timeout: 300s
