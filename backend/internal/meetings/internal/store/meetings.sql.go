@@ -41,6 +41,46 @@ func (q *Queries) GetMeeting(ctx context.Context, id uuid.UUID) (MeetingsMeeting
 	return i, err
 }
 
+const getMeetingByRecording = `-- name: GetMeetingByRecording :one
+SELECT id, workspace_id, channel_id, owner_user_id, ref, title, meet_space, recording_file_id, meet_uri, conference_record, status, failure_reason, last_entry_count, started_at, ended_at, created_at FROM meetings.meetings
+WHERE channel_id = $1
+  AND recording_file_id = $2::uuid
+  AND status <> 'failed'
+ORDER BY created_at, id
+LIMIT 1
+`
+
+type GetMeetingByRecordingParams struct {
+	ChannelID       uuid.UUID
+	RecordingFileID uuid.UUID
+}
+
+// The meeting a recording of a channel was already made into, unless it failed: a failed
+// meeting is retried, and a recording that failed can be made into a new meeting.
+func (q *Queries) GetMeetingByRecording(ctx context.Context, arg GetMeetingByRecordingParams) (MeetingsMeeting, error) {
+	row := q.db.QueryRow(ctx, getMeetingByRecording, arg.ChannelID, arg.RecordingFileID)
+	var i MeetingsMeeting
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.OwnerUserID,
+		&i.Ref,
+		&i.Title,
+		&i.MeetSpace,
+		&i.RecordingFileID,
+		&i.MeetUri,
+		&i.ConferenceRecord,
+		&i.Status,
+		&i.FailureReason,
+		&i.LastEntryCount,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getSummary = `-- name: GetSummary :one
 SELECT meeting_id, workspace_id, summary, decisions, open_questions, created_at FROM meetings.summaries WHERE meeting_id = $1
 `
@@ -330,6 +370,17 @@ func (q *Queries) LockMeeting(ctx context.Context, id uuid.UUID) (MeetingsMeetin
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const lockRecording = `-- name: LockRecording :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Serialises the creation of meetings from one recording file until the transaction
+// ends, so a double click makes one meeting, not two.
+func (q *Queries) LockRecording(ctx context.Context, recordingKey string) error {
+	_, err := q.db.Exec(ctx, lockRecording, recordingKey)
+	return err
 }
 
 const markMeetingFailed = `-- name: MarkMeetingFailed :one

@@ -94,9 +94,25 @@ var weekdays = map[string]time.Weekday{
 // and the days are counted from meetingEnd's date in Bangkok, not in UTC: a meeting that
 // ended at 18:30 UTC ended on the next day, 01:30, in Bangkok. Anything else, a date
 // that does not exist or a phrase such as "soon", is nil: free text is never parsed.
+//
+// A date is also nil when it falls outside the window of a task that someone could mean:
+// from the year before the meeting to ten years after it, in Bangkok. 0001-01-01 is no
+// due date and cannot be stored as one, and 2569-10-16 is a Buddhist Era year that
+// slipped through the model's conversion: either would reach the board as a draft with a
+// wrong date, and a wrong guess must be an empty field.
 func ResolveDue(hint string, meetingEnd time.Time) *time.Time {
 	hint = strings.ToLower(strings.TrimSpace(hint))
 	y, m, d := meetingEnd.In(bangkok).Date()
+	due := dueDay(hint, y, m, d)
+	if due == nil || due.Year() < y-1 || due.Year() > y+10 {
+		return nil
+	}
+	return due
+}
+
+// dueDay resolves hint against the meeting day y-m-d, in Bangkok, without judging the
+// year it lands in.
+func dueDay(hint string, y int, m time.Month, d int) *time.Time {
 	day := func(offset int) *time.Time {
 		t := time.Date(y, m, d+offset, 0, 0, 0, 0, bangkok)
 		return &t

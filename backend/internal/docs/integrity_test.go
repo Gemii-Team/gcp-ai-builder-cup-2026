@@ -345,13 +345,12 @@ func TestCompleteUpload_Recording_MustCarryAudio(t *testing.T) {
 	alice := f.user(f.alice)
 
 	accepted := map[string][]byte{
-		"a data chunk of its declared size":           wavData(3200, 3200),
-		"a streaming writer's size of 0xFFFFFFFF":     wavData(0xFFFFFFFF, 3200),
-		"a streaming writer's size of 0":              wavData(0, 3200),
-		"a data size larger than the file":            wavData(1<<20, 3200),
-		"one frame of audio":                          wavData(2, 2),
-		"chunks between the fmt and the data chunk":   riff("WAVE", chunk("fmt ", fmtBody(1, 2, 44100, 16)), chunk("LIST", make([]byte, 5000)), append(append([]byte("data"), binary.LittleEndian.AppendUint32(nil, 4000)...), make([]byte, 4000)...)),
-		"a JUNK chunk of 20 KiB before the fmt chunk": wavData(3200, 3200, chunk("JUNK", make([]byte, 20<<10))),
+		"a data chunk of its declared size":           wavData(16000, 16000),
+		"exactly a quarter of a second of audio":      wavData(8000, 8000),
+		"a streaming writer's size of 0xFFFFFFFF":     wavData(0xFFFFFFFF, 16000),
+		"a streaming writer's size of 0":              wavData(0, 16000),
+		"chunks between the fmt and the data chunk":   riff("WAVE", chunk("fmt ", fmtBody(1, 2, 44100, 16)), chunk("LIST", make([]byte, 5000)), append(append([]byte("data"), binary.LittleEndian.AppendUint32(nil, 50000)...), make([]byte, 50000)...)),
+		"a JUNK chunk of 20 KiB before the fmt chunk": wavData(16000, 16000, chunk("JUNK", make([]byte, 20<<10))),
 	}
 	for name, body := range accepted {
 		id := f.upload(alice, ch, "m.wav", "audio/wav", recording, body)
@@ -364,10 +363,14 @@ func TestCompleteUpload_Recording_MustCarryAudio(t *testing.T) {
 		"a header and no audio, 44 bytes":     wavData(0, 0),
 		"a data chunk declared and cut off":   wavData(3200, 0),
 		"a data chunk of less than a frame":   wavData(1, 1),
+		"one frame of audio":                  wavData(2, 2),
+		"a tenth of a second of audio":        wavData(3200, 3200),
+		"a frame short of a quarter second":   wavData(7998, 7998),
+		"a data size larger than the file":    wavData(1<<20, 16000),
 		"a data chunk that is declared empty": wavData(0, 0, chunk("LIST", make([]byte, 20))),
-		"the data chunk before the fmt chunk": riff("WAVE", chunk("data", make([]byte, 3200)), chunk("fmt ", fmtBody(1, 1, 16000, 16))),
+		"the data chunk before the fmt chunk": riff("WAVE", chunk("data", make([]byte, 16000)), chunk("fmt ", fmtBody(1, 1, 16000, 16))),
 		"the fmt chunk and no data chunk":     riff("WAVE", chunk("fmt ", fmtBody(1, 1, 16000, 16)), chunk("LIST", make([]byte, 100))),
-		"the data chunk past the head":        riff("WAVE", chunk("fmt ", fmtBody(1, 1, 16000, 16)), chunk("JUNK", make([]byte, 70<<10)), chunk("data", make([]byte, 3200))),
+		"the data chunk past the head":        riff("WAVE", chunk("fmt ", fmtBody(1, 1, 16000, 16)), chunk("JUNK", make([]byte, 70<<10)), chunk("data", make([]byte, 16000))),
 	}
 	for name, body := range rejected {
 		id := f.upload(alice, ch, "m.wav", "audio/wav", recording, body)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"kiwi/internal/platform/llm"
+	wavcheck "kiwi/internal/platform/wav" // aliased: the package's tests have a wav helper of their own
 )
 
 const (
@@ -27,61 +28,17 @@ type wavAudio struct {
 
 func (a wavAudio) frame() int { return int(a.channels) * 2 }
 
-// parseWAV reads the audio out of a RIFF/WAVE file whose fmt chunk says PCM, 16 bits,
-// mono or stereo, at any sample rate: what upload accepts and what the ASR decodes.
-// The ASR answers anything else with an HTTP 500 that puts the deployment into a
-// cooldown for everybody, so it is refused here, before a request. A data chunk whose
-// size is 0 or 0xFFFFFFFF, as streaming writers leave it, runs to the end of the file.
+// parseWAV reads the audio out of a PCM 16-bit WAV file. wav.Check is the rule for what
+// that is (the one upload applies and the ASR decodes): the ASR answers anything else
+// with an HTTP 500 that puts the deployment into a cooldown for everybody, so it is
+// refused here, before a request.
 func parseWAV(b []byte) (wavAudio, error) {
-	bad := func(why string) (wavAudio, error) {
-		return wavAudio{}, fmt.Errorf("%w: the audio is not a PCM 16-bit WAV file: %s", llm.ErrUnsupportedByProvider, why)
+	f, err := wavcheck.Check(b, int64(len(b)))
+	if err != nil {
+		return wavAudio{}, fmt.Errorf("%w: %w", llm.ErrUnsupportedByProvider, err)
 	}
-	if len(b) < 12 || string(b[0:4]) != "RIFF" || string(b[8:12]) != "WAVE" {
-		return bad("no RIFF/WAVE header")
-	}
-	le := binary.LittleEndian
-	var a wavAudio
-	for off := int64(12); off+8 <= int64(len(b)); {
-		id, size := string(b[off:off+4]), int64(le.Uint32(b[off+4:off+8]))
-		body := off + 8
-		switch id {
-		case "fmt ":
-			if size < 16 || body+16 > int64(len(b)) {
-				return bad("truncated fmt chunk")
-			}
-			format, channels := le.Uint16(b[body:]), le.Uint16(b[body+2:])
-			rate, bits := le.Uint32(b[body+4:]), le.Uint16(b[body+14:])
-			if format != 1 || (channels != 1 && channels != 2) || bits != 16 || rate == 0 {
-				return bad(fmt.Sprintf("format %d, %d channels, %d bits, %d Hz", format, channels, bits, rate))
-			}
-			a.rate, a.channels = rate, channels
-		case "data":
-			if a.channels == 0 {
-				return bad("the data chunk comes before the fmt chunk")
-			}
-			n := int64(len(b)) - body
-			if size != 0 && size != 0xFFFFFFFF {
-				n = min(size, n)
-			}
-			n -= n % int64(a.frame())
-			if n == 0 {
-				return bad("the data chunk holds no audio")
-			}
-			a.data = b[body : body+n]
-			return a, nil
-		}
-		// Chunks are padded to an even size. size is untrusted: a chunk that runs past
-		// the end of the file ends the scan.
-		next := body + size + size&1
-		if next > int64(len(b)) {
-			break
-		}
-		off = next
-	}
-	if a.channels == 0 {
-		return bad("no fmt chunk")
-	}
-	return bad("no data chunk")
+	n := f.DataLen - f.DataLen%f.FrameSize()
+	return wavAudio{rate: f.SampleRate, channels: f.Channels, data: b[f.DataOffset : f.DataOffset+n]}, nil
 }
 
 // windows cuts the audio into asrWindowSeconds pieces; the last is shorter, unless

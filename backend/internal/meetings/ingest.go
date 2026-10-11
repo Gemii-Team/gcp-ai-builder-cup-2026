@@ -90,10 +90,15 @@ type pipeline struct {
 	blob       blob.Store
 	llm        llm.Client
 	clock      func() time.Time
+	// transcripts holds what the transcription model heard until the meeting is done.
+	transcripts *transcriptCache
 }
 
 func newPipeline(d Deps) *pipeline {
-	return &pipeline{db: d.DB, chat: d.Chat, google: d.Google, summarizer: d.Summarizer, blob: d.Blob, llm: d.LLM, clock: clockOf(d)}
+	return &pipeline{
+		db: d.DB, chat: d.Chat, google: d.Google, summarizer: d.Summarizer, blob: d.Blob, llm: d.LLM, clock: clockOf(d),
+		transcripts: newTranscriptCache(maxCachedTranscripts),
+	}
 }
 
 // decodeEvent reads a bus message into ev.

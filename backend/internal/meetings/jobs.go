@@ -47,8 +47,7 @@ func Jobs(d Deps) []bus.Job {
 		{
 			Consumer: consumerTranscribe,
 			Topics:   []string{events.TopicMeetingTranscribe},
-			Handler: settleOnFinalDelivery(d.DB, outbox.Once(d.DB, consumerTranscribe, p.prepareTranscribe),
-				func(m bus.Message) (uuid.UUID, uuid.UUID, error) { return meetingOf(m, &eventsv1.MeetingTranscribe{}) }),
+			Handler:  p.forgetSettled(settleOnFinalDelivery(d.DB, outbox.Once(d.DB, consumerTranscribe, p.prepareTranscribe), transcribeTarget), transcribeTarget),
 		},
 	}
 }
@@ -58,6 +57,28 @@ type meetingEvent interface {
 	proto.Message
 	GetWorkspaceId() string
 	GetMeetingId() string
+}
+
+// transcribeTarget names the workspace and the meeting a meeting.transcribe message is about.
+func transcribeTarget(m bus.Message) (workspace, meeting uuid.UUID, err error) {
+	return meetingOf(m, &eventsv1.MeetingTranscribe{})
+}
+
+// forgetSettled wraps the meeting.transcribe handler h: once a message is acknowledged
+// the meeting it was about is done with its transcript (it is ready or failed, or the
+// message was about a meeting there is nothing to do for), and the transcript the job
+// kept for it is dropped. A message that is nacked keeps it, for the delivery that
+// follows. A Retry of a failed meeting therefore transcribes the recording again.
+func (p *pipeline) forgetSettled(h bus.Handler, target func(bus.Message) (workspace, meeting uuid.UUID, err error)) bus.Handler {
+	return func(ctx context.Context, m bus.Message) error {
+		err := h(ctx, m)
+		if err == nil {
+			if _, meeting, terr := target(m); terr == nil {
+				p.transcripts.drop(meeting)
+			}
+		}
+		return err
+	}
 }
 
 // meetingOf decodes m into ev and returns the workspace and meeting it names.

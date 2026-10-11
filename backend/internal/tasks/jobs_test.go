@@ -349,11 +349,72 @@ func TestTaskDraftJob_MemberLookupFailure_NacksAndLeavesNothing(t *testing.T) {
 	}
 }
 
-func TestJobs_RequireTheMemberLookup(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Jobs without a member lookup did not fail at wiring time, which would be a nil dereference in the middle of a job")
+func TestJobs_RequireBothMemberLookups(t *testing.T) {
+	channelMembers := func(context.Context, authz.Actor, uuid.UUID) ([]*chatv1.Member, error) { return nil, nil }
+	memberChannels := func(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) { return nil, nil }
+	panics := func(d Deps) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		Jobs(d)
+		return false
+	}
+
+	// Each lookup is used in the middle of a job (the members to resolve owners from, the
+	// member channels to check an owner before a draft is written): a missing one must stop
+	// the wiring, not a message.
+	for name, d := range map[string]Deps{
+		"no lookups":         {},
+		"no member channels": {ChannelMembers: channelMembers},
+		"no channel members": {MemberChannels: memberChannels},
+	} {
+		if !panics(d) {
+			t.Errorf("%s: Jobs did not fail at wiring time, which would be a nil dereference in the middle of a job", name)
 		}
-	}()
-	Jobs(Deps{})
+	}
+	if panics(Deps{ChannelMembers: channelMembers, MemberChannels: memberChannels}) {
+		t.Error("Jobs with both lookups panicked")
+	}
+}
+
+// A due date a timestamp cannot hold is left off its draft. It is never the reason a
+// meeting's whole batch is refused: the drafts are written in one transaction, and an
+// error there would be delivered again until every draft of the meeting was lost.
+func TestTaskDraftJob_AnUnstorableDueDateLeavesTheDraftWithoutIt(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	job := f.draftJob(nil)
+
+	// A meeting on the last days of year 9999: +3d is in the year 10000. A meeting on the
+	// first days of year 1: 0001-01-01 in Bangkok is before the first instant a timestamp
+	// has. Both are inside the window ResolveDue allows around a meeting.
+	edge9999 := time.Date(9999, 12, 30, 0, 0, 0, 0, time.UTC)
+	edge0001 := time.Date(1, 1, 2, 10, 0, 0, 0, time.UTC)
+	if err := job(t.Context(), f.draftEvent(ch, uuid.New(), f.alice, &edge9999,
+		item("Plan the next millennium", "Alice", "+3d", 1, nil),
+		item("Close the books", "Alice", "9999-12-31", 2, nil),
+	)); err != nil {
+		t.Fatalf("a meeting at the end of year 9999: %v, want its drafts written", err)
+	}
+	if err := job(t.Context(), f.draftEvent(ch, uuid.New(), f.alice, &edge0001,
+		item("Date the founding charter", "Alice", "0001-01-01", 1, nil),
+		item("Plan the next day", "Alice", "+1d", 2, nil),
+	)); err != nil {
+		t.Fatalf("a meeting in year 1: %v, want its drafts written", err)
+	}
+
+	got := f.drafts(ch)
+	if len(got) != 4 {
+		t.Fatalf("drafts = %v, want all four: a due date that cannot be stored must not cost a meeting its drafts", got)
+	}
+	for _, title := range []string{"Plan the next millennium", "Date the founding charter"} {
+		if got[title].DueAt != nil || got[title].GetAssigneeId() != f.alice.String() {
+			t.Errorf("%q = due %v, assignee %q, want no due date and its owner", title, got[title].GetDueAt(), got[title].GetAssigneeId())
+		}
+	}
+	// What can be stored is: the last day of 9999, and the day after the first of year 1.
+	if due := got["Close the books"].GetDueAt(); due == nil || due.CheckValid() != nil {
+		t.Errorf("Close the books = due %v, want the last day of year 9999", due)
+	}
+	if due := got["Plan the next day"].GetDueAt(); due == nil || due.CheckValid() != nil {
+		t.Errorf("Plan the next day = due %v, want a valid date", due)
+	}
 }

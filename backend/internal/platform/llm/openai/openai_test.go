@@ -1290,7 +1290,7 @@ func TestTranscribe_ChunksLongAudioInto20SecondWindows(t *testing.T) {
 		{"exactly one window", 16000, 1, []int{20 * 16 * k}},
 		{"a tail under a second joins the last window: 20.5 s is one request", 16000, 1, []int{20*16*k + 8*k}},
 		{"a tail under a second joins the last window: 40.5 s is two", 16000, 1, []int{20 * 16 * k, 20*16*k + 8*k}},
-		{"a tenth of a second", 16000, 1, []int{1600}},
+		{"a quarter of a second, the least a recording has", 16000, 1, []int{4 * k}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			frame, total := int(tc.channels)*2, 0
@@ -1370,7 +1370,6 @@ func TestTranscribe_ReadsTheWAVsItSupports(t *testing.T) {
 		"a trailing chunk after the data":      wav(16000, 1, 16, data, nil, [][]byte{append([]byte("LIST"), append([]byte{4, 0, 0, 0}, []byte("tail")...)...)}),
 		"a streaming writer's 0xFFFFFFFF size": wavTagged(1, 16000, 1, 16, data, nil, nil, 0xFFFFFFFF),
 		"a streaming writer's zero size":       wavTagged(1, 16000, 1, 16, data, nil, nil, 0),
-		"a data size that overruns the file":   wavTagged(1, 16000, 1, 16, data, nil, nil, uint32(len(data))+1000),
 	} {
 		t.Run(name, func(t *testing.T) {
 			cn := newCanned(transcribeReply("Hello there."))
@@ -1390,21 +1389,26 @@ func TestTranscribe_RefusesWhatIsNotPCM16WAV_WithoutARequest(t *testing.T) {
 	data := tone(16000)
 	mp4 := append([]byte{0, 0, 0, 0x20}, []byte("ftypisom\x00\x00\x02\x00isomiso2avc1mp41")...)
 	for name, audio := range map[string][]byte{
-		"nothing":                    nil,
-		"a header only":              []byte("RIFF"),
-		"an MP4":                     mp4,
-		"WebM":                       append([]byte{0x1a, 0x45, 0xdf, 0xa3}, make([]byte, 100)...),
-		"an MP3 with an ID3 tag":     append([]byte("ID3\x04\x00\x00"), make([]byte, 100)...),
-		"RIFF but not WAVE":          append([]byte("RIFF\x24\x00\x00\x00AVI "), make([]byte, 100)...),
-		"a WAV of 32-bit float":      wavTagged(3, 16000, 1, 32, data, nil, nil, uint32(len(data))),
-		"a WAV of 8-bit samples":     wav(16000, 1, 8, data, nil, nil),
-		"a WAV of 24-bit samples":    wav(16000, 1, 24, data, nil, nil),
-		"a µ-law WAV":                wavTagged(7, 8000, 1, 8, data, nil, nil, uint32(len(data))),
-		"a WAV with six channels":    wav(16000, 6, 16, data, nil, nil),
-		"a WAV at 0 Hz":              wav(0, 1, 16, data, nil, nil),
-		"a WAV without a data chunk": wav(16000, 1, 16, nil, [][]byte{}, nil)[:36],
-		"a WAV with an empty data":   wav(16000, 1, 16, nil, nil, nil),
-		"a WAV of one byte of audio": wavTagged(1, 16000, 1, 16, []byte{1}, nil, nil, 1),
+		"nothing":                            nil,
+		"a header only":                      []byte("RIFF"),
+		"an MP4":                             mp4,
+		"WebM":                               append([]byte{0x1a, 0x45, 0xdf, 0xa3}, make([]byte, 100)...),
+		"an MP3 with an ID3 tag":             append([]byte("ID3\x04\x00\x00"), make([]byte, 100)...),
+		"RIFF but not WAVE":                  append([]byte("RIFF\x24\x00\x00\x00AVI "), make([]byte, 100)...),
+		"a WAV of 32-bit float":              wavTagged(3, 16000, 1, 32, data, nil, nil, uint32(len(data))),
+		"a WAV of 8-bit samples":             wav(16000, 1, 8, data, nil, nil),
+		"a WAV of 24-bit samples":            wav(16000, 1, 24, data, nil, nil),
+		"a µ-law WAV":                        wavTagged(7, 8000, 1, 8, data, nil, nil, uint32(len(data))),
+		"a WAV with six channels":            wav(16000, 6, 16, data, nil, nil),
+		"a WAV at 0 Hz":                      wav(0, 1, 16, data, nil, nil),
+		"a WAV without a data chunk":         wav(16000, 1, 16, nil, [][]byte{}, nil)[:36],
+		"a WAV with an empty data":           wav(16000, 1, 16, nil, nil, nil),
+		"a WAV of one byte of audio":         wavTagged(1, 16000, 1, 16, []byte{1}, nil, nil, 1),
+		"a data size that overruns the file": wavTagged(1, 16000, 1, 16, data, nil, nil, uint32(len(data))+1000),
+		"a WAV at 1 Hz":                      wav(1, 1, 16, data, nil, nil),
+		"a WAV at 7999 Hz":                   wav(7999, 1, 16, data, nil, nil),
+		"a WAV at 96001 Hz":                  wav(96001, 1, 16, data, nil, nil),
+		"a tenth of a second of audio":       wav(16000, 1, 16, tone(1600), nil, nil),
 		"data before fmt": append([]byte("RIFF\x30\x00\x00\x00WAVEdata\x04\x00\x00\x00\x01\x02\x03\x04fmt \x10\x00\x00\x00"),
 			1, 0, 1, 0, 0x80, 0x3e, 0, 0, 0, 0x7d, 0, 0, 2, 0, 16, 0),
 	} {

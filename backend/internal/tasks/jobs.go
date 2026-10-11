@@ -29,8 +29,8 @@ const consumerDraft = "task.draft"
 // Jobs returns the consumers of the tasks domain for the composition root to register:
 // task.draft, which turns the action items of a summarized meeting into draft tasks.
 func Jobs(d Deps) []bus.Job {
-	if d.ChannelMembers == nil {
-		panic("tasks: Deps.ChannelMembers is required by the task.draft job")
+	if d.ChannelMembers == nil || d.MemberChannels == nil {
+		panic("tasks: Deps.ChannelMembers and Deps.MemberChannels are required by the task.draft job")
 	}
 	j := &drafter{svc: New(d), members: d.ChannelMembers}
 	return []bus.Job{{
@@ -49,12 +49,13 @@ type drafter struct {
 // who and when; here code decides. An owner hint becomes the one member of the meeting's
 // channel it names, and stays empty when it names none or several (ResolveOwner); a due
 // hint becomes a day in Asia/Bangkok counted from the meeting's date, and stays empty
-// when it is "none", is not in the grammar, or the event has no date (ResolveDue). Every
-// action item becomes a draft in the channel, in one transaction, with the meeting as
-// its source: the transcript entry it was said in as the anchor (none for an item that
-// names no entry, meetings.NoSourceEntry) and that entry's start as the offset (none for
-// an entry without timing). Drafts are made by the job as the agent acting for the
-// meeting's owner; a person confirms them, which is the only way they become tasks.
+// when it is "none", is not in the grammar, lies far from the meeting, or the event has
+// no date (ResolveDue). Every action item becomes a draft in the channel, in one
+// transaction, with the meeting as its source: the transcript entry it was said in as
+// the anchor (none for an item that names no entry, meetings.NoSourceEntry) and that
+// entry's start as the offset (none for an entry without timing). Drafts are made by the
+// job as the agent acting for the meeting's owner; a person confirms them, which is the
+// only way they become tasks.
 //
 // An item without a title is skipped. The write is exactly-once per event, and all
 // drafts or none: an error, such as a member who left the channel between the lookup and
@@ -118,8 +119,13 @@ func (j *drafter) prepare(ctx context.Context, m bus.Message) (outbox.Apply, err
 			req.AssigneeId = proto.String(id.String())
 		}
 		if date != nil {
+			// ResolveDue keeps a date near the meeting, but a meeting at the edge of what a
+			// timestamp can hold has a neighbourhood that is not all valid: such a date is
+			// left off. It is never the reason a whole meeting's drafts are refused.
 			if due := meetings.ResolveDue(it.GetDueHint(), *date); due != nil {
-				req.DueAt = timestamppb.New(*due)
+				if ts := timestamppb.New(*due); ts.CheckValid() == nil {
+					req.DueAt = ts
+				}
 			}
 		}
 		reqs = append(reqs, req)

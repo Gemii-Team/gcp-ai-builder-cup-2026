@@ -1147,9 +1147,10 @@ func riff(form string, chunks ...[]byte) []byte {
 	return append(append([]byte("RIFF"), binary.LittleEndian.AppendUint32(nil, uint32(len(body)))...), body...)
 }
 
-// wav is a WAV file of 0.1 s of silence whose fmt chunk says what is given, after any
-// chunks that come first.
+// wav is a WAV file whose fmt chunk says what is given, after any chunks that come first,
+// with 48 000 bytes of silence: over a quarter of a second at every rate and channel
+// count the tests use, which is the least a recording may have.
 func wav(format, channels uint16, rate uint32, bits uint16, before ...[]byte) []byte {
-	chunks := append(slices.Clone(before), chunk("fmt ", fmtBody(format, channels, rate, bits)), chunk("data", make([]byte, 3200)))
+	chunks := append(slices.Clone(before), chunk("fmt ", fmtBody(format, channels, rate, bits)), chunk("data", make([]byte, 48000)))
 	return riff("WAVE", chunks...)
 }

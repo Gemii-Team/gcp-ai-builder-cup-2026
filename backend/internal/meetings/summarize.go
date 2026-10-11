@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	meetingsv1 "kiwi/gen/kiwi/meetings/v1"
 	"kiwi/internal/platform/llm"
@@ -20,6 +21,11 @@ const (
 	// summaryMaxTokens leaves room for a summary and its lists; the adapter adds its own
 	// headroom for the model's reasoning.
 	summaryMaxTokens = 4096
+	// maxActionItems is how many action items of a meeting are kept, and so how many
+	// drafts a meeting can make.
+	maxActionItems = 50
+	// maxActionTitleRunes is the longest title an action item keeps.
+	maxActionTitleRunes = 200
 )
 
 // ErrTranscriptTooLong means the transcript is longer than one call to the model takes.
@@ -111,7 +117,9 @@ type modelItem struct {
 // ErrTranscriptTooLong before the model is asked. Any other error, a failed call or an
 // answer that is not the requested JSON, may pass on another try. In the Summary, texts
 // are clean and non-empty and an entry ref names an entry the transcript has; a finding
-// the model left without text is dropped.
+// the model left without text is dropped. A model that lists more than maxActionItems
+// action items is kept to the first ones, and a title is cut to maxActionTitleRunes: the
+// drafts made from them stay a list a person can review.
 func (s *summarizer) Summarize(ctx context.Context, in SummarizeInput) (Summary, error) {
 	transcript := renderTranscript(in.Entries)
 	if n := llm.EstimateTokens(transcript); n > maxTranscriptTokens {
@@ -154,7 +162,10 @@ func (s *summarizer) Summarize(ctx context.Context, in SummarizeInput) (Summary,
 	}
 	sum.Decisions, sum.OpenQuestions = items(out.Decisions), items(out.OpenQuestions)
 	for _, ai := range out.ActionItems {
-		if title := tidy(ai.Title); title != "" {
+		if len(sum.ActionItems) == maxActionItems {
+			break
+		}
+		if title := truncateRunes(tidy(ai.Title), maxActionTitleRunes); title != "" {
 			sum.ActionItems = append(sum.ActionItems, ActionItem{
 				Title: title, OwnerHint: tidy(ai.OwnerHint), DueHint: tidy(ai.DueHint), EntryRefs: knownRefs(ai.EntryRefs, known),
 			})
@@ -165,6 +176,14 @@ func (s *summarizer) Summarize(ctx context.Context, in SummarizeInput) (Summary,
 
 // tidy is text the model wrote, cleaned and without the space around it.
 func tidy(s string) string { return strings.TrimSpace(cleanText(s)) }
+
+// truncateRunes cuts s to at most n runes, without the space the cut leaves at its end.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return strings.TrimSpace(string([]rune(s)[:n]))
+}
 
 // knownRefs keeps, in order and once each, the refs that name an entry of the transcript.
 func knownRefs(refs []int, known map[int]bool) []int {

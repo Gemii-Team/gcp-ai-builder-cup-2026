@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -19,6 +21,7 @@ import (
 	eventsv1 "kiwi/gen/kiwi/events/v1"
 	filesv1 "kiwi/gen/kiwi/files/v1"
 	meetingsv1 "kiwi/gen/kiwi/meetings/v1"
+	"kiwi/internal/meetings/internal/store"
 	"kiwi/internal/platform/authz"
 	"kiwi/internal/platform/bus"
 	"kiwi/internal/platform/errs"
@@ -26,6 +29,8 @@ import (
 	"kiwi/internal/platform/google"
 	"kiwi/internal/platform/llm"
 	"kiwi/internal/platform/outbox"
+	"kiwi/internal/platform/wav"
+	"kiwi/internal/testkit/fakeblob"
 	"kiwi/internal/testkit/fakegoogle"
 	"kiwi/internal/testkit/fakellm"
 )
@@ -348,6 +353,12 @@ func TestResolveDue_Grammar(t *testing.T) {
 		"2026-10-16Z":   "",
 		"2026-10-16T09": "",
 		"16/10/2026":    "",
+		// A date nobody means: year 1 cannot be stored as a due date, and 2569 is the Buddhist
+		// Era year that was not converted. A wrong guess is an empty field.
+		"0001-01-01": "",
+		"0000-12-31": "",
+		"2569-10-16": "",
+		"9999-12-31": "",
 	} {
 		got := ResolveDue(hint, end)
 		switch {
@@ -428,8 +439,8 @@ func wavBytes(format, channels, bits uint16, rate uint32, frames int) []byte {
 	return b.Bytes()
 }
 
-// speech is a PCM 16-bit mono WAV of a tenth of a second.
-var speech = wavBytes(1, 1, 16, 16000, 1600)
+// speech is a PCM 16-bit mono WAV of half a second.
+var speech = wavBytes(1, 1, 16, 16000, 8000)
 
 // fileReply is what the fixture's FileChecker answers for a file.
 type fileReply struct {
@@ -694,15 +705,21 @@ func TestTranscribe_RecordingIsCheckedAgainBeforeTheModelSeesIt(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("public", f.alice)
 
+	// A data chunk that says it holds more than the file has.
+	lying := slices.Clone(speech)
+	binary.LittleEndian.PutUint32(lying[40:], 1<<20)
 	bad := map[string][]byte{
 		"an MP3 under a WAV label":  append([]byte("ID3\x03\x00\x00\x00\x00\x00\x00"), make([]byte, 4000)...),
 		"an MP4":                    append([]byte("\x00\x00\x00\x18ftypmp42"), make([]byte, 4000)...),
-		"a float WAV":               wavBytes(3, 1, 32, 16000, 1600),
-		"a 24-bit WAV":              wavBytes(1, 1, 24, 16000, 1600),
-		"a WAV with six channels":   wavBytes(1, 6, 16, 16000, 1600),
+		"a float WAV":               wavBytes(3, 1, 32, 16000, 8000),
+		"a 24-bit WAV":              wavBytes(1, 1, 24, 16000, 8000),
+		"a WAV with six channels":   wavBytes(1, 6, 16, 16000, 8000),
 		"a WAV without a sample":    wavBytes(1, 1, 16, 16000, 0),
 		"a RIFF that is not a WAVE": append([]byte("RIFF\x24\x00\x00\x00AVI "), make([]byte, 100)...),
 		"an empty object":           {},
+		"a sample rate of 1 Hz":     wavBytes(1, 1, 16, 1, 8000),
+		"a tenth of a second":       wavBytes(1, 1, 16, 16000, 1600),
+		"a data length past a file": lying,
 	}
 	for name, body := range bad {
 		id, file, msg := f.recordingMeeting(ch, "Replaced")
@@ -726,8 +743,8 @@ func TestTranscribe_RecordingIsCheckedAgainBeforeTheModelSeesIt(t *testing.T) {
 
 	// The check does not refuse what it should accept: a stereo file and a data chunk
 	// whose size field a streaming writer left at zero.
-	stereo := wavBytes(1, 2, 16, 44100, 4410)
-	streamed := wavBytes(1, 1, 16, 16000, 1600)
+	stereo := wavBytes(1, 2, 16, 44100, 22050)
+	streamed := wavBytes(1, 1, 16, 16000, 8000)
 	binary.LittleEndian.PutUint32(streamed[40:], 0)
 	for name, body := range map[string][]byte{"stereo": stereo, "streamed": streamed} {
 		id, file, msg := f.recordingMeeting(ch, name)
@@ -1131,4 +1148,339 @@ func TestJobs_RequireTheDependenciesOfTheTranscribeJob(t *testing.T) {
 		}
 	}()
 	Jobs(Deps{})
+}
+
+// ---- fix round: one WAV rule, bounded dates, a reused transcript, one meeting per recording
+
+// The rule for a recording lives in platform/wav and is tested there. This proves the job
+// applies that rule to the bytes it reads from the store, and nothing of its own: for the
+// same bytes it refuses what wav.Check refuses, with wav.Check's reason, as a permanent
+// failure of the meeting, and it returns the bytes wav.Check accepts.
+func TestReadRecording_AppliesTheSharedWAVCheck(t *testing.T) {
+	objects := fakeblob.New()
+	p := &pipeline{blob: objects}
+	ws, file := uuid.New(), uuid.New()
+	row := store.MeetingsMeeting{WorkspaceID: ws, RecordingFileID: &file}
+	key := "uploads/" + ws.String() + "/" + file.String()
+
+	lying := slices.Clone(speech)
+	binary.LittleEndian.PutUint32(lying[40:], 1<<20)
+	for name, body := range map[string][]byte{
+		"an mp3 labelled as a wav": append([]byte("ID3\x03\x00\x00\x00\x00\x00\x00"), make([]byte, 4000)...),
+		"24-bit samples":           wavBytes(1, 1, 24, 16000, 8000),
+		"three channels":           wavBytes(1, 3, 16, 16000, 8000),
+		"a sample rate of 96001":   wavBytes(1, 1, 16, 96001, 8000),
+		"a tenth of a second":      wavBytes(1, 1, 16, 16000, 1600),
+		"a data length past it":    lying,
+		"nothing":                  {},
+	} {
+		_, want := wav.Check(body, int64(len(body)))
+		if !errors.Is(want, wav.ErrNotPCM16) {
+			t.Fatalf("%s: wav.Check = %v, want it to refuse the body this test says is refused", name, want)
+		}
+		objects.Put(key, "audio/wav", body)
+
+		got, err := p.readRecording(t.Context(), row)
+
+		var perm *permanent
+		if !errors.As(err, &perm) || perm.reason != reasonUnsupportedAudio || !errors.Is(err, wav.ErrNotPCM16) || !strings.Contains(err.Error(), want.Error()) {
+			t.Errorf("%s: readRecording = %d bytes, %v, want a permanent unsupported_audio with wav.Check's reason %q", name, len(got), err, want)
+		}
+	}
+
+	for name, body := range map[string][]byte{"a plain file": speech, "stereo": wavBytes(1, 2, 16, 44100, 22050)} {
+		if _, err := wav.Check(body, int64(len(body))); err != nil {
+			t.Fatalf("%s: wav.Check = %v, want it to accept the body this test says is accepted", name, err)
+		}
+		objects.Put(key, "audio/wav", body)
+		if got, err := p.readRecording(t.Context(), row); err != nil || !bytes.Equal(got, body) {
+			t.Errorf("%s: readRecording = %d bytes, %v, want the %d bytes of the recording", name, len(got), err, len(body))
+		}
+	}
+}
+
+func TestResolveDue_OnlyNearTheMeeting(t *testing.T) {
+	// 18:00 UTC on 31 December 2026 is 01:00 on 1 January 2027 in Bangkok: the window is
+	// counted from the Bangkok year, 2027, from 2026 to 2037.
+	end := time.Date(2026, 12, 31, 18, 0, 0, 0, time.UTC)
+	for hint, want := range map[string]string{
+		"2026-01-01": "2026-01-01T00:00:00+07:00", // the year before the meeting
+		"2025-12-31": "",
+		"2037-12-31": "2037-12-31T00:00:00+07:00", // ten years after it
+		"2038-01-01": "",
+		"+999d":      "2029-09-26T00:00:00+07:00",
+		"+1d":        "2027-01-02T00:00:00+07:00",
+	} {
+		got := ResolveDue(hint, end)
+		switch {
+		case want == "" && got != nil:
+			t.Errorf("ResolveDue(%q) = %s, want nil: it is outside the window of the meeting", hint, bangkokDate(*got))
+		case want != "" && (got == nil || bangkokDate(*got) != want):
+			t.Errorf("ResolveDue(%q) = %v, want %s", hint, got, want)
+		}
+	}
+}
+
+func TestSummarize_KeepsAtMost50ActionItemsWithShortTitles(t *testing.T) {
+	type action struct {
+		Title     string `json:"title"`
+		OwnerHint string `json:"owner_hint"`
+		DueHint   string `json:"due_hint"`
+		EntryRefs []int  `json:"entry_refs"`
+	}
+	// Ten items the model left without a title, then sixty with one; the third of them has
+	// a title of 300 Thai letters and the fourth one whose 200th rune is a space.
+	var items []action
+	for range 10 {
+		items = append(items, action{Title: "  ", DueHint: "none", EntryRefs: []int{}})
+	}
+	for i := range 60 {
+		items = append(items, action{Title: fmt.Sprintf("Task %02d", i), OwnerHint: "Alice", DueHint: "+1d", EntryRefs: []int{1}})
+	}
+	items[12].Title = strings.Repeat("ก", 300)
+	items[13].Title = strings.Repeat("x", 199) + " " + strings.Repeat("y", 50)
+	raw, err := json.Marshal(map[string]any{"summary": "Many tasks.", "decisions": []any{}, "open_questions": []any{}, "action_items": items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := fakellm.New()
+	c.QueueGenerate(reply(string(raw)))
+
+	got, err := NewSummarizer(c).Summarize(t.Context(), SummarizeInput{MeetingTitle: "Busy", MeetingDate: time.Now(), Entries: transcriptOf()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got.ActionItems) != 50 {
+		t.Fatalf("%d action items, want 50: the cap counts the items that were kept, not the ones the model left empty", len(got.ActionItems))
+	}
+	for i, ai := range got.ActionItems {
+		if n := utf8.RuneCountInString(ai.Title); n == 0 || n > 200 || !utf8.ValidString(ai.Title) || ai.Title != strings.TrimSpace(ai.Title) {
+			t.Errorf("action item %d has the title %q (%d runes), want 1 to 200 runes, valid and trimmed", i, ai.Title, n)
+		}
+	}
+	if got.ActionItems[2].Title != strings.Repeat("ก", 200) {
+		t.Errorf("the 300-letter title = %q, want its first 200 letters", got.ActionItems[2].Title)
+	}
+	if got.ActionItems[3].Title != strings.Repeat("x", 199) {
+		t.Errorf("the title cut at a space = %q, want 199 letters without the space", got.ActionItems[3].Title)
+	}
+	if got.ActionItems[0].Title != "Task 00" || got.ActionItems[49].Title != "Task 49" {
+		t.Errorf("first and last titles = %q, %q, want the first 50 in the model's order", got.ActionItems[0].Title, got.ActionItems[49].Title)
+	}
+}
+
+func TestTranscriptCache_IsBoundedAndKeepsTheLastUsed(t *testing.T) {
+	const bound = 3
+	c := newTranscriptCache(bound)
+	file := uuid.New()
+	meetings := make([]uuid.UUID, bound+1)
+	entry := func(text string) []*meetingsv1.Entry { return []*meetingsv1.Entry{{Text: text}} }
+	for i := range meetings {
+		meetings[i] = uuid.New()
+	}
+
+	for i := range bound {
+		c.put(meetings[i], file, entry(fmt.Sprint(i)))
+	}
+	// Using the oldest makes it the newest; the next put then forgets the second oldest.
+	if got, ok := c.get(meetings[0], file); !ok || got[0].GetText() != "0" {
+		t.Fatalf("get of the oldest = %v, %v, want its transcript", got, ok)
+	}
+	c.put(meetings[bound], file, entry("new"))
+
+	if _, ok := c.get(meetings[1], file); ok {
+		t.Error("the least recently used transcript was kept, want it forgotten at the bound")
+	}
+	for _, i := range []int{0, 2, 3} {
+		if _, ok := c.get(meetings[i], file); !ok {
+			t.Errorf("the transcript of meeting %d was forgotten, want the %d most recently used kept", i, bound)
+		}
+	}
+	if n := len(c.items); n != bound {
+		t.Errorf("%d transcripts held, want %d", n, bound)
+	}
+
+	// The key is the meeting and the file; a put for it replaces what was kept.
+	if _, ok := c.get(meetings[0], uuid.New()); ok {
+		t.Error("a transcript was returned for a file it was not made from")
+	}
+	c.put(meetings[0], file, entry("again"))
+	if got, _ := c.get(meetings[0], file); got[0].GetText() != "again" || len(c.items) != bound {
+		t.Errorf("after a second put: %v with %d held, want the new one in place of the old", got, len(c.items))
+	}
+
+	c.drop(meetings[0])
+	if _, ok := c.get(meetings[0], file); ok {
+		t.Error("a dropped transcript is still there")
+	}
+	if _, ok := c.get(meetings[2], file); !ok {
+		t.Error("dropping one meeting's transcript dropped another's")
+	}
+}
+
+// The jobs keep the last eight transcripts: enough for the recordings a worker has in
+// flight, few enough that a long meeting's text (up to 100 000 tokens) cannot add up.
+func TestNewPipeline_KeepsEightTranscripts(t *testing.T) {
+	if got := newPipeline(Deps{}).transcripts.max; got != 8 {
+		t.Errorf("the pipeline keeps %d transcripts, want 8", got)
+	}
+}
+
+func TestTranscribe_SummaryFailureAfterTheModelHeardTheRecording_DoesNotAskTheModelAgain(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id, file, msg := f.recordingMeeting(ch, "Sprint review")
+	f.llm.QueueTranscribe(transcribed(sentences()...))
+	boom := errors.New("the summarizer is down")
+	f.summ.err = boom
+
+	if err := f.deliver(f.transcribe, msg, 1); !errors.Is(err, boom) {
+		t.Fatalf("attempt 1: err = %v, want the summarizer's error so the bus delivers the message again", err)
+	}
+	if got := f.status(id); got != statusIngesting {
+		t.Fatalf("status after attempt 1 = %q, want ingesting", got)
+	}
+	// Nothing is left to read: the second delivery has the transcript, not the recording.
+	if err := f.blob.Delete(t.Context(), "uploads/"+f.ws.String()+"/"+file.String()); err != nil {
+		t.Fatal(err)
+	}
+	f.summ.err = nil
+
+	if err := f.deliver(f.transcribe, msg, 2); err != nil {
+		t.Fatalf("attempt 2: %v", err)
+	}
+
+	if got := f.status(id); got != statusReady {
+		t.Errorf("status = %q, want ready", got)
+	}
+	if calls := f.llm.TranscribeCalls(); len(calls) != 1 {
+		t.Errorf("the transcription model heard the recording %d times, want once", len(calls))
+	}
+	if asked := f.summ.asked(); len(asked) != 2 || len(asked[1].Entries) != 3 {
+		t.Errorf("summarizer asked %d times, want twice, the second time about the 3 entries the model heard", len(asked))
+	}
+	entries, err := f.svc.TranscriptEntries(t.Context(), f.user(f.alice), id)
+	if err != nil || len(entries) != 3 {
+		t.Errorf("TranscriptEntries = %v, %v, want the 3 entries of the one pass", entries, err)
+	}
+}
+
+func TestTranscribe_TheTranscriptIsForgottenWhenTheMeetingSettles_SoARetryHearsTheRecordingAgain(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	id, _, msg := f.recordingMeeting(ch, "Sprint review")
+	f.llm.HandleTranscribe(func(context.Context, llm.Audio) ([]llm.TranscriptEntry, error) { return sentences(), nil })
+	f.summ.err = errors.New("the summarizer is down")
+
+	if err := f.deliver(f.transcribe, msg, 1); err == nil {
+		t.Fatal("attempt 1 acknowledged a failed summary")
+	}
+	// The final delivery fails the meeting; the transcript was kept for it, not asked for
+	// again.
+	if err := f.deliver(f.transcribe, msg, finalAttempt); err != nil {
+		t.Fatalf("final attempt: %v", err)
+	}
+	if got := f.meeting(id); got.Status != statusFailed || got.Reason == nil || *got.Reason != "model_unavailable" {
+		t.Fatalf("meeting = %+v, want failed with model_unavailable", got)
+	}
+	if calls := f.llm.TranscribeCalls(); len(calls) != 1 {
+		t.Fatalf("%d transcriptions up to the failure, want 1", len(calls))
+	}
+
+	f.summ.err = nil
+	if err := f.svc.RetrySummary(t.Context(), f.user(f.alice), id); err != nil {
+		t.Fatal(err)
+	}
+	rows := f.outbox(events.TopicMeetingTranscribe)
+	if err := f.deliver(f.transcribe, f.message(rows[len(rows)-1]), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.status(id); got != statusReady {
+		t.Errorf("status after the retry = %q, want ready", got)
+	}
+	if calls := f.llm.TranscribeCalls(); len(calls) != 2 {
+		t.Errorf("%d transcriptions, want 2: a Retry is a fresh pass over the recording, not the failed run's transcript", len(calls))
+	}
+}
+
+func TestCreateFromRecording_IsIdempotentPerRecording(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice, f.bob)
+	file := f.recording(ch)
+
+	first, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "Sprint review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A double click, and a second member who uploaded nothing but names the same file.
+	again, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "Sprint review (again)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.svc.CreateFromRecording(t.Context(), f.user(f.bob), ch, file, "Bob's title")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if again.GetId() != first.GetId() || other.GetId() != first.GetId() || again.GetRef() != first.GetRef() || again.GetTitle() != "Sprint review" {
+		t.Errorf("meetings = %v, %v, %v, want the first one back each time, as it was made", first, again, other)
+	}
+	if n := f.count(`SELECT count(*) FROM meetings.meetings WHERE recording_file_id = $1`, file); n != 1 {
+		t.Errorf("%d meetings for one recording, want 1", n)
+	}
+	if n := f.topicCount(events.TopicMeetingTranscribe); n != 1 {
+		t.Errorf("%d meeting.transcribe events, want 1: one pass of the model", n)
+	}
+	// No REF was spent on the repeats: the next recording is the next number.
+	next, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, f.recording(ch), "Next")
+	if err != nil || next.GetRef() != "MTG-1002" {
+		t.Errorf("the next meeting = %v, %v, want MTG-1002", next, err)
+	}
+
+	// A meeting that is under way or done is the recording's meeting; a failed one is
+	// retried, and its recording can start a new meeting.
+	id := uuid.MustParse(first.GetId())
+	f.exec(`UPDATE meetings.meetings SET status = 'ready' WHERE id = $1`, id)
+	if got, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "Again"); err != nil || got.GetId() != first.GetId() {
+		t.Errorf("a ready meeting's recording = %v, %v, want that meeting", got, err)
+	}
+	f.exec(`UPDATE meetings.meetings SET status = 'failed', failure_reason = 'no_speech' WHERE id = $1`, id)
+	fresh, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "Fresh start")
+	if err != nil || fresh.GetId() == first.GetId() || fresh.GetStatus() != meetingsv1.MeetingStatus_MEETING_STATUS_PENDING {
+		t.Errorf("a failed meeting's recording = %v, %v, want a new pending meeting", fresh, err)
+	}
+}
+
+func TestCreateFromRecording_ConcurrentRequestsMakeOneMeeting(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	file := f.recording(ch)
+
+	const clicks = 8
+	ids := make([]string, clicks)
+	errList := make([]error, clicks)
+	var wg sync.WaitGroup
+	for i := range clicks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "Sprint review")
+			errList[i], ids[i] = err, m.GetId()
+		}()
+	}
+	wg.Wait()
+
+	for i := range clicks {
+		if errList[i] != nil || ids[i] != ids[0] {
+			t.Errorf("request %d = %q, %v, want the one meeting %q", i, ids[i], errList[i], ids[0])
+		}
+	}
+	if n := f.count(`SELECT count(*) FROM meetings.meetings WHERE recording_file_id = $1`, file); n != 1 {
+		t.Errorf("%d meetings, want 1", n)
+	}
+	if n := f.topicCount(events.TopicMeetingTranscribe); n != 1 {
+		t.Errorf("%d meeting.transcribe events, want 1", n)
+	}
 }

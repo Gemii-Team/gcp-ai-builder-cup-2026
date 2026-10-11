@@ -241,7 +241,8 @@ func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uui
 // CreateFromRecording implements Service. The file must be an uploaded recording of this
 // workspace and channel that the actor may use (see FileChecker). The meeting has no Meet
 // space: the meeting.transcribe event it announces is what turns the uploaded recording
-// into its transcript.
+// into its transcript. A recording that already has a meeting that has not failed gets
+// that meeting back, unchanged and announced no more than once.
 func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channelID, fileID uuid.UUID, title string) (*meetingsv1.Meeting, error) {
 	if err := requireActor(a); err != nil {
 		return nil, err
@@ -262,6 +263,22 @@ func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channe
 
 	var row store.MeetingsMeeting
 	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
+		q := store.New(tx)
+		// A double click, or a retry after a timeout, names the same recording again: it
+		// gets the meeting the first request made, not a second REF, a second pass of the
+		// transcription model and a second slip. A meeting that failed is not that
+		// meeting: it has Retry, and its recording can be made into a new one.
+		if err := q.LockRecording(ctx, "recording/"+fileID.String()); err != nil {
+			return fmt.Errorf("meetings: lock recording: %w", err)
+		}
+		existing, err := q.GetMeetingByRecording(ctx, store.GetMeetingByRecordingParams{ChannelID: channelID, RecordingFileID: fileID})
+		if err == nil {
+			row = existing
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("meetings: look up the recording's meeting: %w", err)
+		}
 		ref, err := refs.Next(ctx, tx, "MTG")
 		if err != nil {
 			return fmt.Errorf("meetings: %w", err)
@@ -270,7 +287,7 @@ func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channe
 		if err != nil {
 			return fmt.Errorf("meetings: new meeting id: %w", err)
 		}
-		row, err = store.New(tx).InsertMeeting(ctx, store.InsertMeetingParams{
+		row, err = q.InsertMeeting(ctx, store.InsertMeetingParams{
 			ID: id, WorkspaceID: a.WorkspaceID, ChannelID: channelID, OwnerUserID: a.EffectiveUserID(),
 			Ref: &ref, Title: title, RecordingFileID: &fileID,
 		})

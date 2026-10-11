@@ -3,7 +3,6 @@ package meetings
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +22,7 @@ import (
 	"kiwi/internal/platform/errs"
 	"kiwi/internal/platform/llm"
 	"kiwi/internal/platform/outbox"
+	"kiwi/internal/platform/wav"
 )
 
 const (
@@ -94,6 +94,10 @@ func (p *permanent) Unwrap() error { return p.err }
 // as it is. The recording is the file the meeting row names, never the one in the
 // message: the message only says which meeting to work on.
 //
+// What the transcription model heard is kept in memory (transcriptCache) until the
+// message is acknowledged, so that a summary that fails after a pass of the model, which
+// the bus delivers again, does not pay for another pass.
+//
 // The recording is checked again here, on the bytes about to be sent. Upload checked it
 // once, but a signed upload URL takes more than one PUT, and a body the transcription
 // model cannot decode would stop it for everyone for a minute. A recording that is gone
@@ -125,23 +129,26 @@ func (p *pipeline) prepareTranscribe(ctx context.Context, m bus.Message) (outbox
 		return nil, err
 	}
 
-	data, err := p.readRecording(ctx, row)
-	var perm *permanent
-	if errors.As(err, &perm) {
-		return p.fail(ctx, row, perm.reason, m.Attempt, err), nil
-	}
-	if err != nil {
-		return nil, err
-	}
+	entries, cached := p.transcripts.get(row.ID, *row.RecordingFileID)
+	if !cached {
+		data, err := p.readRecording(ctx, row)
+		var perm *permanent
+		if errors.As(err, &perm) {
+			return p.fail(ctx, row, perm.reason, m.Attempt, err), nil
+		}
+		if err != nil {
+			return nil, err
+		}
 
-	bus.KeepAlive(ctx)
-	read, err := p.llm.Transcribe(ctx, llm.Audio{Data: data, MIME: "audio/wav", Name: "recording.wav"})
-	if err != nil {
-		return p.modelFailed(ctx, row, m, err)
-	}
-	entries := transcriptEntries(read)
-	if len(entries) == 0 {
-		return p.fail(ctx, row, reasonNoSpeech, m.Attempt, errors.New("the recording has no speech in it")), nil
+		bus.KeepAlive(ctx)
+		read, err := p.llm.Transcribe(ctx, llm.Audio{Data: data, MIME: "audio/wav", Name: "recording.wav"})
+		if err != nil {
+			return p.modelFailed(ctx, row, m, err)
+		}
+		if entries = transcriptEntries(read); len(entries) == 0 {
+			return p.fail(ctx, row, reasonNoSpeech, m.Attempt, errors.New("the recording has no speech in it")), nil
+		}
+		p.transcripts.put(row.ID, *row.RecordingFileID, entries)
 	}
 	return p.summarize(ctx, row, m, entries)
 }
@@ -218,7 +225,7 @@ func (p *pipeline) readRecording(ctx context.Context, row store.MeetingsMeeting)
 	if buf.Len() > maxRecordingBytes {
 		return nil, &permanent{reasonUnsupportedAudio, fmt.Errorf("meetings: recording %s is over the %d bytes it may have", *row.RecordingFileID, int64(maxRecordingBytes))}
 	}
-	if err := checkWAV(buf.Bytes()); err != nil {
+	if _, err := wav.Check(buf.Bytes(), int64(buf.Len())); err != nil {
 		return nil, &permanent{reasonUnsupportedAudio, fmt.Errorf("meetings: recording %s: %w", *row.RecordingFileID, err)}
 	}
 	return buf.Bytes(), nil
@@ -242,60 +249,4 @@ func transcriptEntries(read []llm.TranscriptEntry) []*meetingsv1.Entry {
 		entries = append(entries, out)
 	}
 	return entries
-}
-
-// errNotWAV is why checkWAV refused a recording.
-var errNotWAV = errors.New("not a PCM 16-bit WAV file with audio in it")
-
-// checkWAV accepts only what the transcription model can decode: a RIFF/WAVE file whose
-// fmt chunk says PCM, 16 bits per sample, mono or stereo, at any sample rate, followed by
-// a data chunk that holds at least one frame of audio. It is the check upload makes, made
-// again on the bytes that are about to be sent. A data chunk whose size field is 0 or
-// 0xFFFFFFFF, as streaming writers leave it, is as long as the file is.
-func checkWAV(data []byte) error {
-	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return fmt.Errorf("%w: no RIFF/WAVE header", errNotWAV)
-	}
-	frame := int64(0) // bytes of one sample frame, once the fmt chunk is read
-	for off := int64(12); off+8 <= int64(len(data)); {
-		id, size := string(data[off:off+4]), int64(binary.LittleEndian.Uint32(data[off+4:off+8]))
-		body := off + 8
-		switch id {
-		case "fmt ":
-			if size < 16 || body+16 > int64(len(data)) {
-				return fmt.Errorf("%w: truncated fmt chunk", errNotWAV)
-			}
-			format := binary.LittleEndian.Uint16(data[body:])
-			channels := binary.LittleEndian.Uint16(data[body+2:])
-			rate := binary.LittleEndian.Uint32(data[body+4:])
-			bits := binary.LittleEndian.Uint16(data[body+14:])
-			if format != 1 || (channels != 1 && channels != 2) || bits != 16 || rate == 0 {
-				return fmt.Errorf("%w: format %d, %d channels, %d bits, %d Hz", errNotWAV, format, channels, bits, rate)
-			}
-			frame = int64(channels) * 2
-		case "data":
-			if frame == 0 {
-				return fmt.Errorf("%w: the data chunk comes before the fmt chunk", errNotWAV)
-			}
-			audio := int64(len(data)) - body
-			if size != 0 && size != 0xFFFFFFFF {
-				audio = min(size, audio)
-			}
-			if audio < frame {
-				return fmt.Errorf("%w: the data chunk is empty", errNotWAV)
-			}
-			return nil
-		}
-		// Chunks are padded to an even size. size is untrusted: a chunk that runs past
-		// the end of the file ends the scan.
-		next := body + size + size&1
-		if next > int64(len(data)) {
-			break
-		}
-		off = next
-	}
-	if frame == 0 {
-		return fmt.Errorf("%w: no fmt chunk", errNotWAV)
-	}
-	return fmt.Errorf("%w: no data chunk", errNotWAV)
 }

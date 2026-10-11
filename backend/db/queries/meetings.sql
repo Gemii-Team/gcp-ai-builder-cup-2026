@@ -30,6 +30,21 @@ SELECT * FROM meetings.meetings WHERE id = sqlc.arg(id);
 -- Serialises the writers of one meeting until the transaction ends.
 SELECT * FROM meetings.meetings WHERE id = sqlc.arg(id) FOR UPDATE;
 
+-- name: LockRecording :exec
+-- Serialises the creation of meetings from one recording file until the transaction
+-- ends, so a double click makes one meeting, not two.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(recording_key)::text, 0));
+
+-- name: GetMeetingByRecording :one
+-- The meeting a recording of a channel was already made into, unless it failed: a failed
+-- meeting is retried, and a recording that failed can be made into a new meeting.
+SELECT * FROM meetings.meetings
+WHERE channel_id = sqlc.arg(channel_id)
+  AND recording_file_id = sqlc.arg(recording_file_id)::uuid
+  AND status <> 'failed'
+ORDER BY created_at, id
+LIMIT 1;
+
 -- name: ListPollableMeetings :many
 -- The meetings the poll asks Meet about: a space, still waiting for its summary, made
 -- since the cut-off. It reads every workspace, so it runs through db.System. It

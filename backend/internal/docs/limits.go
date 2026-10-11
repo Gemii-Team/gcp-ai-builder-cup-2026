@@ -1,8 +1,6 @@
 package docs
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -46,8 +44,8 @@ var allowedAttachmentMIME = map[string]bool{
 // allowedRecordingMIME is every type a meeting recording may have: WAV only, because
 // the transcription model decodes the content, not the label, and a body it cannot
 // decode (an MP3 or MP4 labelled WAV) knocks the transcription service out for every
-// user for a minute. The type is therefore only a first filter: checkRecording reads
-// the bytes.
+// user for a minute. The type is therefore only a first filter: wav.Check reads the
+// bytes.
 var allowedRecordingMIME = map[string]bool{
 	"audio/wav":   true,
 	"audio/x-wav": true,
@@ -183,63 +181,4 @@ func (h *headWriter) Write(p []byte) (int, error) {
 		h.buf = append(h.buf, p[:min(room, len(p))]...)
 	}
 	return len(p), nil
-}
-
-// errNotWAV is why checkRecording refused a recording.
-var errNotWAV = errors.New("not a PCM 16-bit WAV file with audio in it")
-
-// checkRecording reads the head of a recording and accepts only what the transcription
-// step can chunk and the model can decode: a RIFF/WAVE file whose fmt chunk says PCM,
-// 16 bits per sample, mono or stereo, at any sample rate, followed by a data chunk that
-// holds at least one frame of audio. head is the first bytes of the object and total
-// its whole size; the chunks that come before the audio (fmt, then JUNK, bext, LIST)
-// are in the head unless a writer put more than headBytes of them there. A data chunk
-// whose size field is 0 or 0xFFFFFFFF, as streaming writers leave it, is as long as
-// the file is.
-func checkRecording(head []byte, total int64) error {
-	if len(head) < 12 || string(head[0:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
-		return fmt.Errorf("%w: no RIFF/WAVE header", errNotWAV)
-	}
-	frame := int64(0) // bytes of one sample frame, once the fmt chunk is read
-	for off := 12; off+8 <= len(head); {
-		id, size := string(head[off:off+4]), int64(binary.LittleEndian.Uint32(head[off+4:off+8]))
-		body := int64(off) + 8
-		switch id {
-		case "fmt ":
-			if size < 16 || body+16 > int64(len(head)) {
-				return fmt.Errorf("%w: truncated fmt chunk", errNotWAV)
-			}
-			format := binary.LittleEndian.Uint16(head[body:])
-			channels := binary.LittleEndian.Uint16(head[body+2:])
-			rate := binary.LittleEndian.Uint32(head[body+4:])
-			bits := binary.LittleEndian.Uint16(head[body+14:])
-			if format != 1 || (channels != 1 && channels != 2) || bits != 16 || rate == 0 {
-				return fmt.Errorf("%w: format %d, %d channels, %d bits, %d Hz", errNotWAV, format, channels, bits, rate)
-			}
-			frame = int64(channels) * 2
-		case "data":
-			if frame == 0 {
-				return fmt.Errorf("%w: the data chunk comes before the fmt chunk", errNotWAV)
-			}
-			audio := total - body
-			if size != 0 && size != 0xFFFFFFFF {
-				audio = min(size, audio)
-			}
-			if audio < frame {
-				return fmt.Errorf("%w: the data chunk is empty", errNotWAV)
-			}
-			return nil
-		}
-		// Chunks are padded to an even size. size is untrusted: a chunk that runs past
-		// the head ends the scan.
-		next := body + size + size&1
-		if next > int64(len(head)) {
-			break
-		}
-		off = int(next)
-	}
-	if frame == 0 {
-		return fmt.Errorf("%w: no fmt chunk", errNotWAV)
-	}
-	return fmt.Errorf("%w: no data chunk in the first %d bytes", errNotWAV, len(head))
 }

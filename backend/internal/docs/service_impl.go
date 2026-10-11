@@ -27,6 +27,7 @@ import (
 	"kiwi/internal/platform/events"
 	"kiwi/internal/platform/llm"
 	"kiwi/internal/platform/outbox"
+	wavcheck "kiwi/internal/platform/wav" // aliased: the package's tests have a wav helper of their own
 )
 
 // Values of files.status.
@@ -37,8 +38,8 @@ const (
 	statusFailed    = "failed"
 )
 
-// headBytes is how much of a recording checkRecording reads: enough for the chunks a
-// WAV writer puts before its audio.
+// headBytes is how much of a recording wav.Check reads: enough for the chunks a WAV
+// writer puts before its audio.
 const headBytes = 64 << 10
 
 // protoJSON is how events are carried on the outbox: field names as in the .proto,
@@ -297,7 +298,7 @@ func (s *service) validate(ctx context.Context, row store.FilesFile, purpose fil
 		return verdict{reason: reasonSizeMismatch, detail: fmt.Sprintf("the file is %d bytes but was stored with %d: it changed while it was checked", n, attrs.Size)}, nil
 	}
 	if purpose == filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING {
-		if err := checkRecording(head.buf, n); err != nil {
+		if _, err := wavcheck.Check(head.buf, n); err != nil {
 			return verdict{reason: reasonUnsupportedAudio, detail: err.Error()}, nil
 		}
 	}
