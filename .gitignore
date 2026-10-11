@@ -1,5 +1,9 @@
 # Local-only documentation: specs, plans, ADRs, notes. Never pushed.
 /docs/
+# Design records (impeccable): product/design docs, briefs, mocks, galleries
+/PRODUCT.md
+/DESIGN.md
+/.impeccable/
 
 # Secrets and credentials
 .env
