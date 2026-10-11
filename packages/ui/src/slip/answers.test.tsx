@@ -106,3 +106,33 @@ describe('an excerpt that opens', () => {
     expect(await screen.findByRole('group', { name: 'Document excerpt, ACME-contract-v3.pdf page 4' })).toBeInTheDocument();
   });
 });
+
+describe('Escape with an open excerpt', () => {
+  it('closes the excerpt before a modal layer that holds it, such as a sheet, sees the key', async () => {
+    // A sheet listens for Escape on the document in the capture phase, registered before any excerpt opens.
+    const sheetEscape = vi.fn();
+    document.addEventListener('keydown', sheetEscape, true);
+    const user = userEvent.setup();
+    withExcerpts(<ProofSlip ref="ANS-2207" summary="x" sources={sources} generatedAt="2026-10-13T07:40:00Z" />);
+    await user.click(screen.getByRole('button', { name: 'ACME-contract-v3.pdf, page 4' }));
+    await screen.findByRole('group', { name: 'Document excerpt, ACME-contract-v3.pdf page 4' });
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('group', { name: /excerpt/ })).toBeNull();
+    expect(sheetEscape).not.toHaveBeenCalled();
+    document.removeEventListener('keydown', sheetEscape, true);
+  });
+
+  it('lets the key through to the sheet once no excerpt is open', async () => {
+    const sheetEscape = vi.fn();
+    document.addEventListener('keydown', sheetEscape, true);
+    const user = userEvent.setup();
+    withExcerpts(<ProofSlip ref="ANS-2207" summary="x" sources={sources} generatedAt="2026-10-13T07:40:00Z" />);
+
+    await user.keyboard('{Escape}');
+
+    expect(sheetEscape).toHaveBeenCalledOnce();
+    document.removeEventListener('keydown', sheetEscape, true);
+  });
+});

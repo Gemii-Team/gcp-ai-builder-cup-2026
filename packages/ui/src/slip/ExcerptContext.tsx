@@ -109,7 +109,8 @@ export function ExcerptProvider({ load, children }: { load: (source: Source) => 
     if (!isOpen) {
       return;
     }
-    // Capture phase, so Escape closes the excerpt before a sheet or menu that holds it sees the key.
+    // The window's capture phase comes before any listener on the document, so Escape closes the excerpt before a sheet
+    // or menu that holds it (a modal dialog listens on the document, in capture) sees the key.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) {
         return;
@@ -121,9 +122,9 @@ export function ExcerptProvider({ load, children }: { load: (source: Source) => 
       event.stopPropagation();
       close(true);
     };
-    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keydown', onKeyDown, true);
     return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keydown', onKeyDown, true);
     };
   }, [isOpen, close]);
 
