@@ -37,6 +37,7 @@ import (
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/events"
 	"kiwi/internal/realtime/frames"
+	"kiwi/internal/testkit/containers"
 	"kiwi/internal/testkit/dbtest"
 )
 
@@ -66,7 +67,7 @@ func bootValkey() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	ctr, err := testcontainers.Run(ctx, valkeyImage,
+	ctr, err := containers.Start(ctx, valkeyImage,
 		testcontainers.WithLogger(log.New(io.Discard, "", 0)),
 		testcontainers.WithExposedPorts("6379/tcp"),
 		testcontainers.WithCmd("valkey-server", "--save", "", "--appendonly", "no"),

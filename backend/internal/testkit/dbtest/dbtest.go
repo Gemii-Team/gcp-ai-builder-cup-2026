@@ -28,6 +28,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"kiwi/internal/migrate"
+	"kiwi/internal/testkit/containers"
 )
 
 const (
@@ -112,7 +113,7 @@ func boot() (*server, error) {
 	defer cancel()
 
 	// fsync and friends off: the data is thrown away with the container.
-	ctr, err := tcpostgres.Run(ctx, image,
+	ctr, err := containers.StartPostgres(ctx, image,
 		testcontainers.WithLogger(log.New(io.Discard, "", 0)),
 		tcpostgres.WithUsername(superuser),
 		tcpostgres.WithPassword(superPassword),

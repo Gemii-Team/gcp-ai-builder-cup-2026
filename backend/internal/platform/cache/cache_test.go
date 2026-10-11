@@ -19,6 +19,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"kiwi/internal/platform/errs"
+	"kiwi/internal/testkit/containers"
 )
 
 const valkeyImage = "valkey/valkey:8"
@@ -47,7 +48,7 @@ func bootValkey() (string, error) {
 	defer cancel()
 
 	// Persistence off: the data is thrown away with the container.
-	ctr, err := testcontainers.Run(ctx, valkeyImage,
+	ctr, err := containers.Start(ctx, valkeyImage,
 		testcontainers.WithLogger(log.New(io.Discard, "", 0)),
 		testcontainers.WithExposedPorts("6379/tcp"),
 		testcontainers.WithCmd("valkey-server", "--save", "", "--appendonly", "no"),
