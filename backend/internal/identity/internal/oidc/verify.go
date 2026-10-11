@@ -26,6 +26,8 @@ type Claims struct {
 	Picture       string
 	HD            string
 	EmailVerified bool
+	// Nonce is the nonce claim of the token, empty when it has none.
+	Nonce string
 }
 
 // ErrNoHostedDomain is returned, together with the otherwise verified claims,
@@ -60,7 +62,11 @@ func NewVerifier(ctx context.Context, issuer, internalURL, clientID string) (*Ve
 	if err != nil {
 		return nil, fmt.Errorf("oidc: discover provider: %w", err)
 	}
-	return &Verifier{provider: p, verifier: p.Verifier(&gooidc.Config{ClientID: clientID})}, nil
+	// Google signs ID tokens with RS256. The algorithm is pinned here rather than
+	// taken from the discovery document, so neither "none", nor an HMAC keyed with
+	// the public key, nor whatever else a document lists can ever verify a token.
+	cfg := &gooidc.Config{ClientID: clientID, SupportedSigningAlgs: []string{gooidc.RS256}}
+	return &Verifier{provider: p, verifier: p.Verifier(cfg)}, nil
 }
 
 // Endpoint returns the provider's OAuth 2.0 authorization and token endpoints as
@@ -102,6 +108,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 		Picture:       body.Picture,
 		HD:            body.HD,
 		EmailVerified: true,
+		Nonce:         tok.Nonce,
 	}
 	if c.HD == "" {
 		return c, ErrNoHostedDomain

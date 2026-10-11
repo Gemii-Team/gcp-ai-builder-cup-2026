@@ -15,7 +15,13 @@ import (
 // at. actorFrom reads the actor the API shell's session interceptor put in the
 // request context. Domain errors come back unmapped; the shell maps them to
 // Connect codes.
+//
+// The handler always requires the Connect-Protocol-Version header. With POST-only
+// RPCs and the origin check, it is what keeps a cross-site request from reaching
+// a cookie-authenticated RPC, and a built http.Handler cannot be given the option
+// afterwards, so no caller is left to forget it.
 func Handler(svc Service, actorFrom func(context.Context) authz.Actor, opts ...connect.HandlerOption) (string, http.Handler) {
+	opts = append([]connect.HandlerOption{connect.WithRequireConnectProtocolHeader()}, opts...)
 	return identityv1connect.NewIdentityServiceHandler(&connectServer{svc: svc, actor: actorFrom}, opts...)
 }
 

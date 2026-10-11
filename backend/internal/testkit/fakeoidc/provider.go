@@ -70,6 +70,12 @@ type Config struct {
 	Users []User
 	// Outsider, when set, is an account without hd, like a personal Gmail one.
 	Outsider *User
+	// RedirectURIs are the redirect_uri values /authorize accepts, compared
+	// exactly. A request for any other is answered 400 and never redirected.
+	RedirectURIs []string
+	// AdvertisedAlgs is what the discovery document lists as the signing
+	// algorithms of ID tokens (default: RS256 only, like Google).
+	AdvertisedAlgs []string
 }
 
 // Claims are the ID-token claims K.I.W.I. reads. An empty HD leaves the hd
@@ -96,6 +102,8 @@ type MintOptions struct {
 	Nonce string
 	// WrongKey signs with a key the provider's JWKS does not publish.
 	WrongKey bool
+	// PSS signs with RSASSA-PSS (alg PS256) instead of RS256, with the published key.
+	PSS bool
 }
 
 // Provider is the OpenID Connect provider; it is an http.Handler and safe for
@@ -161,6 +169,14 @@ func NewProvider(cfg Config) (*Provider, error) {
 	base := strings.TrimSuffix(u.Path, "/")
 	if strings.ContainsAny(base, "{} ") {
 		return nil, errors.New("fakeoidc: Issuer path must not contain braces or spaces")
+	}
+	if len(cfg.RedirectURIs) == 0 {
+		return nil, errors.New("fakeoidc: RedirectURIs is required: /authorize redirects only to registered addresses")
+	}
+	for _, raw := range cfg.RedirectURIs {
+		if r, err := url.Parse(raw); err != nil || (r.Scheme != "http" && r.Scheme != "https") || r.Host == "" || r.Fragment != "" {
+			return nil, errors.New("fakeoidc: every RedirectURIs entry must be an absolute http(s) URL without fragment")
+		}
 	}
 	for _, usr := range cfg.Users {
 		if usr.Email == "" {
@@ -248,10 +264,20 @@ func (p *Provider) Mint(c Claims, o MintOptions) string {
 	if o.WrongKey {
 		k = p.other
 	}
-	return sign(k, claims)
+	return sign(k, claims, o.PSS)
 }
 
-func sign(k *signingKey, claims map[string]any) string {
+// advertisedAlgs is the id_token_signing_alg_values_supported of the discovery
+// document: RS256 only, like Google, unless Config says otherwise.
+func (p *Provider) advertisedAlgs() []string {
+	if len(p.cfg.AdvertisedAlgs) == 0 {
+		return []string{"RS256"}
+	}
+	return p.cfg.AdvertisedAlgs
+}
+
+// sign signs claims as RS256, or as PS256 (RSASSA-PSS, same key) when pss is set.
+func sign(k *signingKey, claims map[string]any, pss bool) string {
 	enc := func(v any) string {
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -259,9 +285,19 @@ func sign(k *signingKey, claims map[string]any) string {
 		}
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
-	input := enc(map[string]string{"alg": "RS256", "typ": "JWT", "kid": k.kid}) + "." + enc(claims)
+	alg := "RS256"
+	if pss {
+		alg = "PS256"
+	}
+	input := enc(map[string]string{"alg": alg, "typ": "JWT", "kid": k.kid}) + "." + enc(claims)
 	sum := sha256.Sum256([]byte(input))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, k.key, crypto.SHA256, sum[:])
+	var sig []byte
+	var err error
+	if pss {
+		sig, err = rsa.SignPSS(rand.Reader, k.key, crypto.SHA256, sum[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
+	} else {
+		sig, err = rsa.SignPKCS1v15(rand.Reader, k.key, crypto.SHA256, sum[:])
+	}
 	if err != nil {
 		panic(fmt.Sprintf("fakeoidc: sign token: %v", err))
 	}
@@ -285,7 +321,7 @@ func (p *Provider) discovery(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              via + "/jwks",
 		"response_types_supported":              []string{"code"},
 		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"id_token_signing_alg_values_supported": p.advertisedAlgs(),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"scopes_supported":                      []string{"openid", "email", "profile"},
 		"claims_supported":                      []string{"iss", "aud", "sub", "iat", "exp", "email", "email_verified", "name", "picture", "hd"},
@@ -323,6 +359,12 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 	// Without a trusted client and redirect target there is nobody to tell by redirect.
 	if q.Get("client_id") != p.cfg.ClientID {
 		http.Error(w, "unknown client_id", http.StatusBadRequest)
+		return
+	}
+	// The allow-list comes first and matches exactly: /authorize must never
+	// redirect to an address nobody registered (it would be an open redirector).
+	if !slices.Contains(p.cfg.RedirectURIs, q.Get("redirect_uri")) {
+		http.Error(w, "redirect_uri is not registered for this client", http.StatusBadRequest)
 		return
 	}
 	redirect, err := url.Parse(q.Get("redirect_uri"))

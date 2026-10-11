@@ -95,6 +95,7 @@ func TestProvider_ServesUnderTheIssuerPath(t *testing.T) {
 		ClientSecret: DefaultClientSecret,
 		HostedDomain: "demo.example",
 		Users:        []User{{Email: "alice@demo.example", Name: "Alice"}},
+		RedirectURIs: []string{"http://localhost:8080/api/auth/callback"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -275,8 +276,60 @@ func TestProvider_RevokeEndsRefreshTokensAndForgetsTheGrant(t *testing.T) {
 	}
 }
 
+func TestProvider_RedirectsOnlyToRegisteredURIs(t *testing.T) {
+	f := New(t, WithRedirectURIs(redirectURI, "http://localhost:5173/api/auth/callback"))
+
+	get := func(uri string, hint bool) (*http.Response, string) {
+		q := url.Values{
+			"client_id": {DefaultClientID}, "redirect_uri": {uri}, "response_type": {"code"},
+			"scope": {"openid"}, "code_challenge": {challenge("v")}, "code_challenge_method": {"S256"}, "state": {"s"},
+		}
+		if hint {
+			q.Set("login_hint", AliceEmail)
+		}
+		resp, err := noRedirect.Get(f.URL + "/authorize?" + q.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp, string(body)
+	}
+
+	for _, uri := range []string{
+		"http://evil.example/cb",
+		"https://localhost:8080/api/auth/callback",        // another scheme
+		"http://localhost:8080/api/auth/callback/",        // a trailing slash
+		"http://localhost:8080/api/auth/callback?next=/x", // a query nobody registered
+		"http://localhost:8080/api/auth/callback#frag",    // a fragment
+		"http://localhost:8080/api/auth/CALLBACK",         // another case
+		"http://localhost:8080.evil.example/api/auth/callback",
+		"",
+	} {
+		for _, hint := range []bool{true, false} {
+			resp, body := get(uri, hint)
+			if resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Location") != "" {
+				t.Errorf("redirect_uri %q (login_hint %v): status %d, Location %q; want 400 and no redirect", uri, hint, resp.StatusCode, resp.Header.Get("Location"))
+			}
+			if strings.Contains(body, "evil.example") {
+				t.Errorf("redirect_uri %q is reflected in the error page", uri)
+			}
+		}
+	}
+
+	for _, uri := range []string{redirectURI, "http://localhost:5173/api/auth/callback"} {
+		resp, _ := get(uri, true)
+		if resp.StatusCode != http.StatusFound || !strings.HasPrefix(resp.Header.Get("Location"), uri+"?") {
+			t.Errorf("registered %q: status %d, Location %q; want a redirect to it", uri, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
+}
+
 func TestNewProvider_RejectsBrokenConfigs(t *testing.T) {
-	ok := Config{Issuer: "http://localhost:8080/mockoidc", ClientID: "c", ClientSecret: "s", HostedDomain: "x.test", Users: []User{{Email: "a@x.test"}}}
+	ok := Config{
+		Issuer: "http://localhost:8080/mockoidc", ClientID: "c", ClientSecret: "s", HostedDomain: "x.test",
+		Users: []User{{Email: "a@x.test"}}, RedirectURIs: []string{"http://localhost:8080/api/auth/callback"},
+	}
 	for name, mod := range map[string]func(*Config){
 		"relative issuer":    func(c *Config) { c.Issuer = "/mockoidc" },
 		"issuer with query":  func(c *Config) { c.Issuer = "http://localhost:8080/?a=b" },
@@ -284,6 +337,10 @@ func TestNewProvider_RejectsBrokenConfigs(t *testing.T) {
 		"no client secret":   func(c *Config) { c.ClientSecret = "" },
 		"users without a hd": func(c *Config) { c.HostedDomain = "" },
 		"user without email": func(c *Config) { c.Users = []User{{Name: "x"}} },
+		"no redirect uris":   func(c *Config) { c.RedirectURIs = nil },
+		"relative redirect":  func(c *Config) { c.RedirectURIs = []string{"/api/auth/callback"} },
+		"redirect with hash": func(c *Config) { c.RedirectURIs = []string{"http://localhost:8080/cb#x"} },
+		"non-http redirect":  func(c *Config) { c.RedirectURIs = []string{"javascript:alert(1)"} },
 	} {
 		c := ok
 		mod(&c)

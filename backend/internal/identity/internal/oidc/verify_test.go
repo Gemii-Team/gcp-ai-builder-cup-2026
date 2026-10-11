@@ -2,7 +2,12 @@ package oidc
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -26,6 +31,59 @@ func verifier(t *testing.T, f *fakeoidc.Server) *Verifier {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	return v
+}
+
+// forgedClaims are the claims of a valid Workspace token, for tokens signed by
+// someone other than the provider.
+func forgedClaims(f *fakeoidc.Server) map[string]any {
+	return map[string]any{
+		"iss": f.Issuer(), "aud": f.ClientID(), "sub": valid.Sub, "email": valid.Email,
+		"email_verified": true, "name": valid.Name, "hd": valid.HD,
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+	}
+}
+
+// forge assembles a compact JWT whose signature is whatever sign returns.
+func forge(t *testing.T, header, claims map[string]any, sign func(signingInput string) []byte) string {
+	t.Helper()
+	enc := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	input := enc(header) + "." + enc(claims)
+	return input + "." + base64.RawURLEncoding.EncodeToString(sign(input))
+}
+
+// forgeHS256 is the algorithm-confusion attack: a token whose HMAC key is the
+// public modulus the provider publishes at its JWKS endpoint.
+func forgeHS256(t *testing.T, f *fakeoidc.Server) string {
+	t.Helper()
+	resp, err := http.Get(f.URL + "/jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var set struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			N   string `json:"n"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil || len(set.Keys) == 0 {
+		t.Fatalf("jwks: %v", err)
+	}
+	modulus, err := base64.RawURLEncoding.DecodeString(set.Keys[0].N)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return forge(t, map[string]any{"alg": "HS256", "typ": "JWT", "kid": set.Keys[0].Kid}, forgedClaims(f), func(input string) []byte {
+		mac := hmac.New(sha256.New, modulus)
+		mac.Write([]byte(input))
+		return mac.Sum(nil)
+	})
 }
 
 func TestVerify_Valid(t *testing.T) {
@@ -143,6 +201,8 @@ func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
 		"not a token":                         "definitely-not-a-jwt",
 		"empty":                               "",
 		"header and payload but no signature": "e30.e30.",
+		"alg none":                            forge(t, map[string]any{"alg": "none", "typ": "JWT"}, forgedClaims(f), func(string) []byte { return nil }),
+		"HS256 keyed with the public modulus": forgeHS256(t, f),
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -196,5 +256,46 @@ func TestNewVerifier_RejectsIssuerMismatchWithoutInternalURL(t *testing.T) {
 	// Discovering directly at f.URL, the document's issuer is not the one asked for.
 	if _, err := NewVerifier(t.Context(), f.URL, "", f.ClientID()); err == nil {
 		t.Fatal("discovery whose document names another issuer was accepted")
+	}
+}
+
+func TestVerify_ExposesTheNonceClaim(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Nonce: "n-0123456789"}))
+	if err != nil || got.Nonce != "n-0123456789" {
+		t.Fatalf("Verify = %+v, %v; want the nonce of the token", got, err)
+	}
+	got, err = v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{}))
+	if err != nil || got.Nonce != "" {
+		t.Fatalf("a token without a nonce: %+v, %v; want an empty Nonce", got, err)
+	}
+
+	// The nonce stays visible next to ErrNoHostedDomain, so the caller checks it
+	// before naming a rejected account.
+	noHD := valid
+	noHD.HD = ""
+	got, err = v.Verify(t.Context(), f.Mint(noHD, fakeoidc.MintOptions{Nonce: "n-abc"}))
+	if !errors.Is(err, ErrNoHostedDomain) || got.Nonce != "n-abc" {
+		t.Fatalf("Verify = %+v, %v; want ErrNoHostedDomain with the nonce", got, err)
+	}
+}
+
+func TestVerify_OnlyRS256IsAcceptedWhateverDiscoveryLists(t *testing.T) {
+	// A discovery document that also lists PS256, and a token the provider's own
+	// published key signed with PS256: valid in every other respect.
+	f := fakeoidc.New(t, fakeoidc.WithAdvertisedAlgs("RS256", "PS256"))
+	v := verifier(t, f)
+
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{})); err != nil {
+		t.Fatalf("an RS256 token: %v", err)
+	}
+	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{PSS: true}))
+	if err == nil {
+		t.Fatal("a PS256 token was accepted: the algorithm must be pinned to RS256, not taken from the discovery document")
+	}
+	if got != (Claims{}) {
+		t.Fatalf("claims = %+v with an error, want zero", got)
 	}
 }

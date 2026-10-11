@@ -25,6 +25,8 @@ type SessionRecord struct {
 type OAuthState struct {
 	Verifier string `json:"verifier"`
 	ReturnTo string `json:"return_to"`
+	// Nonce is sent in the authorization request and must come back in the ID token.
+	Nonce string `json:"nonce"`
 }
 
 func sessionKey(id string) string   { return "sess:" + id }

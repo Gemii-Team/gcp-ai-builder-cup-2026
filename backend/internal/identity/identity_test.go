@@ -158,7 +158,9 @@ func newFixture(t *testing.T, opts ...setting) *fixture {
 	}
 
 	env := dbtest.Start(t)
-	idp := fakeoidc.New(t, s.idp...)
+	// The provider redirects only to the callback of PublicURL, as Google does for
+	// a registered client.
+	idp := fakeoidc.New(t, append([]fakeoidc.Option{fakeoidc.WithRedirectURIs(callbackURL)}, s.idp...)...)
 	tokKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
 	rawKey, _ := base64.StdEncoding.DecodeString(tokKey)
 	cfg := config.Config{
@@ -327,6 +329,19 @@ func (f *fixture) serve(method, target string, cookies ...*http.Cookie) *httptes
 	return rec
 }
 
+// post is serve for a POST the way this site's own page sends it: with its Origin.
+func (f *fixture) post(target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	f.t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, nil)
+	req.Header.Set("Origin", publicURL)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+	return rec
+}
+
 var noRedirect = &http.Client{
 	Timeout:       10 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -360,8 +375,18 @@ func (f *fixture) providerRedirect(rec *httptest.ResponseRecorder) *url.URL {
 // email and returns the callback URL the provider redirects to.
 func (f *fixture) approve(authURL *url.URL, email string) *url.URL {
 	f.t.Helper()
+	return f.approveWith(authURL, email, nil)
+}
+
+// approveWith is approve after tamper has changed the authorization request's
+// parameters, as a hostile page or a broken proxy could.
+func (f *fixture) approveWith(authURL *url.URL, email string, tamper func(url.Values)) *url.URL {
+	f.t.Helper()
 	q := authURL.Query()
 	q.Set("login_hint", email)
+	if tamper != nil {
+		tamper(q)
+	}
 	u := *authURL
 	u.RawQuery = q.Encode()
 	resp, err := noRedirect.Get(u.String())
@@ -491,6 +516,11 @@ func TestLogin_RedirectsToProviderWithPKCEAndBindsState(t *testing.T) {
 	}
 	if rec2.ReturnTo != "/channels/general" {
 		t.Errorf("stored return_to = %q", rec2.ReturnTo)
+	}
+	// The nonce ties the ID token to this very request: 128 random bits in the
+	// request, the same value in Valkey.
+	if n := q.Get("nonce"); len(n) < 22 || n != rec2.Nonce {
+		t.Errorf("nonce in the request = %q, stored = %q; want the same 128-bit value", n, rec2.Nonce)
 	}
 }
 
@@ -819,22 +849,86 @@ func TestCallback_SecondLoginReusesUserAndWorkspace(t *testing.T) {
 	}
 }
 
+// signInLockWaiters counts the database sessions waiting for an advisory lock.
+func (f *fixture) signInLockWaiters() int {
+	f.t.Helper()
+	ctx := f.t.Context()
+	conn, err := pgx.Connect(ctx, f.env.SystemURL)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// Two browsers reach the callback for the same new person at once. The test holds
+// that person's sign-in lock (the one resolveUser takes), watches both callbacks
+// queue behind it in pg_locks, and only then lets go: nothing is timing-dependent
+// on the passing path, and an implementation without the lock lets the callbacks
+// through while the test still holds it.
 func TestCallback_ConcurrentFirstLogins_CreateOneUser(t *testing.T) {
 	f := newFixture(t)
 	f.seedWorkspace(fakeoidc.DefaultDomain)
 
-	const n = 4
-	results := make(chan *httptest.ResponseRecorder, n)
-	var wg sync.WaitGroup
-	for range n {
-		wg.Go(func() { results <- f.signIn(fakeoidc.AliceEmail) })
+	const browsers = 2
+	var (
+		callbacks [browsers]*url.URL
+		binds     [browsers]*http.Cookie
+	)
+	for i := range browsers {
+		authURL, bind := f.login("/")
+		callbacks[i], binds[i] = f.approve(authURL, fakeoidc.AliceEmail), bind
 	}
-	wg.Wait()
-	close(results)
 
-	for rec := range results {
-		if cookieNamed(rec, SessionCookie) == nil {
-			t.Errorf("a concurrent sign-in failed: %q", rec.Header().Get("Location"))
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, f.env.SystemURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, aliceSub); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan *httptest.ResponseRecorder, browsers)
+	for i := range browsers {
+		go func() { results <- f.serve(http.MethodGet, callbacks[i].RequestURI(), binds[i]) }()
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for f.signInLockWaiters() < browsers {
+		if len(results) > 0 {
+			t.Fatalf("a sign-in finished without waiting for the sign-in lock: %q", (<-results).Header().Get("Location"))
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sign-ins never queued behind the sign-in lock")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if users := f.users(); len(users) != 0 {
+		t.Fatalf("users exist while every sign-in waits: %+v", users)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range browsers {
+		select {
+		case rec := <-results:
+			if cookieNamed(rec, SessionCookie) == nil {
+				t.Errorf("a queued sign-in failed: %q", rec.Header().Get("Location"))
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("the sign-ins did not finish after the lock was released")
 		}
 	}
 	if users := f.users(); len(users) != 1 {
@@ -846,6 +940,28 @@ func TestCallback_ConcurrentFirstLogins_CreateOneUser(t *testing.T) {
 	} else if got, err := f.vault().Decrypt(enc); err != nil || string(got) != rt {
 		t.Fatalf("stored refresh token = %q, %v; want %q", got, err, rt)
 	}
+}
+
+// oauth2.Config initialises a cache inside itself on the first token request, so
+// the module's one shared Config must never be copied: authCodeURL builds its own
+// for the authorization URL. This runs the first exchange of a fresh module next
+// to many URL builds. Neither side does anything that synchronises with the other
+// before touching the Config, so under go test -race a copy of the shared Config
+// is reported whatever the interleaving.
+func TestSharedOAuthConfig_IsNotCopiedWhileTheFirstExchangeInitialisesIt(t *testing.T) {
+	f := newFixture(t)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 200 {
+			f.mod.authCodeURL("state", "nonce", "verifier", loginScopes)
+		}
+	})
+	// An unknown code: the provider refuses it, after the client has been set up.
+	if _, err := f.mod.oauth.Exchange(f.mod.withClient(t.Context()), "no-such-code"); err == nil {
+		t.Error("the provider accepted an unknown code")
+	}
+	wg.Wait()
 }
 
 func TestCallback_AdoptsSeedPlaceholderUserByEmail(t *testing.T) {
@@ -1157,7 +1273,7 @@ func TestLogout_DeletesSession(t *testing.T) {
 	sid := f.mustSignIn(fakeoidc.AliceEmail)
 	other := f.mustSignIn(fakeoidc.AliceEmail) // a second browser
 
-	rec := f.serve(http.MethodPost, "/api/auth/logout", sid)
+	rec := f.post("/api/auth/logout", sid)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
@@ -1174,14 +1290,57 @@ func TestLogout_DeletesSession(t *testing.T) {
 	}
 
 	// Logging out twice, or without a cookie, is harmless.
-	if rec := f.serve(http.MethodPost, "/api/auth/logout", sid); rec.Code != http.StatusNoContent {
+	if rec := f.post("/api/auth/logout", sid); rec.Code != http.StatusNoContent {
 		t.Errorf("second logout status = %d", rec.Code)
 	}
-	if rec := f.serve(http.MethodPost, "/api/auth/logout"); rec.Code != http.StatusNoContent {
+	if rec := f.post("/api/auth/logout"); rec.Code != http.StatusNoContent {
 		t.Errorf("logout without a cookie status = %d", rec.Code)
 	}
 	if rec := f.serve(http.MethodGet, "/api/auth/logout", sid); rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET logout status = %d, want 405", rec.Code)
+	}
+}
+
+func TestLogout_RefusesCrossOriginRequests(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+
+	post := func(origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		req.AddCookie(sid)
+		rec := httptest.NewRecorder()
+		f.handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for name, origin := range map[string]string{
+		"another site":        "https://evil.example",
+		"the opaque origin":   "null",
+		"a sibling subdomain": "http://app.localhost:8080",
+		"another port":        "http://localhost:9999",
+		"no origin at all":    "",
+	} {
+		rec := post(origin)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403", name, rec.Code)
+		}
+		if cookieNamed(rec, SessionCookie) != nil {
+			t.Errorf("%s: the refused request touched the session cookie", name)
+		}
+		if _, err := f.mod.Session(t.Context(), sid.Value); err != nil {
+			t.Fatalf("%s: the refused request ended the session: %v", name, err)
+		}
+	}
+
+	if rec := post(publicURL); rec.Code != http.StatusNoContent {
+		t.Fatalf("same-origin logout: status = %d, want 204", rec.Code)
+	}
+	if _, err := f.mod.Session(t.Context(), sid.Value); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("Session after a same-origin logout: err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -1281,7 +1440,7 @@ func TestConnect_IdentityServiceRoundTrip(t *testing.T) {
 	f.seedUser(ws, bobSub, fakeoidc.BobEmail, fakeoidc.BobName)
 	actor := authz.Actor{Kind: authz.ActorUser, UserID: alice, WorkspaceID: ws}
 
-	path, h := Handler(f.mod, func(context.Context) authz.Actor { return actor }, connect.WithRequireConnectProtocolHeader())
+	path, h := Handler(f.mod, func(context.Context) authz.Actor { return actor })
 	mux := http.NewServeMux()
 	mux.Handle(path, h)
 	srv := httptest.NewServer(mux)
@@ -1347,4 +1506,119 @@ func equalMaps(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func TestCallback_RejectsAWrongOrMissingNonce(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+
+	for _, tc := range []struct {
+		name   string
+		email  string
+		tamper func(url.Values)
+	}{
+		{"the nonce of another request", fakeoidc.AliceEmail, func(q url.Values) { q.Set("nonce", "nonce-of-some-other-request") }},
+		{"no nonce in the request", fakeoidc.AliceEmail, func(q url.Values) { q.Del("nonce") }},
+		// An outsider's token is checked for its nonce before the account is named.
+		{"an outsider with the wrong nonce", fakeoidc.CarolEmail, func(q url.Values) { q.Set("nonce", "another") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authURL, bind := f.login("/")
+			rec := f.callback(f.approveWith(authURL, tc.email, tc.tamper), bind)
+
+			if got, want := rec.Header().Get("Location"), "/signin?error=exchange_failed"; got != want {
+				t.Fatalf("Location = %q, want %q (and no email)", got, want)
+			}
+			if cookieNamed(rec, SessionCookie) != nil {
+				t.Fatal("a session cookie was set")
+			}
+			if users := f.users(); len(users) != 0 {
+				t.Fatalf("rows were written: %+v", users)
+			}
+			if n := f.sessionKeys(); n != 0 {
+				t.Fatalf("Valkey holds %d keys, want none", n)
+			}
+		})
+	}
+
+	// The request's own nonce is accepted.
+	if cookieNamed(f.signIn(fakeoidc.AliceEmail), SessionCookie) == nil {
+		t.Fatal("a sign-in with the matching nonce was refused")
+	}
+}
+
+func TestCallback_ReplacesThePreviousSessionOfTheBrowser(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	first := f.mustSignIn(fakeoidc.AliceEmail)
+
+	// The same browser signs in again with its old cookie still in hand.
+	authURL, bind := f.login("/")
+	rec := f.callback(f.approve(authURL, fakeoidc.AliceEmail), bind, first)
+	second := cookieNamed(rec, SessionCookie)
+	if second == nil || second.Value == first.Value {
+		t.Fatalf("the second sign-in issued %+v, want a new session", second)
+	}
+	if _, err := f.mod.Session(t.Context(), first.Value); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("the previous session after signing in again: err = %v, want ErrNotFound", err)
+	}
+	if _, err := f.mod.Session(t.Context(), second.Value); err != nil {
+		t.Errorf("the new session: %v", err)
+	}
+
+	// A cookie that names no session is harmless.
+	authURL, bind = f.login("/")
+	rec = f.callback(f.approve(authURL, fakeoidc.AliceEmail), bind, &http.Cookie{Name: SessionCookie, Value: "no-such-session"})
+	if cookieNamed(rec, SessionCookie) == nil {
+		t.Errorf("a stale cookie broke the sign-in: %q", rec.Header().Get("Location"))
+	}
+}
+
+func TestConnect_RequiresTheProtocolHeader(t *testing.T) {
+	f := newFixture(t)
+	ws := f.seedWorkspace(fakeoidc.DefaultDomain)
+	alice := f.seedUser(ws, aliceSub, fakeoidc.AliceEmail, fakeoidc.AliceName)
+	actor := authz.Actor{Kind: authz.ActorUser, UserID: alice, WorkspaceID: ws}
+
+	// No option is passed: the handler adds the requirement itself.
+	path, h := Handler(f.mod, func(context.Context) authz.Actor { return actor })
+	mux := http.NewServeMux()
+	mux.Handle(path, h)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// A browser can send this cross-site without a preflight: POST with a JSON body.
+	call := func(version string) (int, string) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path+"IssueRealtimeTicket", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if version != "" {
+			req.Header.Set("Connect-Protocol-Version", version)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	status, body := call("")
+	if status != http.StatusBadRequest || !strings.Contains(body, "Connect-Protocol-Version") {
+		t.Fatalf("POST without the header: %d %s; want 400 naming Connect-Protocol-Version", status, body)
+	}
+	if n := f.sessionKeys(); n != 0 {
+		t.Fatalf("the refused call reached the service: Valkey holds %d keys", n)
+	}
+
+	status, body = call("1")
+	if status != http.StatusOK || !strings.Contains(body, `"ticket"`) {
+		t.Fatalf("POST with the header: %d %s; want 200 and a ticket", status, body)
+	}
+	if n := f.sessionKeys(); n != 1 {
+		t.Fatalf("Valkey holds %d keys after the accepted call, want the one ticket", n)
+	}
 }

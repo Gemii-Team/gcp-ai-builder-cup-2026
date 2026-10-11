@@ -12,6 +12,9 @@ const (
 	DefaultClientID     = "kiwi-test-client"
 	DefaultClientSecret = "kiwi-test-secret"
 	DefaultDomain       = "acme.test"
+	// DefaultRedirectURI is the callback of a local K.I.W.I. on KIWI_PUBLIC_URL
+	// http://localhost:8080, the only redirect_uri New registers by default.
+	DefaultRedirectURI = "http://localhost:8080/api/auth/callback"
 
 	AliceEmail = "alice@" + DefaultDomain
 	AliceName  = "Alice Adams"
@@ -37,12 +40,21 @@ type Option func(*Config)
 // discovers through an internal URL (Server.URL) while the issuer is another one.
 func WithIssuer(issuer string) Option { return func(c *Config) { c.Issuer = issuer } }
 
+// WithAdvertisedAlgs makes the discovery document list algs as the signing
+// algorithms of ID tokens, for tests of a verifier that must not trust that list.
+func WithAdvertisedAlgs(algs ...string) Option { return func(c *Config) { c.AdvertisedAlgs = algs } }
+
 // WithUsers replaces the Workspace users.
 func WithUsers(users ...User) Option { return func(c *Config) { c.Users = users } }
 
+// WithRedirectURIs replaces the redirect_uri allow-list, which starts as
+// DefaultRedirectURI.
+func WithRedirectURIs(uris ...string) Option { return func(c *Config) { c.RedirectURIs = uris } }
+
 // New starts a Provider with DefaultClientID and DefaultClientSecret, hosted
-// domain DefaultDomain, users Alice and Bob and the outsider Carol, and stops
-// it when the test ends.
+// domain DefaultDomain, users Alice and Bob, the outsider Carol and
+// DefaultRedirectURI as the only registered redirect_uri, and stops it when the
+// test ends.
 func New(t testing.TB, opts ...Option) *Server {
 	t.Helper()
 
@@ -59,6 +71,7 @@ func New(t testing.TB, opts ...Option) *Server {
 		HostedDomain: DefaultDomain,
 		Users:        []User{{Email: AliceEmail, Name: AliceName}, {Email: BobEmail, Name: BobName}},
 		Outsider:     &User{Email: CarolEmail, Name: CarolName},
+		RedirectURIs: []string{DefaultRedirectURI},
 	}
 	for _, opt := range opts {
 		opt(&cfg)

@@ -14,6 +14,7 @@ import (
 
 	"kiwi/internal/platform/cache"
 	"kiwi/internal/platform/errs"
+	"kiwi/internal/platform/httpx"
 )
 
 const (
@@ -29,13 +30,15 @@ const (
 )
 
 // AuthHandler serves the /api/auth/ routes: login, callback, logout, config and
-// meet-consent. Mount it at "/api/auth/" outside the session interceptor; the
-// origin check of the API shell covers the POST.
+// meet-consent. Mount it at "/api/auth/" outside the session interceptor. The one
+// POST, logout, carries its own origin check, so a cross-site sign-out is refused
+// however the shell wraps this handler.
 func (m *Module) AuthHandler() http.Handler {
+	sameOrigin := httpx.RequireSameOrigin(m.cfg.PublicURL)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/auth/login", m.handleLogin)
 	mux.HandleFunc("GET "+callbackPath, m.handleCallback)
-	mux.HandleFunc("POST /api/auth/logout", m.handleLogout)
+	mux.Handle("POST /api/auth/logout", sameOrigin(http.HandlerFunc(m.handleLogout)))
 	mux.HandleFunc("GET /api/auth/config", m.handleConfig)
 	mux.HandleFunc("GET "+consentPath, m.handleMeetConsent)
 	return mux
@@ -146,7 +149,8 @@ func (m *Module) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A browser that signs in again leaves its previous session behind.
+	// A browser that signs in again gives up its previous session: the new id
+	// replaces the cookie, so the old one would only linger in Valkey.
 	if old, err := r.Cookie(SessionCookie); err == nil && old.Value != sess.ID {
 		if err := m.cache.DeleteSession(ctx, old.Value); err != nil {
 			m.log.WarnContext(ctx, "previous session was not removed", "err", err)

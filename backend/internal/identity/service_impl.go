@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -130,17 +131,29 @@ func (m *Module) LoginURL(ctx context.Context, returnTo string) (string, error) 
 }
 
 // begin starts an authorization-code flow with PKCE S256 for scopes: it stores the
-// state and the verifier in Valkey and returns the provider URL and the state.
+// state, the verifier and a nonce in Valkey and returns the provider URL and the
+// state.
 func (m *Module) begin(ctx context.Context, returnTo string, scopes []string, extra ...oauth2.AuthCodeOption) (authURL, state string, err error) {
 	state = rand.Text() // 128 random bits
+	nonce := rand.Text()
 	verifier := oauth2.GenerateVerifier()
-	if err := m.cache.PutOAuthState(ctx, state, cache.OAuthState{Verifier: verifier, ReturnTo: safeReturnTo(returnTo)}); err != nil {
+	if err := m.cache.PutOAuthState(ctx, state, cache.OAuthState{Verifier: verifier, ReturnTo: safeReturnTo(returnTo), Nonce: nonce}); err != nil {
 		return "", "", fmt.Errorf("identity: store login state: %w", err)
 	}
-	// A fresh Config for the URL: the shared one holds state oauth2 mutates.
+	return m.authCodeURL(state, nonce, verifier, scopes, extra...), state, nil
+}
+
+// authCodeURL builds the provider's authorization URL. It makes its own
+// oauth2.Config from the immutable fields: the shared one initialises a cache
+// inside itself on the first token request, so it must never be copied.
+func (m *Module) authCodeURL(state, nonce, verifier string, scopes []string, extra ...oauth2.AuthCodeOption) string {
 	conf := oauth2.Config{ClientID: m.oauth.ClientID, Endpoint: m.oauth.Endpoint, RedirectURL: m.oauth.RedirectURL, Scopes: scopes}
-	opts := append([]oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oauth2.AccessTypeOffline}, extra...)
-	return conf.AuthCodeURL(state, opts...), state, nil
+	opts := append([]oauth2.AuthCodeOption{
+		oauth2.S256ChallengeOption(verifier),
+		oauth2.AccessTypeOffline,
+		oauth2.SetAuthURLParam("nonce", nonce),
+	}, extra...)
+	return conf.AuthCodeURL(state, opts...)
 }
 
 // safeReturnTo keeps a sign-in from redirecting off the site: only a plain local
@@ -191,13 +204,17 @@ func (m *Module) HandleCallback(ctx context.Context, code, state string) (Sessio
 	}
 
 	// The hd of the signed token decides; the hd parameter of the callback URL is
-	// never read.
+	// never read. A token that is not the answer to this very request (its nonce
+	// is not the one sent) is turned away before anything about it is revealed.
 	claims, err := m.verifier.Verify(m.withClient(ctx), raw)
-	switch {
-	case errors.Is(err, oidc.ErrNoHostedDomain):
-		return Session{}, "", &CallbackError{Code: CodeDomainNotAllowed, Email: claims.Email, Err: err}
-	case err != nil:
+	if err != nil && !errors.Is(err, oidc.ErrNoHostedDomain) {
 		return Session{}, "", &CallbackError{Code: CodeExchangeFailed, Err: err}
+	}
+	if st.Nonce == "" || subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(st.Nonce)) != 1 {
+		return Session{}, "", &CallbackError{Code: CodeExchangeFailed, Err: errors.New("the ID token does not carry the nonce of the request")}
+	}
+	if errors.Is(err, oidc.ErrNoHostedDomain) {
+		return Session{}, "", &CallbackError{Code: CodeDomainNotAllowed, Email: claims.Email, Err: err}
 	}
 
 	user, err := resolveUser(ctx, m.db, claims)
