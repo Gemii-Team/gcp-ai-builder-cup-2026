@@ -237,4 +237,5 @@ export const th: I18nTable = {
   askSourceAnnounced: 'แหล่งที่มา {n}: {name}, {location}',
   askSourceAnnouncedNoLocation: 'แหล่งที่มา {n}: {name}',
   askShowingSources: 'แสดงแหล่งที่มาของ <en>{ref}</en>',
+  askOnBoard: 'อยู่บนบอร์ดแล้ว · {code}',
 };

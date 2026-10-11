@@ -2,10 +2,10 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { CreateTaskResponseSchema, DiscardDraftResponseSchema, SourceKind, TaskState, UpdateTaskResponseSchema } from '@kiwi/api-client';
-import { act, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapTask } from '../../api/mappers';
-import { keys } from '../../api/queries';
+import { keys, removeTask, writeTask } from '../../api/queries';
 import type { ArtifactView, CitationView, TaskView } from '../../api/types';
 import { at, task } from '../../testing/fixtures';
 import { createTestQueryClient, hookWrapper } from '../../testing/render';
@@ -247,6 +247,85 @@ describe('useMakeTask', () => {
     expect(gone).toBe(true);
     expect(result.current.draft).toBeNull();
     expect(result.current.failure).toBeNull();
+  });
+
+  describe('with the task list the realtime events keep current', () => {
+    /** The hook after a draft was made, with the workspace's task list loaded (as the Board, or any earlier visit, leaves it). */
+    async function made() {
+      const world = setup();
+      world.queryClient.setQueryData(keys.tasks(), []);
+      await act(async () => {
+        await world.result.current.make();
+      });
+      return world;
+    }
+    const confirmedElsewhere = () => mapTask(task({ id: 'draft-1', ref: 'TSK-2036', title: 'Decided: the launch moved to 15 Nov 2026.', state: TaskState.CONFIRMED, assigneeId: 'user-nok', fromRef: 'ANS-2209' }));
+
+    it('reads the draft from the cache by id: a draft someone confirmed elsewhere reads as confirmed', async () => {
+      const { queryClient, result } = await made();
+      expect(result.current.draft).toMatchObject({ id: 'draft-1', state: 'draft' });
+
+      act(() => {
+        writeTask(queryClient, confirmedElsewhere());
+      });
+
+      await waitFor(() => {
+        expect(result.current.draft).toMatchObject({ id: 'draft-1', state: 'confirmed', assigneeId: 'user-nok' });
+      });
+    });
+
+    it('drops the draft when someone discarded it elsewhere, and offers to make another', async () => {
+      const { api, queryClient, draft, result } = await made();
+
+      act(() => {
+        removeTask(queryClient, mapTask(draft));
+      });
+
+      await waitFor(() => {
+        expect(result.current.draft).toBeNull();
+      });
+      api.tasks.createTask.mockResolvedValueOnce(create(CreateTaskResponseSchema, { task: task({ id: 'draft-2', ref: 'TSK-2037', state: TaskState.DRAFT, fromRef: 'ANS-2209' }) }));
+      await act(async () => {
+        await result.current.make();
+      });
+      expect(result.current.draft).toMatchObject({ id: 'draft-2' });
+    });
+
+    it('treats Discard on a draft someone confirmed first (Aborted) as done: no error, the task leaves the caches and the lists reload', async () => {
+      const { api, queryClient, result } = await made();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      api.tasks.discardDraft.mockRejectedValueOnce(new ConnectError('only drafts can be discarded', Code.Aborted));
+
+      let gone: boolean | undefined;
+      await act(async () => {
+        gone = await result.current.discard();
+      });
+
+      expect(gone).toBe(true);
+      expect(result.current.failure).toBeNull();
+      expect(result.current.draft).toBeNull();
+      expect(queryClient.getQueryData<TaskView[]>(keys.tasks())).toEqual([]);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: keys.tasks() });
+    });
+
+    it('does not ask to discard a task that is already confirmed', async () => {
+      const { api, queryClient, result } = await made();
+      act(() => {
+        writeTask(queryClient, confirmedElsewhere());
+      });
+      // The query cache tells its observers on a timer, not inside the act.
+      await waitFor(() => {
+        expect(result.current.draft?.state).toBe('confirmed');
+      });
+
+      let gone: boolean | undefined;
+      await act(async () => {
+        gone = await result.current.discard();
+      });
+
+      expect(gone).toBe(false);
+      expect(api.tasks.discardDraft).not.toHaveBeenCalled();
+    });
   });
 });
 

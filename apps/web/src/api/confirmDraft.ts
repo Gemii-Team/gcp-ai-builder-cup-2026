@@ -23,11 +23,38 @@ export async function confirmDraft(api: Api, queryClient: QueryClient, draft: { 
     writeTask(queryClient, view);
     return view;
   } catch (error) {
-    if (hasCode(error, Code.NotFound) || hasCode(error, Code.Aborted)) {
-      removeTask(queryClient, draft);
-      void queryClient.invalidateQueries({ queryKey: keys.tasks() });
-    }
+    dropIfGone(queryClient, draft, error);
     throw error;
+  }
+}
+
+/**
+ * A draft the server no longer has as a draft: someone discarded it (NotFound) or confirmed it first (Aborted, the conflict
+ * the service answers with for a task that is not a draft). Its task leaves the caches and the lists are loaded again, so
+ * what the screens show is what is there. Any other error changes nothing.
+ */
+function dropIfGone(queryClient: QueryClient, draft: { id: string; channelId: string }, error: unknown): boolean {
+  const gone = hasCode(error, Code.NotFound) || hasCode(error, Code.Aborted);
+  if (gone) {
+    removeTask(queryClient, draft);
+    void queryClient.invalidateQueries({ queryKey: keys.tasks() });
+  }
+  return gone;
+}
+
+/**
+ * Discards a draft on the server and takes its task out of the task caches. A draft that is already gone, or that someone
+ * confirmed first, is what the person wanted or better: it too leaves the caches (and the lists are loaded again) and
+ * nothing is thrown. Any other failure leaves the caches as they were and rejects.
+ */
+export async function discardDraft(api: Api, queryClient: QueryClient, draft: { id: string; channelId: string }): Promise<void> {
+  try {
+    await api.tasks.discardDraft({ id: draft.id });
+    removeTask(queryClient, draft);
+  } catch (error) {
+    if (!dropIfGone(queryClient, draft, error)) {
+      throw error;
+    }
   }
 }
 

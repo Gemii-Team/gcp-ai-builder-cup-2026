@@ -1,3 +1,6 @@
+import { Code, ConnectError } from '@connectrpc/connect';
+import { ListTasksResponseSchema } from '@kiwi/api-client';
+import { keys } from '../../api/queries';
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import {
@@ -16,7 +19,7 @@ import {
 import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUiStore } from '../../state/ui';
-import { artifact, at, channel, file, meeting, run, runFrame, task } from '../../testing/fixtures';
+import { artifact, at, channel, file, frame, meeting, run, runFrame, task } from '../../testing/fixtures';
 import { renderApp } from '../../testing/render';
 import { createStubApi, seedApi } from '../../testing/stubApi';
 import { stubViewport } from '../../testing/viewport';
@@ -29,6 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
 });
 
@@ -121,7 +125,13 @@ describe('the Sources panel', () => {
     expect(await screen.findByText('Showing sources for ANS-2209.', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
-  it('shows each cited source as a slip with no perforation: a transcript, a document and a message', async () => {
+  // A message is dated unless it was sent today, so the clock is frozen: the fixture message is from 13 Oct (Bangkok).
+  it.each([
+    ['on the next day', '2026-10-14', 'Message in #ops-warehouse · Tue 13 Oct'],
+    ['on the same day', '2026-10-13', 'Message in #ops-warehouse · today'],
+  ])('shows each cited source as a slip with no perforation: a transcript, a document and a message (read %s)', async (_, day, messageKind) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(at('14:40', day));
     const opened = open();
     await answered(opened, 'What did we decide?', 'run-1');
 
@@ -138,7 +148,7 @@ describe('the Sources panel', () => {
     expect(documentSlip).toHaveTextContent('4.1 Term. This Agreement ends on 31 December 2026.');
     // A message: named from its channel, its time, the quote; no stub, since it is not an issued output.
     expect(messageSlip).toHaveTextContent('Arthit K. in #ops-warehouse14:02');
-    expect(messageSlip).toHaveTextContent('Message in #ops-warehouse · Tue 13 Oct');
+    expect(messageSlip).toHaveTextContent(messageKind);
     expect(messageSlip).not.toHaveTextContent('REF');
     expect(panel().querySelector('.kiwi-perf')).toBeNull();
   });
@@ -211,6 +221,8 @@ describe('Make a task from this', () => {
     opened.api.tasks.createTask.mockResolvedValue(create(CreateTaskResponseSchema, { task: DRAFT }));
     opened.api.tasks.updateTask.mockResolvedValue(create(UpdateTaskResponseSchema, { task: { ...DRAFT, assigneeId: 'user-nok' } }));
     opened.api.tasks.discardDraft.mockResolvedValue(create(DiscardDraftResponseSchema));
+    // The server's task list holds the draft once it is made: the slip is read back from it.
+    opened.api.tasks.listTasks.mockResolvedValue(create(ListTasksResponseSchema, { tasks: [DRAFT] }));
     await answered(opened, 'What did we decide?', 'run-1');
 
     await opened.user.click(screen.getByRole('button', { name: 'Make a task from this' }));
@@ -259,6 +271,73 @@ describe('Make a task from this', () => {
     await opened.user.click(screen.getByRole('button', { name: 'Make a task from this' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't draft the task. Try again.");
+    expect(screen.getByRole('button', { name: 'Make a task from this' })).toBeEnabled();
+  });
+});
+
+describe('the handoff slip follows the task', () => {
+  /** An answered question whose draft has been made; the workspace's task list is the server's, which holds the draft. */
+  async function drafted() {
+    const opened = open();
+    opened.api.tasks.createTask.mockResolvedValue(create(CreateTaskResponseSchema, { task: DRAFT }));
+    opened.api.tasks.listTasks.mockResolvedValue(create(ListTasksResponseSchema, { tasks: [DRAFT] }));
+    await answered(opened, 'What did we decide?', 'run-1');
+    await opened.user.click(screen.getByRole('button', { name: 'Make a task from this' }));
+    const slip = (await screen.findByRole('heading', { level: 3, name: DRAFT.title })).closest('.kiwi-draft');
+    expect(slip).not.toBeNull();
+    await waitFor(() => {
+      expect(opened.api.tasks.listTasks).toHaveBeenCalled();
+    });
+    return opened;
+  }
+
+  it('becomes an On the Board card, with a Review link and no Draft wording, Confirm or Discard, once the task is confirmed elsewhere', async () => {
+    const opened = await drafted();
+    const article = screen.getByRole('article');
+
+    // A `task_changed` frame through the real bindToQuery writes the confirmed task into the cache.
+    act(() => {
+      opened.client.emit(frame({ case: 'taskChanged', value: { ...DRAFT, state: TaskState.CONFIRMED, assigneeId: 'user-nok' } }));
+    });
+
+    const card = await within(article).findByRole('group', { name: 'Task TSK-2036' });
+    expect(card).toHaveTextContent('Decided: the launch moved to 15 Nov 2026.');
+    expect(card).toHaveTextContent('On the Board · TSK-2036');
+    expect(within(card).getByRole('link', { name: 'Review on the Board' })).toHaveAttribute('href', '/board');
+    expect(card.querySelector('.kiwi-perf, .kiwi-tag')).toBeNull();
+    expect(article).not.toHaveTextContent('Stays a draft');
+    expect(within(article).queryByRole('button', { name: /^(Discard|Confirm|Edit)/ })).not.toBeInTheDocument();
+    expect(within(article).getByRole('button', { name: 'Task drafted' })).toBeDisabled();
+  });
+
+  it('is dropped, and the button comes back, once the task is gone from the list', async () => {
+    const opened = await drafted();
+
+    act(() => {
+      opened.queryClient.setQueryData(keys.tasks(), []);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { level: 3, name: DRAFT.title })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Make a task from this' })).toBeEnabled();
+  });
+
+  it('says a failed Discard, and drops the slip without an error when the task is already confirmed (Aborted) or gone (NotFound)', async () => {
+    const opened = await drafted();
+    const discard = () => within(screen.getByRole('article')).getByRole('button', { name: 'Discard' });
+    opened.api.tasks.discardDraft.mockRejectedValueOnce(new ConnectError('down', Code.Unavailable));
+
+    await opened.user.click(discard());
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't discard the draft. Try again.");
+    expect(screen.getByRole('heading', { level: 3, name: DRAFT.title })).toBeInTheDocument();
+
+    opened.api.tasks.discardDraft.mockRejectedValueOnce(new ConnectError('only drafts can be discarded', Code.Aborted));
+    await opened.user.click(discard());
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { level: 3, name: DRAFT.title })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Make a task from this' })).toBeEnabled();
   });
 });

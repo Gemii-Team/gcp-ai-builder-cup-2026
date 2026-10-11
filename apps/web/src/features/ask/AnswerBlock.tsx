@@ -1,3 +1,4 @@
+import { OnBoardSlip } from './OnBoardSlip';
 import { Button, DraftSlip, type DraftTask } from '@kiwi/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
@@ -38,13 +39,14 @@ function draftOf(task: TaskView, answer: ArtifactView): DraftTask {
  * An answer and what a person can do with it: the Sources toggle, and Make a task from this, which drafts a real task
  * through the tasks service and shows it under the answer as a handoff slip. A handoff slip has no Confirm (a task made
  * from an answer is confirmed on the Board, or in the channel's drafts panel): Review on the Board is a link and Discard
- * deletes the draft, after which the button offers to make another.
+ * deletes the draft, after which the button offers to make another. The slip follows the task in the cache: confirmed by
+ * someone elsewhere, it gives way to a plain card that says it is on the Board; discarded elsewhere, it is dropped.
  */
 export function AnswerBlock({ answer, channelNames, pressed, onPress, selected, onSources, say }: AnswerBlockProps) {
   const { plain } = useI18n();
   const api = useApi();
   const task = useMakeTask(answer);
-  const members = useQuery({ ...membersQuery(api, task.draft?.channelId ?? ''), enabled: task.draft !== null, staleTime: 60_000 });
+  const members = useQuery({ ...membersQuery(api, task.draft?.channelId ?? ''), enabled: task.draft?.state === 'draft', staleTime: 60_000 });
   const make = useRef<HTMLButtonElement>(null);
   const slot = useRef<HTMLDivElement>(null);
   /** Where focus goes once the draft has been drawn (its owner select) or removed (the button that made it). */
@@ -105,16 +107,20 @@ export function AnswerBlock({ answer, channelNames, pressed, onPress, selected, 
       <AnswerSlip answer={answer} channelNames={channelNames} pressed={pressed} onPress={onPress} actions={actions} />
       {task.draft !== null && (
         <div ref={slot} className="ak-dr">
-          <DraftSlip
-            mode="handoff"
-            draft={draftOf(task.draft, answer)}
-            members={(members.data ?? []).map((member) => ({ id: member.userId, name: member.name }))}
-            boardHref="/board"
-            onEdit={task.edit}
-            onDiscard={() => {
-              void discard();
-            }}
-          />
+          {task.draft.state === 'draft' ? (
+            <DraftSlip
+              mode="handoff"
+              draft={draftOf(task.draft, answer)}
+              members={(members.data ?? []).map((member) => ({ id: member.userId, name: member.name }))}
+              boardHref="/board"
+              onEdit={task.edit}
+              onDiscard={() => {
+                void discard();
+              }}
+            />
+          ) : (
+            <OnBoardSlip task={task.draft} />
+          )}
         </div>
       )}
       {task.failure !== null && (

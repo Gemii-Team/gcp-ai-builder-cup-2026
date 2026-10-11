@@ -241,6 +241,7 @@ export const en = {
   askSourceAnnounced: 'Source {n}: {name}, {location}.',
   askSourceAnnouncedNoLocation: 'Source {n}: {name}.',
   askShowingSources: 'Showing sources for {ref}.',
+  askOnBoard: 'On the Board · {code}',
 };
 
 /** The shape every language table must fill: each key of `en`, a plural key with both forms. */

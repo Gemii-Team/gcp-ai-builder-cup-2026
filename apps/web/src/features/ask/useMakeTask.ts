@@ -1,15 +1,13 @@
-import { Code } from '@connectrpc/connect';
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { CreateTaskRequestSchema, SourceKind, SourceSchema, TaskState } from '@kiwi/api-client';
 import type { DraftPatch, Source } from '@kiwi/ui';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { useApi } from '../../api/client';
-import { editDraft } from '../../api/confirmDraft';
-import { hasCode } from '../../api/errors';
+import { discardDraft, editDraft } from '../../api/confirmDraft';
 import { mapTask } from '../../api/mappers';
-import { removeTask, writeTask } from '../../api/queries';
+import { tasksQuery, writeTask } from '../../api/queries';
 import type { ArtifactView, CitationView, TaskView } from '../../api/types';
 import { clipRunes } from '../../lib/text';
 
@@ -75,12 +73,18 @@ function taskSourceOf({ source, quote }: CitationView): MessageInitShape<typeof 
  * Make a task from an answer. The task is a REAL draft in the tasks service, never something a tab remembers: its channel
  * is the channel of the answer's first citation, its source is that citation's source with the cited passage as its quote,
  * and `from_ref` is the answer's REF. It enters the task caches through the one `writeTask`, so the Board's drafts band
- * shows it. A draft made here is never confirmed here: that is the Board's, or the channel's drafts panel's, to do.
+ * shows it, and it is read back from them by id: `draft` is the task as the cache has it (a draft, or confirmed by
+ * someone elsewhere) and null once it is gone. A draft made here is never confirmed here: that is the Board's, or the
+ * channel's drafts panel's, to do.
  */
 export function useMakeTask(answer: ArtifactView) {
   const api = useApi();
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<TaskView | null>(null);
+  const [made, setMade] = useState<TaskView | null>(null);
+  // What is shown is the task in the workspace's task list, which realtime keeps current: a draft someone confirmed
+  // elsewhere reads as confirmed, one someone discarded is gone. Until the list has loaded, the task as it was made stands in.
+  const tasks = useQuery({ ...tasksQuery(api), enabled: made !== null, staleTime: Infinity }).data;
+  const draft = made === null ? null : tasks === undefined ? made : (tasks.find((task) => task.id === made.id) ?? null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<'create' | 'discard' | null>(null);
   const making = useRef(false);
@@ -111,7 +115,7 @@ export function useMakeTask(answer: ArtifactView) {
       }
       const view = mapTask(task);
       writeTask(queryClient, view);
-      setDraft(view);
+      setMade(view);
       return view;
     } catch {
       setFailure('create');
@@ -122,22 +126,22 @@ export function useMakeTask(answer: ArtifactView) {
     }
   }
 
-  /** Deletes the draft, which frees the button to make another. A draft that is already gone counts as discarded. Resolves with whether it is gone. */
+  /**
+   * Deletes the draft, which frees the button to make another. A draft that is already gone, or that someone confirmed
+   * first, leaves too, with no error (`discardDraft` drops it from the caches). Resolves with whether it is gone.
+   */
   async function discard(): Promise<boolean> {
-    if (draft === null) {
+    if (draft?.state !== 'draft') {
       return false;
     }
     setFailure(null);
     try {
-      await api.tasks.discardDraft({ id: draft.id });
-    } catch (error) {
-      if (!hasCode(error, Code.NotFound)) {
-        setFailure('discard');
-        return false;
-      }
+      await discardDraft(api, queryClient, draft);
+    } catch {
+      setFailure('discard');
+      return false;
     }
-    removeTask(queryClient, draft);
-    setDraft(null);
+    setMade(null);
     return true;
   }
 
@@ -147,7 +151,8 @@ export function useMakeTask(answer: ArtifactView) {
       return;
     }
     await editDraft(api, queryClient, draft.id, patch);
-    setDraft((current) =>
+    // The cache carries the change when the task list is loaded; this is the copy shown until it is.
+    setMade((current) =>
       current === null
         ? current
         : {
