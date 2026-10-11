@@ -1,0 +1,29 @@
+version: '3'
+
+# The single entry point for repository tasks. Tasks are added by the change
+# that makes them work.
+tasks:
+  setup:
+    desc: Install the git hooks and the JavaScript dependencies
+    cmds:
+      - lefthook install
+      - pnpm install
+
+  test:
+    desc: Run the Go tests (race detector) and the TypeScript tests
+    cmds:
+      - cd backend && go test -race ./...
+      - pnpm -r test
+
+  lint:
+    desc: Check Go formatting, run golangci-lint and the TypeScript linters
+    cmds:
+      - |
+        unformatted="$(gofmt -l backend)"
+        if [ -n "$unformatted" ]; then
+          echo "gofmt: these files need formatting:"
+          echo "$unformatted"
+          exit 1
+        fi
+      - cd backend && golangci-lint run
+      - pnpm -r lint
