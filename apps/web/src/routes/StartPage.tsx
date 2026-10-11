@@ -2,6 +2,7 @@ import { Pending } from '@kiwi/ui';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { useChannels } from '../api/hooks';
+import { LoadFailed } from '../features/shell/LoadFailed';
 import { T, useI18n } from '../i18n';
 import { useUiStore } from '../state/ui';
 
@@ -21,7 +22,21 @@ export function StartPage() {
 
   return (
     <main className="main">
-      <div className="notice-page">{channels.data?.length === 0 ? <T k="noChannels" /> : <Pending label={plain('loading')} />}</div>
+      <div className="notice-page">
+        {channels.isError && channels.data === undefined ? (
+          <LoadFailed
+            onRetry={() => {
+              void channels.refetch();
+            }}
+          >
+            <T k="channelsLoadFailed" />
+          </LoadFailed>
+        ) : channels.data?.length === 0 ? (
+          <T k="noChannels" />
+        ) : (
+          <Pending label={plain('loading')} />
+        )}
+      </div>
     </main>
   );
 }

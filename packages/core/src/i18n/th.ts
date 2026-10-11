@@ -21,6 +21,12 @@ export const th: I18nTable = {
   signInSeeAsks: '<en>K.I.W.I.</en> จะถามก่อนอ่าน <en>Drive</en> หรือร่างอีเมลใน <en>Gmail</en>',
   signInNotInWorkspace: 'ไม่ได้อยู่ใน <en>Google Workspace</en> ของ {workspace} ลงชื่อเข้าใช้ด้วยบัญชีที่ทำงานของคุณ',
   signInSignedOut: 'คุณออกจากระบบแล้ว',
+  signInNotInThisWorkspace: 'ไม่ได้อยู่ใน <en>Google Workspace</en> นี้ ลงชื่อเข้าใช้ด้วยบัญชีที่ทำงานของคุณ',
+  signInErrorStateMismatch: 'การลงชื่อเข้าใช้หมดอายุแล้ว ลองอีกครั้ง',
+  signInErrorDomainNotAllowed: 'ใช้บัญชี <en>Google Workspace</en> ของบริษัทคุณ',
+  signInErrorAccessDenied: 'การลงชื่อเข้าใช้ด้วย <en>Google</en> ถูกยกเลิก ลองอีกครั้ง',
+  signInErrorExchangeFailed: 'ลงชื่อเข้าใช้ด้วย <en>Google</en> ไม่สำเร็จ ลองอีกครั้ง',
+  languageLabel: 'ภาษา',
 
   // Shell: rail, tab bar and account
   loading: 'กำลังโหลด…',
@@ -42,6 +48,8 @@ export const th: I18nTable = {
   signOut: 'ออกจากระบบ',
   signOutFailed: 'ออกจากระบบไม่ได้ ลองอีกครั้ง',
   noChannels: 'คุณยังไม่ได้อยู่ในช่องสนทนาใดเลย',
+  appLoadFailed: 'โหลด <en>K.I.W.I.</en> ไม่สำเร็จ ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง',
+  channelsLoadFailed: 'โหลดรายการช่องสนทนาของคุณไม่สำเร็จ',
 
   // Channel: header and stream
   back: 'กลับ',

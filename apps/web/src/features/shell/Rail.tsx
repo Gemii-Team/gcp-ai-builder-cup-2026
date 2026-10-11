@@ -4,6 +4,7 @@ import { T, useI18n } from '../../i18n';
 import { useUiStore } from '../../state/ui';
 import { AccountMenu } from './AccountMenu';
 import { AppLink } from './AppLink';
+import { LoadFailed } from './LoadFailed';
 
 /**
  * The Ink Teal rail of the desktop: the workspace, the Views (Board and Ask, with `aria-current` on the current route),
@@ -62,6 +63,15 @@ export function Rail() {
           );
         })}
       </ul>
+      {channels.isError && channels.data === undefined && (
+        <LoadFailed
+          onRetry={() => {
+            void channels.refetch();
+          }}
+        >
+          <T k="channelsLoadFailed" />
+        </LoadFailed>
+      )}
       <h2>
         <T k="railAgents" />
       </h2>

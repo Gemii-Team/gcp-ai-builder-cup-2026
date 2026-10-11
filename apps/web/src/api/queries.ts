@@ -11,6 +11,8 @@ import type { ChannelView, ChatMessage, Delivery, TaskView } from './types';
  */
 export const keys = {
   me: () => ['me'] as const,
+  /** The names `GET /api/auth/config` gives the sign-in page; a plain `fetch`, not a Connect call. */
+  authConfig: () => ['auth-config'] as const,
   users: () => ['users'] as const,
   channels: () => ['channels'] as const,
   members: (channelId: string) => ['members', channelId] as const,

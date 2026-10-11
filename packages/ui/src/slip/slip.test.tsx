@@ -632,6 +632,20 @@ describe('Pending', () => {
     expect(container.querySelector('.kiwi-pbar')).toHaveClass('kiwi-pulse');
   });
 
+  it('takes a ready-made label, so a screen can tag the Latin words of its own Thai sentence', () => {
+    render(
+      <Pending
+        label={
+          <>
+            กำลังเปลี่ยนเส้นทางไปยัง <span lang="en">Google</span>…
+          </>
+        }
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('กำลังเปลี่ยนเส้นทางไปยัง Google…');
+    expect(screen.getByText('Google')).toHaveAttribute('lang', 'en');
+  });
+
   it('sits inside a slip as a PendingSlip, without a perforation or a REF (nothing was issued yet)', () => {
     const { container } = render(<PendingSlip label="Summarizing file…" />);
     expect(screen.getByRole('status')).toHaveTextContent('Summarizing file…');

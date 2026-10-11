@@ -25,6 +25,12 @@ export const en = {
   signInSeeAsks: 'K.I.W.I. asks before it reads Drive or drafts Gmail.',
   signInNotInWorkspace: "isn't part of {workspace}'s Google Workspace. Sign in with your work account.",
   signInSignedOut: "You've signed out.",
+  signInNotInThisWorkspace: "isn't part of this Google Workspace. Sign in with your work account.",
+  signInErrorStateMismatch: 'That sign-in expired. Try again.',
+  signInErrorDomainNotAllowed: 'Use your company Google Workspace account.',
+  signInErrorAccessDenied: 'Google sign-in was cancelled. Try again.',
+  signInErrorExchangeFailed: "Couldn't finish signing in with Google. Try again.",
+  languageLabel: 'Language',
 
   // Shell: rail, tab bar and account
   loading: 'Loading…',
@@ -46,6 +52,8 @@ export const en = {
   signOut: 'Sign out',
   signOutFailed: "Couldn't sign out. Try again.",
   noChannels: "You aren't in any channel yet.",
+  appLoadFailed: "Couldn't load K.I.W.I. Check your connection and try again.",
+  channelsLoadFailed: "Couldn't load your channels.",
 
   // Channel: header and stream
   back: 'Back',

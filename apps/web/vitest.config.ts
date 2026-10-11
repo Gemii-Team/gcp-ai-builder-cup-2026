@@ -7,5 +7,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    // Vitest turns every stylesheet into an empty one; a test that reads one as text (`./x.css?raw`) gets the real text.
+    css: { include: [/\.css\?raw$/] },
   },
 });

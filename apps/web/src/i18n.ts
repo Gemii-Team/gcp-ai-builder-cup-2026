@@ -1,6 +1,6 @@
 import { createI18n, type I18n, type I18nKey, type I18nParams } from '@kiwi/core';
-import { LabelsProvider, Rich } from '@kiwi/ui';
-import { createContext, createElement, useContext, useMemo, type ReactElement, type ReactNode } from 'react';
+import { LabelsProvider, LangRuns, Rich } from '@kiwi/ui';
+import { createContext, createElement, Fragment, useContext, useMemo, type ReactElement, type ReactNode } from 'react';
 import { useUiStore } from './state/ui';
 
 // A `.ts` file on purpose: it exports a provider, a hook and a component together, which the fast-refresh lint rule
@@ -26,4 +26,39 @@ export function useI18n(): I18n {
 /** A screen string as text, its Latin words inside Thai prose tagged `lang="en"`. */
 export function T({ k, params }: { k: I18nKey; params?: I18nParams }): ReactElement {
   return createElement(Rich, { text: useI18n().t(k, params) });
+}
+
+const HOLE = /\{(\w+)\}/g;
+
+/**
+ * A screen string whose `{name}` placeholders are filled with elements rather than text (a domain in mono, a workspace
+ * name tagged for its language). The text around them goes through `Rich`, so Latin words in Thai prose keep `lang="en"`.
+ */
+export function TSlots({ k, params = {}, slots }: { k: I18nKey; params?: I18nParams; slots: Record<string, ReactNode> }): ReactElement {
+  // Leaving each slot's own `{name}` in the filled text marks where its element goes.
+  const holes = Object.fromEntries(Object.keys(slots).map((name) => [name, `{${name}}`]));
+  const text = useI18n().t(k, { ...params, ...holes });
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const hole of text.matchAll(HOLE)) {
+    if (hole.index > last) {
+      parts.push(createElement(Rich, { key: `t${String(last)}`, text: text.slice(last, hole.index) }));
+    }
+    parts.push(createElement(Fragment, { key: `s${String(hole.index)}` }, slots[hole[1]]));
+    last = hole.index + hole[0].length;
+  }
+  if (last < text.length) {
+    parts.push(createElement(Rich, { key: `t${String(last)}`, text: text.slice(last) }));
+  }
+  return createElement(Fragment, null, parts);
+}
+
+/**
+ * Text a person or an admin wrote (a workspace name) set into a screen string. Thai runs carry `lang="th"`; in the Thai
+ * interface a name made of Latin letters carries `lang="en"`, as every Latin word of a Thai sentence does.
+ */
+export function UserText({ text }: { text: string }): ReactElement {
+  const { lang } = useI18n();
+  const latinOnly = /[A-Za-z]/.test(text) && !/[\u0E00-\u0E7F]/.test(text);
+  return lang === 'th' && latinOnly ? createElement('span', { lang: 'en' }, text) : createElement(LangRuns, { text });
 }

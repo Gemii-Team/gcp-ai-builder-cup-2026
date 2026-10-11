@@ -13,14 +13,23 @@
 }
 
 html,
-body,
-#root {
+body {
+  margin: 0;
+}
+
+/*
+ * The shell fills the viewport and scrolls inside its panes, so while it is mounted the page itself does not scroll. Only
+ * then: Vite ships this sheet to every route, and the sign-in page is a column that must scroll on a short phone held
+ * sideways. `:has()` ties the lock to the shell being in the document, with no script to forget to undo it.
+ */
+html:has(.shell),
+html:has(.shell) body,
+html:has(.shell) #root {
   height: 100%;
 }
 
-html,
-body {
-  margin: 0;
+html:has(.shell),
+html:has(.shell) body {
   overflow: hidden;
 }
 
@@ -234,6 +243,39 @@ a.ch:active {
   font-size: 14px;
   line-height: 1.5;
   color: var(--color-on-primary);
+}
+
+/* A load that failed, with Retry: in the failure family on the page, in Rail White on the rail's teal. */
+.load-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--color-returned-ink);
+}
+
+.load-failed p {
+  min-width: 0;
+}
+
+.load-failed svg {
+  color: var(--color-returned-red);
+}
+
+.rail .load-failed {
+  margin: 8px 12px 0 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-on-primary);
+}
+
+.rail .load-failed svg {
+  color: inherit;
+}
+
+/* What shows in place of the shell when the session cannot be loaded at all. */
+.session-error {
+  padding: 24px var(--pad);
 }
 
 /* The avatar tile: the first letter of a name on Tally Mint. */

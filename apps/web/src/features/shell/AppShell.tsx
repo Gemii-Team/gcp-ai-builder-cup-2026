@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import { useChannels } from '../../api/hooks';
 import { RealtimeProvider } from '../../realtime/provider';
 import { useUiStore } from '../../state/ui';
+import { useSession } from '../auth/useSession';
 import { Rail } from './Rail';
 import { TabBar } from './TabBar';
 
@@ -30,6 +31,7 @@ function useFirstSightOfChannels() {
  * bar and the demo label, which is pinned on every screen because every message, file and task here is synthetic.
  */
 export function AppShell({ client }: { /** The live connection; tests pass a fake, the app builds its own. */ client?: RealtimeClient }) {
+  useSession();
   useFirstSightOfChannels();
   return (
     <RealtimeProvider client={client}>

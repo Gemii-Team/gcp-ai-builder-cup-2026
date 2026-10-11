@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import { cx } from '../cx';
 import { Icon } from '../icons';
 import { LangRuns } from '../LangRuns';
@@ -31,14 +31,15 @@ export function PendingBar() {
   return <span aria-hidden="true" className={cx('kiwi-pbar', !reduced && 'kiwi-pulse')} />;
 }
 
-/** The inline pending row: a clock icon, a plain sentence and the pulsing bar. It wraps when narrow. */
-export function Pending({ label }: { label: string }) {
+/**
+ * The inline pending row: a clock icon, a plain sentence and the pulsing bar. It wraps when narrow. A string label has its
+ * Thai runs tagged `lang="th"`; a screen whose sentence holds Latin words in Thai prose passes the finished node instead.
+ */
+export function Pending({ label }: { label: ReactNode }) {
   return (
     <p role="status" className="kiwi-pending">
       <Icon name="clock" />
-      <span>
-        <LangRuns text={label} />
-      </span>
+      <span>{typeof label === 'string' ? <LangRuns text={label} /> : label}</span>
       <PendingBar />
     </p>
   );
