@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { Icon } from '../icons';
 import { useLabels } from '../labels';
 
@@ -9,16 +10,19 @@ type DraftsBarProps = {
   /** The id of that sheet. */
   controls: string;
   onPress: () => void;
+  /** The bar's button, so the sheet it opens can return focus to it: a click does not focus a button in every browser. */
+  ref?: Ref<HTMLButtonElement>;
 };
 
 /**
  * The phone's 44px drafts bar above the composer (40px on the narrowest phones): a dashed amber bar while drafts wait,
  * a plain one when none do. Pressing it opens the drafts sheet; from 1024px the panel is on screen and the bar is hidden.
  */
-export function DraftsBar({ count, expanded, controls, onPress }: DraftsBarProps) {
+export function DraftsBar({ count, expanded, controls, onPress, ref }: DraftsBarProps) {
   const labels = useLabels();
   return (
     <button
+      ref={ref}
       type="button"
       className="kiwi-draftbar"
       data-zero={count === 0 || undefined}
