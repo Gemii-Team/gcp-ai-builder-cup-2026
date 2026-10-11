@@ -29,8 +29,11 @@ const (
 // ExtractPages implements Service. A PDF gives the text layer of each page, an image
 // the text the model reads out of it as one page, and a text file one page; a page
 // without text is left out and the others keep their numbers. The file must be ready,
-// so bytes that were never validated are never read for the index. A PDF without a text
-// layer wraps llm.ErrUnsupportedByProvider, as the local models cannot read scans.
+// so bytes that were never validated are never read for the index, and the bytes read
+// must be the ones that were validated: an object written again since is
+// errs.ErrConflict. A PDF without a text layer wraps llm.ErrUnsupportedByProvider, as
+// the local models cannot read scans, and one that cannot be read at all wraps
+// pdftext.ErrUnreadable.
 func (s *service) ExtractPages(ctx context.Context, a authz.Actor, fileID uuid.UUID) ([]Page, error) {
 	act := authz.ActFileRead
 	if a.Kind == authz.ActorSystem {
@@ -51,10 +54,13 @@ func (s *service) ExtractPages(ctx context.Context, a authz.Actor, fileID uuid.U
 	if err != nil {
 		return nil, err
 	}
+	if digestOf(data) != row.Sha256 {
+		return nil, fmt.Errorf("docs: the stored bytes of file %s are not the ones that were validated: %w", fileID, errs.ErrConflict)
+	}
 
 	switch kindOf(row.Mime) {
 	case kindPDF:
-		return pdfPages(row, data)
+		return pdfPages(ctx, row, data)
 	case kindImage:
 		return s.imagePages(ctx, row, data)
 	case kindText:
@@ -63,8 +69,8 @@ func (s *service) ExtractPages(ctx context.Context, a authz.Actor, fileID uuid.U
 	return nil, fmt.Errorf("docs: file %s is of type %q: %w", fileID, row.Mime, errs.ErrInvalid)
 }
 
-func pdfPages(row store.FilesFile, data []byte) ([]Page, error) {
-	texts, err := pdftext.Extract(bytes.NewReader(data))
+func pdfPages(ctx context.Context, row store.FilesFile, data []byte) ([]Page, error) {
+	texts, err := pdftext.ExtractContext(ctx, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("docs: read file %s: %w", row.ID, err)
 	}

@@ -2,6 +2,8 @@ package docs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -35,8 +37,9 @@ const (
 	statusFailed    = "failed"
 )
 
-// headBytes is how much of a recording checkRecording reads.
-const headBytes = 4 << 10
+// headBytes is how much of a recording checkRecording reads: enough for the chunks a
+// WAV writer puts before its audio.
+const headBytes = 64 << 10
 
 // protoJSON is how events are carried on the outbox: field names as in the .proto,
 // which is what outbox.Enqueue reads workspace_id by.
@@ -76,15 +79,22 @@ func (s *service) can(ctx context.Context, a authz.Actor, act authz.Action, chan
 	return s.authz.Can(ctx, a, act, authz.Resource{ChannelID: channelID})
 }
 
-// requireActor refuses a principal that has no workspace to read a file in.
+// requireActor refuses a principal that has no workspace to read a file in. A system
+// actor is a job: the indexer's has no user behind it, because the events it reacts to
+// carry none, and authz decides what it may do. A user or an agent needs the person it
+// acts for.
 func requireActor(a authz.Actor) error {
 	switch a.Kind {
-	case authz.ActorUser, authz.ActorAgent, authz.ActorSystem:
+	case authz.ActorUser, authz.ActorAgent:
+		if a.EffectiveUserID() == uuid.Nil {
+			return fmt.Errorf("docs: actor has no user: %w", errs.ErrForbidden)
+		}
+	case authz.ActorSystem:
 	default:
 		return fmt.Errorf("docs: unknown actor kind %q: %w", a.Kind, errs.ErrForbidden)
 	}
-	if a.WorkspaceID == uuid.Nil || a.EffectiveUserID() == uuid.Nil {
-		return fmt.Errorf("docs: actor has no workspace or user: %w", errs.ErrForbidden)
+	if a.WorkspaceID == uuid.Nil {
+		return fmt.Errorf("docs: actor has no workspace: %w", errs.ErrForbidden)
 	}
 	return nil
 }
@@ -99,6 +109,12 @@ func parseID(raw, what string) (uuid.UUID, error) {
 
 // blobKey is where the bytes of file id of workspace ws live.
 func blobKey(ws, id uuid.UUID) string { return "uploads/" + ws.String() + "/" + id.String() }
+
+// digestOf is the hex sha256 of data, as files.sha256 records it.
+func digestOf(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // load reads a file; a file of another workspace is as good as missing.
 func load(ctx context.Context, d *db.DB, ws, id uuid.UUID) (row store.FilesFile, err error) {
@@ -177,14 +193,26 @@ func (s *service) CreateUpload(ctx context.Context, a authz.Actor, req *filesv1.
 // CompleteUpload implements Service. It checks the stored object against the upload
 // that was declared, because the browser, not the server, put the bytes there: the
 // size must be above zero and within both the declared size and the purpose's limit,
-// the type must be the declared one, and a recording must really be a PCM 16-bit WAV.
+// the type must be the declared one, and a recording must really be a PCM 16-bit WAV
+// with audio in it. The bytes are read once, under that limit, and what is recorded is
+// the size and the sha256 of exactly those bytes: the object can be written again until
+// its signed URL expires, so every later read of it (the analysis, the indexer) compares
+// what it reads with that hash.
 //
-// A violation deletes the object and fails the file with the reason, and returns the
-// failed file together with an error that wraps errs.ErrInvalid and names the reason.
-// An accepted attachment commits, in one transaction, the status analyzing, its
-// message in the channel and the events that start its analysis; an accepted recording
-// stays uploaded, for the meetings domain to take over. Completing a file twice is
-// harmless: the second call returns the file as it then is.
+// A violation fails the file with the reason, deletes the object and returns the failed
+// file together with an error that wraps errs.ErrInvalid. The text of that error is a
+// contract, which the web client reads the reason from:
+//
+//	docs: upload rejected (<reason>): <detail>: invalid
+//
+// where <reason> is one of empty, too_large, unsupported_type, unsupported_audio and
+// size_mismatch (the object changed while it was being read), and <detail> is a sentence
+// for people. An accepted attachment commits, in one transaction, the status analyzing,
+// its message in the channel and the events that start its analysis; an accepted
+// recording stays uploaded, for the meetings domain to take over. Completing a file
+// twice is harmless: the second call returns the file as it then is, without reading
+// the object again (an accepted recording is bound to the hash it was accepted with),
+// or the same rejection.
 func (s *service) CompleteUpload(ctx context.Context, a authz.Actor, fileID uuid.UUID) (*filesv1.File, error) {
 	row, err := s.authorize(ctx, a, fileID, authz.ActFileUpload)
 	if err != nil {
@@ -193,13 +221,8 @@ func (s *service) CompleteUpload(ctx context.Context, a authz.Actor, fileID uuid
 	if a.EffectiveUserID() != row.UploadedBy {
 		return nil, fmt.Errorf("docs: file %s was uploaded by someone else: %w", fileID, errs.ErrForbidden)
 	}
-
-	switch {
-	case row.Status == statusFailed && row.MessageID == nil:
-		// Rejected on an earlier call.
-		return fileProto(row), rejection(deref(row.FailureReason), "rejected earlier")
-	case row.Status != statusUploaded:
-		return fileProto(row), nil
+	if row.Status != statusUploaded || row.Sha256 != "" {
+		return s.settled(ctx, row)
 	}
 
 	attrs, err := s.blob.Head(ctx, row.BlobKey)
@@ -210,75 +233,121 @@ func (s *service) CompleteUpload(ctx context.Context, a authz.Actor, fileID uuid
 		return nil, fmt.Errorf("docs: head upload: %w", err)
 	}
 	purpose := purposeOf(row.Mime)
-	reason, detail, err := s.validate(ctx, row, purpose, attrs)
+	v, err := s.validate(ctx, row, purpose, attrs)
 	if err != nil {
 		return nil, err
 	}
-	if reason != "" {
-		return s.reject(ctx, a, row, reason, detail)
+	if v.reason != "" {
+		return s.reject(ctx, a, row, v.reason, v.detail)
 	}
-	return s.accept(ctx, a, row, purpose, attrs.Size)
+	return s.accept(ctx, a, row, purpose, v)
 }
 
-// validate returns why the stored object may not be accepted, as a failure reason and
-// a sentence, or "" when it may. An error is a failure to look, not a verdict.
-func (s *service) validate(ctx context.Context, row store.FilesFile, purpose filesv1.UploadPurpose, attrs blob.Attrs) (reason, detail string, err error) {
+// settled is what CompleteUpload answers for a file that is no longer waiting to be
+// validated: the file as it is, or, for one that was rejected, the same rejection again.
+// A rejected upload whose signed URL has not expired can have an object put back since,
+// so it is deleted again.
+func (s *service) settled(ctx context.Context, row store.FilesFile) (*filesv1.File, error) {
+	if row.Status == statusFailed && row.MessageID == nil {
+		if err := s.blob.Delete(ctx, row.BlobKey); err != nil {
+			slog.ErrorContext(ctx, "docs: delete a rejected upload", "file_id", row.ID, "error", err)
+		}
+		return fileProto(row), rejection(deref(row.FailureReason), "rejected earlier")
+	}
+	return fileProto(row), nil
+}
+
+// verdict is what validation found out: why the upload may not be accepted, as a failure
+// reason and a sentence, or, when it may, the size and the sha256 of its bytes.
+type verdict struct {
+	reason, detail string
+	size           int64
+	sha256         string
+}
+
+// validate reads the stored object once and returns the verdict on it. An error is a
+// failure to look, not a verdict.
+func (s *service) validate(ctx context.Context, row store.FilesFile, purpose filesv1.UploadPurpose, attrs blob.Attrs) (verdict, error) {
 	limit := min(row.Size, maxBytes(purpose))
 	switch {
 	case attrs.Size == 0:
-		return reasonEmpty, "the file has no content", nil
+		return verdict{reason: reasonEmpty, detail: "the file has no content"}, nil
 	case attrs.Size > limit:
-		return reasonTooLarge, fmt.Sprintf("the file is %d bytes and the limit is %d", attrs.Size, limit), nil
+		return verdict{reason: reasonTooLarge, detail: fmt.Sprintf("the file is %d bytes and the limit is %d", attrs.Size, limit)}, nil
 	}
 	if mt, err := mediaType(attrs.ContentType); err != nil || mt != row.Mime {
-		return reasonUnsupportedType, fmt.Sprintf("the file was stored as %q, not %q", attrs.ContentType, row.Mime), nil
-	}
-	if purpose != filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING {
-		return "", "", nil
+		return verdict{reason: reasonUnsupportedType, detail: fmt.Sprintf("the file was stored as %q, not %q", attrs.ContentType, row.Mime)}, nil
 	}
 
 	rc, err := s.blob.Read(ctx, row.BlobKey)
+	if errors.Is(err, fs.ErrNotExist) {
+		return verdict{}, fmt.Errorf("docs: nothing has been uploaded for file %s yet: %w", row.ID, errs.ErrInvalid)
+	}
 	if err != nil {
-		return "", "", fmt.Errorf("docs: read recording: %w", err)
+		return verdict{}, fmt.Errorf("docs: read upload: %w", err)
 	}
 	defer func() { _ = rc.Close() }()
-	head := make([]byte, headBytes)
-	n, err := io.ReadFull(rc, head)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return "", "", fmt.Errorf("docs: read recording: %w", err)
+	hash, head := sha256.New(), &headWriter{max: headBytes}
+	// One byte more than it was stored with: an object that grew since the Head is caught.
+	n, err := io.Copy(io.MultiWriter(hash, head), io.LimitReader(rc, attrs.Size+1))
+	if err != nil {
+		return verdict{}, fmt.Errorf("docs: read upload: %w", err)
 	}
-	if err := checkRecording(head[:n]); err != nil {
-		return reasonUnsupportedAudio, err.Error(), nil
+	if n != attrs.Size {
+		return verdict{reason: reasonSizeMismatch, detail: fmt.Sprintf("the file is %d bytes but was stored with %d: it changed while it was checked", n, attrs.Size)}, nil
 	}
-	return "", "", nil
+	if purpose == filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING {
+		if err := checkRecording(head.buf, n); err != nil {
+			return verdict{reason: reasonUnsupportedAudio, detail: err.Error()}, nil
+		}
+	}
+	return verdict{size: n, sha256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
-// reject deletes an upload that failed validation and fails its file. The object goes
-// first: if it cannot be deleted the file stays uploaded and the client may complete
-// it again.
+// reject fails an upload that did not pass validation and deletes its object. The file
+// is locked and must still be waiting: if a concurrent completion has settled it in the
+// meantime, that one stands and nothing is deleted. The object goes after the commit; if
+// it cannot be deleted the file is failed all the same, nothing serves an object of a
+// file that was never accepted, and the next completion tries again.
 func (s *service) reject(ctx context.Context, a authz.Actor, row store.FilesFile, reason, detail string) (*filesv1.File, error) {
-	if err := s.blob.Delete(ctx, row.BlobKey); err != nil {
-		return nil, fmt.Errorf("docs: delete rejected upload: %w", err)
-	}
-	var failed store.FilesFile
+	var cur store.FilesFile
+	rejected := false
 	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {
-		failed, err = failFile(ctx, tx, row.ID, reason)
-		return err
+		q := store.New(tx)
+		if cur, err = q.LockFile(ctx, row.ID); err != nil {
+			return fmt.Errorf("docs: lock file: %w", err)
+		}
+		if cur.Status != statusUploaded || cur.Sha256 != "" {
+			return nil
+		}
+		if cur, err = q.RejectUpload(ctx, store.RejectUploadParams{ID: row.ID, Reason: &reason}); err != nil {
+			return fmt.Errorf("docs: reject upload: %w", err)
+		}
+		rejected = true
+		return enqueueStatus(ctx, tx, cur)
 	})
 	if err != nil {
 		return nil, err
 	}
+	if !rejected {
+		return s.settled(ctx, cur)
+	}
+	if err := s.blob.Delete(ctx, row.BlobKey); err != nil {
+		slog.ErrorContext(ctx, "docs: delete a rejected upload", "file_id", row.ID, "error", err)
+	}
 	slog.WarnContext(ctx, "docs: upload rejected", "file_id", row.ID, "reason", reason)
-	return fileProto(failed), rejection(reason, detail)
+	return fileProto(cur), rejection(reason, detail)
 }
 
-// rejection is the error CompleteUpload returns for an upload it refused.
+// rejection is the error CompleteUpload returns for an upload it refused; its text is
+// the contract documented there.
 func rejection(reason, detail string) error {
 	return fmt.Errorf("docs: upload rejected (%s): %s: %w", reason, detail, errs.ErrInvalid)
 }
 
-// accept records a validated upload. The size is what was really stored.
-func (s *service) accept(ctx context.Context, a authz.Actor, row store.FilesFile, purpose filesv1.UploadPurpose, size int64) (*filesv1.File, error) {
+// accept records a validated upload: the size and the sha256 of the bytes that were
+// validated.
+func (s *service) accept(ctx context.Context, a authz.Actor, row store.FilesFile, purpose filesv1.UploadPurpose, v verdict) (*filesv1.File, error) {
 	var accepted store.FilesFile
 	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
@@ -288,13 +357,13 @@ func (s *service) accept(ctx context.Context, a authz.Actor, row store.FilesFile
 		if err != nil {
 			return fmt.Errorf("docs: lock file: %w", err)
 		}
-		if cur.Status != statusUploaded {
+		if cur.Status != statusUploaded || cur.Sha256 != "" {
 			accepted = cur
 			return nil
 		}
 
 		if purpose == filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING {
-			accepted, err = q.FinishUpload(ctx, store.FinishUploadParams{ID: row.ID, Size: size, Status: statusUploaded})
+			accepted, err = q.FinishUpload(ctx, store.FinishUploadParams{ID: row.ID, Size: v.size, Sha256: v.sha256, Status: statusUploaded})
 			return err
 		}
 
@@ -302,7 +371,7 @@ func (s *service) accept(ctx context.Context, a authz.Actor, row store.FilesFile
 			ChannelId:   row.ChannelID.String(),
 			ClientMsgId: row.ID.String(),
 			Body:        row.Name,
-			Attachments: []*chatv1.FileRef{{FileId: row.ID.String(), Name: row.Name, Mime: row.Mime, Size: size}},
+			Attachments: []*chatv1.FileRef{{FileId: row.ID.String(), Name: row.Name, Mime: row.Mime, Size: v.size}},
 			AuthorKind:  chatv1.AuthorKind_AUTHOR_KIND_USER.Enum(),
 			AuthorId:    proto.String(row.UploadedBy.String()),
 		})
@@ -313,7 +382,7 @@ func (s *service) accept(ctx context.Context, a authz.Actor, row store.FilesFile
 		if err != nil {
 			return fmt.Errorf("docs: attachment message id: %w", err)
 		}
-		accepted, err = q.FinishUpload(ctx, store.FinishUploadParams{ID: row.ID, Size: size, Status: statusAnalyzing, MessageID: &messageID})
+		accepted, err = q.FinishUpload(ctx, store.FinishUploadParams{ID: row.ID, Size: v.size, Sha256: v.sha256, Status: statusAnalyzing, MessageID: &messageID})
 		if err != nil {
 			return fmt.Errorf("docs: record upload: %w", err)
 		}
@@ -330,14 +399,15 @@ func systemActor(row store.FilesFile) authz.Actor {
 	return authz.Actor{Kind: authz.ActorSystem, WorkspaceID: row.WorkspaceID, UserID: row.UploadedBy}
 }
 
-// failFile moves a file to failed with reason and announces it. A file that already
-// left uploaded and analyzing is returned as it is, and nothing is announced.
-func failFile(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string) (store.FilesFile, error) {
+// failAnalysis moves a file that is being analysed to failed with reason and announces
+// it. A file in any other status, one that is ready, or rejected, or already failed, is
+// returned as it is, and nothing is announced.
+func failAnalysis(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string) (store.FilesFile, error) {
 	q := store.New(tx)
 	if _, err := q.LockFile(ctx, id); err != nil {
 		return store.FilesFile{}, fmt.Errorf("docs: lock file: %w", err)
 	}
-	failed, err := q.MarkFileFailed(ctx, store.MarkFileFailedParams{ID: id, Reason: &reason})
+	failed, err := q.FailAnalysis(ctx, store.FailAnalysisParams{ID: id, Reason: &reason})
 	if errors.Is(err, pgx.ErrNoRows) {
 		cur, err := q.GetFile(ctx, id)
 		if err != nil {
@@ -346,7 +416,7 @@ func failFile(ctx context.Context, tx pgx.Tx, id uuid.UUID, reason string) (stor
 		return cur, nil
 	}
 	if err != nil {
-		return store.FilesFile{}, fmt.Errorf("docs: fail file: %w", err)
+		return store.FilesFile{}, fmt.Errorf("docs: fail analysis: %w", err)
 	}
 	return failed, enqueueStatus(ctx, tx, failed)
 }
@@ -362,12 +432,18 @@ func (s *service) GetFile(ctx context.Context, a authz.Actor, fileID uuid.UUID) 
 	return fileProto(row), nil
 }
 
-// DownloadURL implements Service. A file whose object is gone (a rejected upload, or
-// one never uploaded) has nothing to download and is errs.ErrNotFound.
+// DownloadURL implements Service. It signs a URL only for a file whose upload was
+// accepted, which is a file with the sha256 of the bytes that were validated: an upload
+// that was rejected (and whose signed PUT, if it has not expired, can put an object
+// back) or has not been completed yet holds bytes nobody has looked at, and is
+// errs.ErrNotFound. A file whose analysis failed is downloadable: its bytes passed.
 func (s *service) DownloadURL(ctx context.Context, a authz.Actor, fileID uuid.UUID) (string, error) {
 	row, err := s.authorize(ctx, a, fileID, authz.ActFileRead)
 	if err != nil {
 		return "", err
+	}
+	if row.Sha256 == "" {
+		return "", fmt.Errorf("docs: file %s was not accepted (%s): %w", fileID, row.Status, errs.ErrNotFound)
 	}
 	if _, err := s.blob.Head(ctx, row.BlobKey); errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("docs: file %s has no stored content: %w", fileID, errs.ErrNotFound)

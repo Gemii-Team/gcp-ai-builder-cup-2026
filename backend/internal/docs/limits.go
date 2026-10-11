@@ -61,6 +61,7 @@ const (
 	reasonUnsupportedType       = "unsupported_type"
 	reasonEmpty                 = "empty"
 	reasonUnsupportedAudio      = "unsupported_audio"
+	reasonSizeMismatch          = "size_mismatch"
 	reasonNoTextLayer           = "no_text_layer"
 	reasonUnsupportedByProvider = "unsupported_by_provider"
 	reasonUnreadable            = "unreadable"
@@ -121,22 +122,47 @@ func checkDeclared(purpose filesv1.UploadPurpose, contentType string, size int64
 	return mt, nil
 }
 
+// unsafeRune reports whether r is dropped from text that comes from outside, a file
+// name or what a model wrote: control characters (the caller decides whether a newline
+// or a tab may stay), the line and paragraph separators, and the bidirectional
+// overrides and isolates that make text display differently from what it is.
+func unsafeRune(r rune) bool {
+	switch {
+	case unicode.IsControl(r):
+		return true
+	case r == '\u2028' || r == '\u2029', // line and paragraph separators
+		r >= '\u202A' && r <= '\u202E', r >= '\u2066' && r <= '\u2069': // bidirectional overrides
+		return true
+	}
+	return false
+}
+
+// cleanText makes text from a model fit to store and show: invalid UTF-8 and NUL, which
+// Postgres cannot keep in a jsonb string, are dropped with everything else unsafeRune
+// names, except that newlines and tabs stay when keepBreaks is set.
+func cleanText(s string, keepBreaks bool) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if keepBreaks && (r == '\n' || r == '\t') {
+			return r
+		}
+		if unsafeRune(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, "")))
+}
+
 // sanitizeName makes a client-supplied file name safe to store and show: it drops path
 // separators, control characters and the bidirectional overrides that make a name
 // display differently from what it is, and keeps everything else, Thai and quotes
 // included. A name with nothing left or longer than maxNameRunes is errs.ErrInvalid.
 func sanitizeName(name string) (string, error) {
-	clean := strings.Map(func(r rune) rune {
-		switch {
-		case r == '/' || r == '\\' || unicode.IsControl(r):
-			return -1
-		case r == '\u2028' || r == '\u2029', // line and paragraph separators
-			r >= '\u202A' && r <= '\u202E', r >= '\u2066' && r <= '\u2069': // bidirectional overrides
+	clean := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || unsafeRune(r) {
 			return -1
 		}
 		return r
-	}, strings.ToValidUTF8(name, ""))
-	clean = strings.TrimSpace(clean)
+	}, strings.ToValidUTF8(name, "")))
 	if clean == "" {
 		return "", fmt.Errorf("docs: a file needs a name: %w", errs.ErrInvalid)
 	}
@@ -146,23 +172,41 @@ func sanitizeName(name string) (string, error) {
 	return clean, nil
 }
 
+// headWriter keeps the first max bytes written to it.
+type headWriter struct {
+	buf []byte
+	max int
+}
+
+func (h *headWriter) Write(p []byte) (int, error) {
+	if room := h.max - len(h.buf); room > 0 {
+		h.buf = append(h.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
 // errNotWAV is why checkRecording refused a recording.
-var errNotWAV = errors.New("not a PCM 16-bit WAV file")
+var errNotWAV = errors.New("not a PCM 16-bit WAV file with audio in it")
 
 // checkRecording reads the head of a recording and accepts only what the transcription
 // step can chunk and the model can decode: a RIFF/WAVE file whose fmt chunk says PCM,
-// 16 bits per sample, mono or stereo, at any sample rate. head is the first bytes of
-// the object; the fmt chunk is almost always within the first 44 of them, but the
-// chunks before it (JUNK, bext, LIST) can push it out, so a few KiB are read.
-func checkRecording(head []byte) error {
+// 16 bits per sample, mono or stereo, at any sample rate, followed by a data chunk that
+// holds at least one frame of audio. head is the first bytes of the object and total
+// its whole size; the chunks that come before the audio (fmt, then JUNK, bext, LIST)
+// are in the head unless a writer put more than headBytes of them there. A data chunk
+// whose size field is 0 or 0xFFFFFFFF, as streaming writers leave it, is as long as
+// the file is.
+func checkRecording(head []byte, total int64) error {
 	if len(head) < 12 || string(head[0:4]) != "RIFF" || string(head[8:12]) != "WAVE" {
 		return fmt.Errorf("%w: no RIFF/WAVE header", errNotWAV)
 	}
+	frame := int64(0) // bytes of one sample frame, once the fmt chunk is read
 	for off := 12; off+8 <= len(head); {
 		id, size := string(head[off:off+4]), int64(binary.LittleEndian.Uint32(head[off+4:off+8]))
-		body := off + 8
-		if id == "fmt " {
-			if size < 16 || body+16 > len(head) {
+		body := int64(off) + 8
+		switch id {
+		case "fmt ":
+			if size < 16 || body+16 > int64(len(head)) {
 				return fmt.Errorf("%w: truncated fmt chunk", errNotWAV)
 			}
 			format := binary.LittleEndian.Uint16(head[body:])
@@ -172,15 +216,30 @@ func checkRecording(head []byte) error {
 			if format != 1 || (channels != 1 && channels != 2) || bits != 16 || rate == 0 {
 				return fmt.Errorf("%w: format %d, %d channels, %d bits, %d Hz", errNotWAV, format, channels, bits, rate)
 			}
+			frame = int64(channels) * 2
+		case "data":
+			if frame == 0 {
+				return fmt.Errorf("%w: the data chunk comes before the fmt chunk", errNotWAV)
+			}
+			audio := total - body
+			if size != 0 && size != 0xFFFFFFFF {
+				audio = min(size, audio)
+			}
+			if audio < frame {
+				return fmt.Errorf("%w: the data chunk is empty", errNotWAV)
+			}
 			return nil
 		}
 		// Chunks are padded to an even size. size is untrusted: a chunk that runs past
 		// the head ends the scan.
-		next := int64(body) + size + size&1
+		next := body + size + size&1
 		if next > int64(len(head)) {
 			break
 		}
 		off = int(next)
 	}
-	return fmt.Errorf("%w: no fmt chunk", errNotWAV)
+	if frame == 0 {
+		return fmt.Errorf("%w: no fmt chunk", errNotWAV)
+	}
+	return fmt.Errorf("%w: no data chunk in the first %d bytes", errNotWAV, len(head))
 }

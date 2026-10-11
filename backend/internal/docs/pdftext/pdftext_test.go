@@ -111,7 +111,7 @@ func thaiPDF(stream string) []byte {
 
 func TestPDFText_ExtractsPerPage(t *testing.T) {
 	want := []string{"First page.", "Second page, with (parens) and \\ a slash.", "Third page"}
-	pages, err := Extract(bytes.NewReader(minimalPDF(want...)))
+	pages, err := local(minimalPDF(want...))
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestPDFText_PageCount(t *testing.T) {
 		{"three pages", minimalPDF("a", "b", "c"), 3},
 		{"a scan", imageOnlyPDF(), 1},
 	} {
-		n, err := PageCount(bytes.NewReader(c.pdf))
+		n, err := localCount(c.pdf)
 		if err != nil || n != c.want {
 			t.Errorf("PageCount(%s) = %d, %v, want %d", c.name, n, err, c.want)
 		}
@@ -161,7 +161,7 @@ func TestPDFText_SeparatesWordsAndLines(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			pages, err := Extract(bytes.NewReader(helveticaPage(c.stream)))
+			pages, err := local(helveticaPage(c.stream))
 			if err != nil || len(pages) != 1 {
 				t.Fatalf("Extract = %q, %v", pages, err)
 			}
@@ -188,7 +188,7 @@ func TestPDFText_ThaiThroughToUnicode(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			pages, err := Extract(bytes.NewReader(thaiPDF(c.stream)))
+			pages, err := local(thaiPDF(c.stream))
 			if err != nil || len(pages) != 1 {
 				t.Fatalf("Extract = %q, %v", pages, err)
 			}
@@ -200,7 +200,7 @@ func TestPDFText_ThaiThroughToUnicode(t *testing.T) {
 }
 
 func TestPDFText_ScannedPDFHasNoText(t *testing.T) {
-	pages, err := Extract(bytes.NewReader(imageOnlyPDF()))
+	pages, err := local(imageOnlyPDF())
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -219,14 +219,14 @@ func TestPDFText_UnreadableInput(t *testing.T) {
 		{"text", []byte("this is not a pdf")},
 		{"a header only", []byte("%PDF-1.4\n")},
 		{"cut off", good[:len(good)/2]},
-		{"a page count that lies", buildPDF("/Font << /F1 3 0 R >>", []string{helvetica}, 1_000_000_000, "BT ET")},
+		{"a catalog without pages", rawPDF("<< /Type /Catalog >>")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if pages, err := Extract(bytes.NewReader(c.data)); !errors.Is(err, ErrUnreadable) || pages != nil {
+			if pages, err := local(c.data); !errors.Is(err, ErrUnreadable) || pages != nil {
 				t.Fatalf("Extract = %q, %v, want ErrUnreadable", pages, err)
 			}
-			if n, err := PageCount(bytes.NewReader(c.data)); !errors.Is(err, ErrUnreadable) || n != 0 {
+			if n, err := localCount(c.data); !errors.Is(err, ErrUnreadable) || n != 0 {
 				t.Fatalf("PageCount = %d, %v, want ErrUnreadable", n, err)
 			}
 		})
@@ -234,12 +234,65 @@ func TestPDFText_UnreadableInput(t *testing.T) {
 }
 
 func TestPDFText_BrokenContentKeepsWhatWasRead(t *testing.T) {
-	// An unbalanced "end" makes the parser panic in the middle of the stream.
-	pages, err := Extract(bytes.NewReader(helveticaPage("BT /F1 12 Tf 72 720 Td (kept) Tj end 0 -14 Td (lost) Tj ET")))
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
+	for name, content := range map[string]string{
+		"an unterminated string":      "BT /F1 12 Tf 72 720 Td (kept) Tj ET (never ends",
+		"an unterminated array":       "BT /F1 12 Tf 72 720 Td (kept) Tj ET [(a) 5",
+		"an unterminated hex":         "BT /F1 12 Tf 72 720 Td (kept) Tj ET <4865",
+		"an unterminated dict":        "BT /F1 12 Tf 72 720 Td (kept) Tj ET << /A (b)",
+		"a stray delimiter run":       "BT /F1 12 Tf 72 720 Td (kept) Tj ET ) > ] } >> ]]]",
+		"an inline image with no end": "BT /F1 12 Tf 72 720 Td (kept) Tj ET BI /W 1 ID \x00\x01\x02",
+	} {
+		t.Run(name, func(t *testing.T) {
+			pages, err := local(helveticaPage(content))
+			if err != nil || !slices.Equal(pages, []string{"kept"}) {
+				t.Fatalf("Extract = %q, %v, want the text before the break", pages, err)
+			}
+		})
 	}
-	if !slices.Equal(pages, []string{"kept"}) {
-		t.Fatalf("pages = %q, want the text before the break", pages)
+}
+
+func TestPDFText_PageWithAFilterItCannotDecodeIsBlank(t *testing.T) {
+	// LZW is not supported: the page is blank and the others are still read.
+	pdf := rawPDF(
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "+fontRes(7)+" >>",
+		stream("/Filter /LZWDecode", "garbage"),
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R "+fontRes(7)+" >>",
+		stream("", show("second")),
+		helveticaObj,
+	)
+	pages, err := extractWithin(t, pdf)
+	if err != nil || !slices.Equal(pages, []string{"", "second"}) {
+		t.Fatalf("Extract = %q, %v, want a blank first page and the second", pages, err)
+	}
+}
+
+func TestPDFText_ContentSyntax(t *testing.T) {
+	cases := []struct {
+		name, content, want string
+	}{
+		{"octal and escaped characters", `(a\101\\\)b) Tj`, `aA\)b`},
+		{"nested parentheses", `(a (b) c) Tj`, `a (b) c`},
+		{"a line continuation", "(ab\\\ncd) Tj", "abcd"},
+		{"a hex string", `<48656C6C6F> Tj`, "Hello"},
+		{"a hex string with blanks and an odd digit", `<4865 6C6C 6F7> Tj`, "Hellop"},
+		{"signed and fractional numbers", "+72 .5 Td (a) Tj -.5 -14.5 Td (b) Tj", "a\nb"},
+		{"an operator without its operands does nothing", "Tj Td (ok) Tj", "ok"},
+		{"a number is not a string", "5 Tj (ok) Tj", "ok"},
+		{"names in an array are skipped", "[(a) /X (b) << /Y (no) >> [(nested)]] TJ", "ab"},
+		{"a comment", "% (hidden) Tj\n(shown) Tj", "shown"},
+		{"a marked-content dictionary", "/Span << /MCID 0 /Alt (hidden) >> BDC (shown) Tj EMC", "shown"},
+		{"an inline image is skipped", "BI /W 2 /H 1 /CS /G /BPC 8 ID ab(Tj)(oops) Tj\nEI (after) Tj", "after"},
+		{"more operands than any operator takes", strings.Repeat("1 ", 200) + "(x) Tj", "x"},
+		{"a name with an escape", "/F#31 12 Tf (ok) Tj", "ok"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pages, err := local(helveticaPage("BT /F1 12 Tf 72 720 Td " + c.content + " ET"))
+			if err != nil || !slices.Equal(pages, []string{c.want}) {
+				t.Fatalf("Extract = %q, %v, want %q", pages, err, c.want)
+			}
+		})
 	}
 }

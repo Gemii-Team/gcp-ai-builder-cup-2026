@@ -23,12 +23,13 @@ SELECT * FROM files.files WHERE id = sqlc.arg(id);
 SELECT * FROM files.files WHERE id = sqlc.arg(id) FOR UPDATE;
 
 -- name: FinishUpload :one
--- Records the validated object: its real size, and for an attachment the message that
+-- Records the validated object: its real size and the sha256 of its bytes, which is
+-- what every later read of it is compared with, and for an attachment the message that
 -- carries it and the status analyzing. A recording keeps the status uploaded for the
--- meetings domain to take over.
+-- meetings domain to take over. A row with a sha256 is a row that was accepted.
 UPDATE files.files
-SET size = sqlc.arg(size), status = sqlc.arg(status), message_id = sqlc.narg(message_id)
-WHERE id = sqlc.arg(id) AND status = 'uploaded'
+SET size = sqlc.arg(size), sha256 = sqlc.arg(sha256), status = sqlc.arg(status), message_id = sqlc.narg(message_id)
+WHERE id = sqlc.arg(id) AND status = 'uploaded' AND sha256 = ''
 RETURNING *;
 
 -- name: MarkFileReady :one
@@ -37,12 +38,20 @@ SET status = 'ready', ref = sqlc.arg(ref), pages = sqlc.narg(pages), failure_rea
 WHERE id = sqlc.arg(id) AND status = 'analyzing'
 RETURNING *;
 
--- name: MarkFileFailed :one
--- A file fails on the way in (uploaded) or during analysis (analyzing); a ready or
--- already failed file is left alone.
+-- name: RejectUpload :one
+-- Fails an upload that did not pass validation. It leaves only an upload that is still
+-- waiting: one that a concurrent completion has accepted is not flipped.
 UPDATE files.files
 SET status = 'failed', failure_reason = sqlc.arg(reason)
-WHERE id = sqlc.arg(id) AND status IN ('uploaded', 'analyzing')
+WHERE id = sqlc.arg(id) AND status = 'uploaded' AND sha256 = ''
+RETURNING *;
+
+-- name: FailAnalysis :one
+-- Fails an analysis that cannot finish. It leaves only a file that is being analysed:
+-- one that is ready, or already failed, is not touched.
+UPDATE files.files
+SET status = 'failed', failure_reason = sqlc.arg(reason)
+WHERE id = sqlc.arg(id) AND status = 'analyzing'
 RETURNING *;
 
 -- name: RestartAnalysis :one

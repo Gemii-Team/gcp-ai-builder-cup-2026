@@ -11,26 +11,66 @@ import (
 	"github.com/google/uuid"
 )
 
+const failAnalysis = `-- name: FailAnalysis :one
+UPDATE files.files
+SET status = 'failed', failure_reason = $1
+WHERE id = $2 AND status = 'analyzing'
+RETURNING id, workspace_id, channel_id, message_id, uploaded_by, ref, name, blob_key, mime, size, sha256, pages, status, failure_reason, created_at
+`
+
+type FailAnalysisParams struct {
+	Reason *string
+	ID     uuid.UUID
+}
+
+// Fails an analysis that cannot finish. It leaves only a file that is being analysed:
+// one that is ready, or already failed, is not touched.
+func (q *Queries) FailAnalysis(ctx context.Context, arg FailAnalysisParams) (FilesFile, error) {
+	row := q.db.QueryRow(ctx, failAnalysis, arg.Reason, arg.ID)
+	var i FilesFile
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.UploadedBy,
+		&i.Ref,
+		&i.Name,
+		&i.BlobKey,
+		&i.Mime,
+		&i.Size,
+		&i.Sha256,
+		&i.Pages,
+		&i.Status,
+		&i.FailureReason,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const finishUpload = `-- name: FinishUpload :one
 UPDATE files.files
-SET size = $1, status = $2, message_id = $3
-WHERE id = $4 AND status = 'uploaded'
+SET size = $1, sha256 = $2, status = $3, message_id = $4
+WHERE id = $5 AND status = 'uploaded' AND sha256 = ''
 RETURNING id, workspace_id, channel_id, message_id, uploaded_by, ref, name, blob_key, mime, size, sha256, pages, status, failure_reason, created_at
 `
 
 type FinishUploadParams struct {
 	Size      int64
+	Sha256    string
 	Status    string
 	MessageID *uuid.UUID
 	ID        uuid.UUID
 }
 
-// Records the validated object: its real size, and for an attachment the message that
+// Records the validated object: its real size and the sha256 of its bytes, which is
+// what every later read of it is compared with, and for an attachment the message that
 // carries it and the status analyzing. A recording keeps the status uploaded for the
-// meetings domain to take over.
+// meetings domain to take over. A row with a sha256 is a row that was accepted.
 func (q *Queries) FinishUpload(ctx context.Context, arg FinishUploadParams) (FilesFile, error) {
 	row := q.db.QueryRow(ctx, finishUpload,
 		arg.Size,
+		arg.Sha256,
 		arg.Status,
 		arg.MessageID,
 		arg.ID,
@@ -172,22 +212,21 @@ func (q *Queries) LockFile(ctx context.Context, id uuid.UUID) (FilesFile, error)
 	return i, err
 }
 
-const markFileFailed = `-- name: MarkFileFailed :one
+const markFileReady = `-- name: MarkFileReady :one
 UPDATE files.files
-SET status = 'failed', failure_reason = $1
-WHERE id = $2 AND status IN ('uploaded', 'analyzing')
+SET status = 'ready', ref = $1, pages = $2, failure_reason = NULL
+WHERE id = $3 AND status = 'analyzing'
 RETURNING id, workspace_id, channel_id, message_id, uploaded_by, ref, name, blob_key, mime, size, sha256, pages, status, failure_reason, created_at
 `
 
-type MarkFileFailedParams struct {
-	Reason *string
-	ID     uuid.UUID
+type MarkFileReadyParams struct {
+	Ref   *string
+	Pages *int32
+	ID    uuid.UUID
 }
 
-// A file fails on the way in (uploaded) or during analysis (analyzing); a ready or
-// already failed file is left alone.
-func (q *Queries) MarkFileFailed(ctx context.Context, arg MarkFileFailedParams) (FilesFile, error) {
-	row := q.db.QueryRow(ctx, markFileFailed, arg.Reason, arg.ID)
+func (q *Queries) MarkFileReady(ctx context.Context, arg MarkFileReadyParams) (FilesFile, error) {
+	row := q.db.QueryRow(ctx, markFileReady, arg.Ref, arg.Pages, arg.ID)
 	var i FilesFile
 	err := row.Scan(
 		&i.ID,
@@ -209,21 +248,22 @@ func (q *Queries) MarkFileFailed(ctx context.Context, arg MarkFileFailedParams) 
 	return i, err
 }
 
-const markFileReady = `-- name: MarkFileReady :one
+const rejectUpload = `-- name: RejectUpload :one
 UPDATE files.files
-SET status = 'ready', ref = $1, pages = $2, failure_reason = NULL
-WHERE id = $3 AND status = 'analyzing'
+SET status = 'failed', failure_reason = $1
+WHERE id = $2 AND status = 'uploaded' AND sha256 = ''
 RETURNING id, workspace_id, channel_id, message_id, uploaded_by, ref, name, blob_key, mime, size, sha256, pages, status, failure_reason, created_at
 `
 
-type MarkFileReadyParams struct {
-	Ref   *string
-	Pages *int32
-	ID    uuid.UUID
+type RejectUploadParams struct {
+	Reason *string
+	ID     uuid.UUID
 }
 
-func (q *Queries) MarkFileReady(ctx context.Context, arg MarkFileReadyParams) (FilesFile, error) {
-	row := q.db.QueryRow(ctx, markFileReady, arg.Ref, arg.Pages, arg.ID)
+// Fails an upload that did not pass validation. It leaves only an upload that is still
+// waiting: one that a concurrent completion has accepted is not flipped.
+func (q *Queries) RejectUpload(ctx context.Context, arg RejectUploadParams) (FilesFile, error) {
+	row := q.db.QueryRow(ctx, rejectUpload, arg.Reason, arg.ID)
 	var i FilesFile
 	err := row.Scan(
 		&i.ID,
