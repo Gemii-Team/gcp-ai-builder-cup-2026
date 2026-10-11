@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "@kiwi/ui/fonts.css";
+@import "@kiwi/ui/theme.css";
+
+/* The component classes live in @kiwi/ui; Tailwind scans them with the app's own sources. */
+@source "../../../packages/ui/src";
