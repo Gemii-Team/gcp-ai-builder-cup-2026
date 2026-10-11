@@ -1,0 +1,99 @@
+version: "2"
+
+# One store per domain: queries/<schema>.sql generates internal/<domain>/internal/store,
+# which only that domain's package can import. Every store also carries models for
+# the whole schema, because sqlc reads all of db/migrations.
+#
+# `task gen` skips a domain until its query file exists (sqlc stops on a missing
+# one), so adding db/queries/<schema>.sql is all a domain has to do.
+#
+# jsonb is json.RawMessage, never []byte: the pools use pgx's QueryExecModeExec
+# (no prepared statements, PgBouncer-safe), which sends a []byte as bytea and
+# makes Postgres reject it as json.
+
+overrides:
+  go:
+    overrides:
+      - db_type: uuid
+        go_type: github.com/google/uuid.UUID
+      - db_type: uuid
+        nullable: true
+        go_type:
+          import: github.com/google/uuid
+          type: UUID
+          pointer: true
+      - db_type: vector
+        go_type:
+          import: github.com/pgvector/pgvector-go
+          package: pgvector
+          type: Vector
+      - db_type: jsonb
+        go_type: encoding/json.RawMessage
+      - db_type: jsonb
+        nullable: true
+        go_type: encoding/json.RawMessage
+
+sql:
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/identity.sql
+    gen:
+      go:
+        package: store
+        out: internal/identity/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/chat.sql
+    gen:
+      go:
+        package: store
+        out: internal/chat/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/files.sql
+    gen:
+      go:
+        package: store
+        out: internal/docs/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/meetings.sql
+    gen:
+      go:
+        package: store
+        out: internal/meetings/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/tasks.sql
+    gen:
+      go:
+        package: store
+        out: internal/tasks/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/knowledge.sql
+    gen:
+      go:
+        package: store
+        out: internal/knowledge/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/agents.sql
+    gen:
+      go:
+        package: store
+        out: internal/agents/internal/store
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true

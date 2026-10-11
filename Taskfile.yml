@@ -29,9 +29,34 @@ tasks:
       - pnpm -r lint
 
   gen:
-    desc: Generate Go and TypeScript code from proto/ (buf generate)
+    desc: Generate code from proto/ (buf generate) and the domain stores from backend/db (sqlc generate)
     preconditions:
       - sh: test -x packages/api-client/node_modules/.bin/protoc-gen-es
         msg: protoc-gen-es is not installed; run `task setup` (pnpm install) first
     cmds:
       - buf generate
+      # sqlc stops at a query file that does not exist yet. backend/sqlc.yaml lists
+      # every domain, so hand sqlc a copy with only the domains that have theirs.
+      - silent: true
+        cmd: |
+          cd backend
+          rc=0
+          awk '
+            function flush() {
+              if (inblock && queries != "" && system("test -f " queries) == 0) { printf "%s", block; kept++ }
+              block = ""; queries = ""
+            }
+            /^  - engine:/ { flush(); inblock = 1 }
+            !inblock { print; next }
+            { block = block $0 "\n" }
+            $1 == "queries:" { queries = $2 }
+            END { flush(); exit kept ? 0 : 3 }
+          ' sqlc.yaml > .sqlc.gen.yaml || rc=$?
+          if [ "$rc" = 0 ]; then
+            sqlc generate -f .sqlc.gen.yaml || rc=$?
+          elif [ "$rc" = 3 ]; then
+            echo "sqlc: no query files in backend/db/queries yet; nothing to generate"
+            rc=0
+          fi
+          rm -f .sqlc.gen.yaml
+          exit "$rc"
