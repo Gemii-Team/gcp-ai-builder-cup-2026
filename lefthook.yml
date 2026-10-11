@@ -1,0 +1,15 @@
+# Local hygiene hooks (spec section 7.6): install once with `lefthook install`.
+# CI repeats the same checks, so skipping a hook with --no-verify still fails the push there.
+pre-commit:
+  commands:
+    gitleaks:
+      run: gitleaks git --pre-commit --staged --redact -c .gitleaks.toml
+    check-paths:
+      run: bash scripts/hygiene/check-paths.sh --staged
+
+pre-push:
+  commands:
+    check-paths:
+      run: bash scripts/hygiene/check-paths.sh --range @{push}..HEAD
+    gitleaks:
+      run: gitleaks git --log-opts="@{push}..HEAD" --redact -c .gitleaks.toml
