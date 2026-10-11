@@ -72,6 +72,10 @@ type Deps struct {
 	// chat.Service.MemberChannelIDs so that tasks never imports chat. It bounds
 	// the workspace-wide ListTasks and decides who may be assigned a task.
 	MemberChannels func(ctx context.Context, workspaceID, userID uuid.UUID) ([]uuid.UUID, error)
+	// ChannelMembers lists the members of a channel; the composition root wires it to
+	// chat.Service.ListMembers, as MemberChannels is wired. Only Jobs uses it: the
+	// task.draft job matches the owner hints of a meeting to the members of its channel.
+	ChannelMembers func(ctx context.Context, a authz.Actor, channelID uuid.UUID) ([]*chatv1.Member, error)
 }
 
 type service struct {

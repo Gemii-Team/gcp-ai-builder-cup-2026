@@ -17,6 +17,7 @@ require (
 	gocloud.dev v0.46.0
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.37.0
+	golang.org/x/text v0.41.0
 	google.golang.org/adk/v2 v2.5.0
 	google.golang.org/api v0.298.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
@@ -93,7 +94,6 @@ require (
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/genai v1.71.0 // indirect
 	google.golang.org/grpc v1.84.0 // indirect

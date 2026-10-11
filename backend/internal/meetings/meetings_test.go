@@ -37,7 +37,9 @@ import (
 	"kiwi/internal/platform/google"
 	"kiwi/internal/platform/outbox"
 	"kiwi/internal/testkit/dbtest"
+	"kiwi/internal/testkit/fakeblob"
 	"kiwi/internal/testkit/fakegoogle"
+	"kiwi/internal/testkit/fakellm"
 )
 
 // ---- fixture ----------------------------------------------------------------
@@ -109,8 +111,14 @@ type fixture struct {
 	summ *fakeSummarizer
 	deps Deps
 	svc  Service
-	// ingest and check are the meeting.ingest and meeting.transcript_check handlers.
-	ingest, check bus.Handler
+	// ingest, check and transcribe are the meeting.ingest, meeting.transcript_check and
+	// meeting.transcribe handlers.
+	ingest, check, transcribe bus.Handler
+	// blob and llm are the object store the recordings are in and the model that
+	// transcribes them; files is what the FileChecker answers (see recording).
+	blob  *fakeblob.Store
+	llm   *fakellm.Client
+	files map[uuid.UUID]fileReply
 	// logs holds what the meetings code logged during the test.
 	logs *bytes.Buffer
 	// chatHook, when set, runs before every post the meetings code makes inside a
@@ -141,18 +149,21 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(d.Close)
 
 	az := authz.New(sqlMembership{db: d})
-	f := &fixture{t: t, env: env, db: d, g: fakegoogle.New(), summ: &fakeSummarizer{reply: defaultSummary()}, logs: logs, now: base}
+	f := &fixture{
+		t: t, env: env, db: d, g: fakegoogle.New(), summ: &fakeSummarizer{reply: defaultSummary()}, logs: logs, now: base,
+		blob: fakeblob.New(), llm: fakellm.New(), files: map[uuid.UUID]fileReply{},
+	}
 	f.chat = chat.New(chat.Deps{DB: d, Authz: az})
 	f.deps = Deps{
 		DB: d, Authz: az, Google: f.g, Chat: hookedChat{Service: f.chat, hook: &f.chatHook},
-		Summarizer: f.summ, Clock: func() time.Time { return f.now },
+		Summarizer: f.summ, Blob: f.blob, LLM: f.llm, FileChecker: f.checkFile, Clock: func() time.Time { return f.now },
 	}
 	f.svc = New(f.deps)
 	jobs := Jobs(f.deps)
-	if len(jobs) != 2 || jobs[0].Consumer != "meeting.ingest" || jobs[1].Consumer != "meeting.transcript_check" {
-		t.Fatalf("Jobs = %+v, want meeting.ingest then meeting.transcript_check", jobs)
+	if len(jobs) != 3 || jobs[0].Consumer != "meeting.ingest" || jobs[1].Consumer != "meeting.transcript_check" || jobs[2].Consumer != "meeting.transcribe" {
+		t.Fatalf("Jobs = %+v, want meeting.ingest, meeting.transcript_check, then meeting.transcribe", jobs)
 	}
-	f.ingest, f.check = jobs[0].Handler, jobs[1].Handler
+	f.ingest, f.check, f.transcribe = jobs[0].Handler, jobs[1].Handler, jobs[2].Handler
 	f.ws = f.seedWorkspace("acme.example")
 	f.alice = f.seedUser("Alice")
 	f.bob = f.seedUser("Bob")
@@ -595,7 +606,7 @@ func TestStartMeeting_ConsentRequiredPropagates(t *testing.T) {
 func TestCreateFromRecording_CreatesPendingMeetingAndAnnouncesTranscription(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("public", f.alice)
-	file := uuid.New()
+	file := f.recording(ch)
 
 	got, err := f.svc.CreateFromRecording(t.Context(), f.user(f.alice), ch, file, "  Sprint review  ")
 	if err != nil {
@@ -1973,7 +1984,7 @@ func TestConnect_RequiresTheProtocolHeader(t *testing.T) {
 		t.Fatalf("RetrySummary: %v", err)
 	}
 	created, err := client.CreateFromRecording(t.Context(), connect.NewRequest(&meetingsv1.CreateFromRecordingRequest{
-		ChannelId: ch.String(), FileId: uuid.NewString(), Title: "Over Connect",
+		ChannelId: ch.String(), FileId: f.recording(ch).String(), Title: "Over Connect",
 	}))
 	if err != nil || created.Msg.GetMeeting().GetTitle() != "Over Connect" {
 		t.Fatalf("CreateFromRecording = %v, %v", created, err)

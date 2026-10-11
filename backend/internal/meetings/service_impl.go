@@ -54,6 +54,13 @@ const (
 	reasonModelUnavailable = "model_unavailable"
 	// reasonInternal: a write of the pipeline kept failing until the last delivery.
 	reasonInternal = "internal"
+	// reasonTranscriptTooLong: the transcript is longer than one call to the summarizer takes.
+	reasonTranscriptTooLong = "transcript_too_long"
+	// reasonUnsupportedAudio: the recording is no longer a PCM 16-bit WAV file with audio
+	// in it, or is over the size an upload may have.
+	reasonUnsupportedAudio = "unsupported_audio"
+	// reasonUnreadable: the recording's object is gone from the store.
+	reasonUnreadable = "unreadable"
 )
 
 // bangkok is the zone in which people read the dates of a meeting. Thailand has had no
@@ -89,6 +96,9 @@ type Deps struct {
 	Blob blob.Store
 	// LLM transcribes recordings.
 	LLM llm.Client
+	// FileChecker verifies the file a recording meeting is made from; CreateFromRecording
+	// refuses a recording without it.
+	FileChecker FileChecker
 	// Clock tells the time; nil means time.Now.
 	Clock func() time.Time
 }
@@ -98,12 +108,13 @@ type service struct {
 	authz *authz.Authz
 	g     google.Client
 	chat  chat.Service
+	files FileChecker
 	clock func() time.Time
 }
 
 // New returns the meetings domain.
 func New(d Deps) Service {
-	return &service{db: d.DB, authz: d.Authz, g: d.Google, chat: d.Chat, clock: clockOf(d)}
+	return &service{db: d.DB, authz: d.Authz, g: d.Google, chat: d.Chat, files: d.FileChecker, clock: clockOf(d)}
 }
 
 var _ Service = (*service)(nil)
@@ -227,9 +238,10 @@ func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uui
 	return meetingProto(row, nil), nil
 }
 
-// CreateFromRecording implements Service. The meeting has no Meet space: the
-// meeting.transcribe event it announces is what turns the uploaded recording into its
-// transcript.
+// CreateFromRecording implements Service. The file must be an uploaded recording of this
+// workspace and channel that the actor may use (see FileChecker). The meeting has no Meet
+// space: the meeting.transcribe event it announces is what turns the uploaded recording
+// into its transcript.
 func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channelID, fileID uuid.UUID, title string) (*meetingsv1.Meeting, error) {
 	if err := requireActor(a); err != nil {
 		return nil, err
@@ -243,6 +255,9 @@ func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channe
 	}
 	if fileID == uuid.Nil {
 		return nil, fmt.Errorf("meetings: a recording meeting needs its file: %w", errs.ErrInvalid)
+	}
+	if err := s.checkRecordingFile(ctx, a, channelID, fileID); err != nil {
+		return nil, err
 	}
 
 	var row store.MeetingsMeeting

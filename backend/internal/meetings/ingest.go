@@ -20,11 +20,13 @@ import (
 	meetingsv1 "kiwi/gen/kiwi/meetings/v1"
 	"kiwi/internal/chat"
 	"kiwi/internal/meetings/internal/store"
+	"kiwi/internal/platform/blob"
 	"kiwi/internal/platform/bus"
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/errs"
 	"kiwi/internal/platform/events"
 	"kiwi/internal/platform/google"
+	"kiwi/internal/platform/llm"
 	"kiwi/internal/platform/outbox"
 )
 
@@ -79,17 +81,19 @@ const (
 	rereadDelay = 2 * time.Minute
 )
 
-// pipeline is what the consumers of the Meet path run with.
+// pipeline is what the consumers of the meetings jobs run with.
 type pipeline struct {
 	db         *db.DB
 	chat       chat.Service
 	google     google.Client
 	summarizer Summarizer
+	blob       blob.Store
+	llm        llm.Client
 	clock      func() time.Time
 }
 
 func newPipeline(d Deps) *pipeline {
-	return &pipeline{db: d.DB, chat: d.Chat, google: d.Google, summarizer: d.Summarizer, clock: clockOf(d)}
+	return &pipeline{db: d.DB, chat: d.Chat, google: d.Google, summarizer: d.Summarizer, blob: d.Blob, llm: d.LLM, clock: clockOf(d)}
 }
 
 // decodeEvent reads a bus message into ev.
@@ -175,13 +179,32 @@ func (p *pipeline) prepareIngest(ctx context.Context, m bus.Message) (outbox.App
 	for _, e := range read {
 		entries = append(entries, entryOf(e))
 	}
+	return p.summarize(ctx, row, m, entries)
+}
+
+// summarize asks the summarizer about a transcript and returns the write that records
+// what it found. A transcript too long for the summary fails the meeting at once, since
+// reading it again cannot shorten it; a summary that still fails on the final attempt
+// fails it as model_unavailable; any other error leaves the meeting ingesting and the
+// message to be delivered again.
+func (p *pipeline) summarize(ctx context.Context, row store.MeetingsMeeting, m bus.Message, entries []*meetingsv1.Entry) (outbox.Apply, error) {
+	bus.KeepAlive(ctx)
 	sum, err := p.summarizer.Summarize(ctx, SummarizeInput{MeetingTitle: row.Title, MeetingDate: meetingDate(row), Entries: entries})
 	switch {
 	case err == nil:
 		return p.ready(row, entries, cleanSummary(sum)), nil
+	case errors.Is(err, ErrTranscriptTooLong):
+		return p.fail(ctx, row, reasonTranscriptTooLong, m.Attempt, err), nil
+	}
+	return p.modelFailed(ctx, row, m, err)
+}
+
+// modelFailed decides what an error from the model means for the meeting: the process
+// is shutting down (nack: not the meeting's fault, the message will be found again), the
+// model kept failing until the final attempt (fail), or it may pass (nack).
+func (p *pipeline) modelFailed(ctx context.Context, row store.MeetingsMeeting, m bus.Message, err error) (outbox.Apply, error) {
+	switch {
 	case ctx.Err() != nil:
-		// Not the meeting's fault: a process that is shutting down will find the
-		// message again.
 		return nil, err
 	case m.Attempt >= finalAttempt:
 		return p.fail(ctx, row, reasonModelUnavailable, m.Attempt, err), nil
@@ -294,6 +317,7 @@ func (p *pipeline) ready(row store.MeetingsMeeting, entries []*meetingsv1.Entry,
 			if err := enqueue(ctx, tx, events.TopicTaskDraft, ready, time.Time{}, &eventsv1.TaskDraftRequested{
 				WorkspaceId: ready.WorkspaceID.String(), MeetingId: ready.ID.String(), MeetingTitle: ready.Title,
 				ChannelId: ready.ChannelID.String(), OwnerUserId: ready.OwnerUserID.String(), Items: items,
+				MeetingDate: timestamppb.New(meetingDate(ready)),
 			}); err != nil {
 				return err
 			}

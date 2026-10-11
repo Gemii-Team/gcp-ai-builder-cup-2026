@@ -16,13 +16,18 @@ import (
 )
 
 // Jobs returns the consumers of the meetings domain for the composition root to
-// register: meeting.ingest, which reads a Meet transcript until two reads agree and
-// then summarizes it, and meeting.transcript_check, which ends a meeting whose
-// transcript never came. The poll (PollMeetings) is what produces both events.
+// register, in this order: meeting.ingest, which reads a Meet transcript until two reads
+// agree and then summarizes it; meeting.transcript_check, which ends a meeting whose
+// transcript never came; and meeting.transcribe, which turns the recording a meeting was
+// made from into its transcript and then summarizes it. The poll (PollMeetings) is what
+// produces the first two events, CreateFromRecording and RetrySummary the third.
 //
 // Every consumer is wrapped by settleOnFinalDelivery, so a message the bus is about to
 // dead-letter leaves its meeting failed, not ingesting for ever.
 func Jobs(d Deps) []bus.Job {
+	if d.Blob == nil || d.LLM == nil {
+		panic("meetings: Deps.Blob and Deps.LLM are required by the meeting.transcribe job")
+	}
 	p := newPipeline(d)
 	return []bus.Job{
 		{
@@ -38,6 +43,12 @@ func Jobs(d Deps) []bus.Job {
 				func(m bus.Message) (uuid.UUID, uuid.UUID, error) {
 					return meetingOf(m, &eventsv1.MeetingTranscriptCheck{})
 				}),
+		},
+		{
+			Consumer: consumerTranscribe,
+			Topics:   []string{events.TopicMeetingTranscribe},
+			Handler: settleOnFinalDelivery(d.DB, outbox.Once(d.DB, consumerTranscribe, p.prepareTranscribe),
+				func(m bus.Message) (uuid.UUID, uuid.UUID, error) { return meetingOf(m, &eventsv1.MeetingTranscribe{}) }),
 		},
 	}
 }

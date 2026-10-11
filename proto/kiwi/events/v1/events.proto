@@ -79,6 +79,9 @@ message TaskDraftRequested {
   string channel_id = 4;
   string owner_user_id = 5;
   repeated Item items = 6;
+  // meeting_date is when the meeting took place. The job resolves the due hints
+  // against it in Asia/Bangkok; unset, no due date is resolved.
+  google.protobuf.Timestamp meeting_date = 7;
 
   // Item is one action item; offset_ms is unset when the transcript has no timing.
   message Item {

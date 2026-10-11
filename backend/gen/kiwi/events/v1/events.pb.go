@@ -506,13 +506,16 @@ func (x *EmbedIndex) GetWindowStart() *timestamppb.Timestamp {
 
 // TaskDraftRequested is published as task.draft: one meeting's action items.
 type TaskDraftRequested struct {
-	state         protoimpl.MessageState     `protogen:"open.v1"`
-	WorkspaceId   string                     `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	MeetingId     string                     `protobuf:"bytes,2,opt,name=meeting_id,json=meetingId,proto3" json:"meeting_id,omitempty"`
-	MeetingTitle  string                     `protobuf:"bytes,3,opt,name=meeting_title,json=meetingTitle,proto3" json:"meeting_title,omitempty"`
-	ChannelId     string                     `protobuf:"bytes,4,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
-	OwnerUserId   string                     `protobuf:"bytes,5,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
-	Items         []*TaskDraftRequested_Item `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`
+	state        protoimpl.MessageState     `protogen:"open.v1"`
+	WorkspaceId  string                     `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	MeetingId    string                     `protobuf:"bytes,2,opt,name=meeting_id,json=meetingId,proto3" json:"meeting_id,omitempty"`
+	MeetingTitle string                     `protobuf:"bytes,3,opt,name=meeting_title,json=meetingTitle,proto3" json:"meeting_title,omitempty"`
+	ChannelId    string                     `protobuf:"bytes,4,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	OwnerUserId  string                     `protobuf:"bytes,5,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	Items        []*TaskDraftRequested_Item `protobuf:"bytes,6,rep,name=items,proto3" json:"items,omitempty"`
+	// meeting_date is when the meeting took place. The job resolves the due hints
+	// against it in Asia/Bangkok; unset, no due date is resolved.
+	MeetingDate   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=meeting_date,json=meetingDate,proto3" json:"meeting_date,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -585,6 +588,13 @@ func (x *TaskDraftRequested) GetOwnerUserId() string {
 func (x *TaskDraftRequested) GetItems() []*TaskDraftRequested_Item {
 	if x != nil {
 		return x.Items
+	}
+	return nil
+}
+
+func (x *TaskDraftRequested) GetMeetingDate() *timestamppb.Timestamp {
+	if x != nil {
+		return x.MeetingDate
 	}
 	return nil
 }
@@ -999,7 +1009,7 @@ const file_kiwi_events_v1_events_proto_rawDesc = "" +
 	"\tsource_id\x18\x03 \x01(\tR\bsourceId\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x04 \x01(\tR\tchannelId\x12=\n" +
-	"\fwindow_start\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vwindowStart\"\xa3\x03\n" +
+	"\fwindow_start\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vwindowStart\"\xe2\x03\n" +
 	"\x12TaskDraftRequested\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1d\n" +
 	"\n" +
@@ -1008,7 +1018,8 @@ const file_kiwi_events_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"channel_id\x18\x04 \x01(\tR\tchannelId\x12\"\n" +
 	"\rowner_user_id\x18\x05 \x01(\tR\vownerUserId\x12=\n" +
-	"\x05items\x18\x06 \x03(\v2'.kiwi.events.v1.TaskDraftRequested.ItemR\x05items\x1a\xa3\x01\n" +
+	"\x05items\x18\x06 \x03(\v2'.kiwi.events.v1.TaskDraftRequested.ItemR\x05items\x12=\n" +
+	"\fmeeting_date\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vmeetingDate\x1a\xa3\x01\n" +
 	"\x04Item\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x1d\n" +
 	"\n" +
@@ -1084,15 +1095,16 @@ var file_kiwi_events_v1_events_proto_depIdxs = []int32{
 	13, // 0: kiwi.events.v1.ChatMessageCreated.message:type_name -> kiwi.chat.v1.Message
 	14, // 1: kiwi.events.v1.EmbedIndex.window_start:type_name -> google.protobuf.Timestamp
 	12, // 2: kiwi.events.v1.TaskDraftRequested.items:type_name -> kiwi.events.v1.TaskDraftRequested.Item
-	15, // 3: kiwi.events.v1.TaskChanged.task:type_name -> kiwi.tasks.v1.Task
-	16, // 4: kiwi.events.v1.FileStatusChanged.status:type_name -> kiwi.files.v1.FileStatus
-	17, // 5: kiwi.events.v1.MeetingSummaryReady.status:type_name -> kiwi.meetings.v1.MeetingStatus
-	18, // 6: kiwi.events.v1.MembershipChanged.change:type_name -> kiwi.chat.v1.MembershipChange
-	7,  // [7:7] is the sub-list for method output_type
-	7,  // [7:7] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	14, // 3: kiwi.events.v1.TaskDraftRequested.meeting_date:type_name -> google.protobuf.Timestamp
+	15, // 4: kiwi.events.v1.TaskChanged.task:type_name -> kiwi.tasks.v1.Task
+	16, // 5: kiwi.events.v1.FileStatusChanged.status:type_name -> kiwi.files.v1.FileStatus
+	17, // 6: kiwi.events.v1.MeetingSummaryReady.status:type_name -> kiwi.meetings.v1.MeetingStatus
+	18, // 7: kiwi.events.v1.MembershipChanged.change:type_name -> kiwi.chat.v1.MembershipChange
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_kiwi_events_v1_events_proto_init() }
