@@ -1648,10 +1648,3 @@ func TestReindex_NeedsADatabaseAndAModel(t *testing.T) {
 		t.Errorf("Reindex without dependencies = %v, want ErrInvalid", err)
 	}
 }
-
-func TestAsk_IsNotBuiltYet(t *testing.T) {
-	f := newFixture(t)
-	if _, err := f.svc.Ask(t.Context(), system(f.ws), AskInput{Question: "what?"}); err == nil {
-		t.Error("Ask answered before the retrieval task exists")
-	}
-}

@@ -161,10 +161,11 @@ type ListChunkStatesRow struct {
 // which sends no parameter types and so cannot encode a []uuid.UUID.
 //
 // A chunk's id is UUIDv5(workspace_id, source_kind/source_id/anchor), so an upsert by
-// id is what makes indexing idempotent. The last four queries read what the indexer
-// needs to label a chunk (a title, a file name, an author's name) and to find the
-// channel a source belongs to, from tables of other domains: the services of those
-// domains grant such reads to a person's actor and not to the indexer's system actor.
+// id is what makes indexing idempotent. The queries from GetMeetingSource to
+// ListUserNames read what the indexer needs to label a chunk (a title, a file name, an
+// author's name) and to find the channel a source belongs to, from tables of other
+// domains: the services of those domains grant such reads to a person's actor and not to
+// the indexer's system actor.
 // They only read, and row-level security still bounds them to the workspace.
 // What is already stored for the chunks among ids: one row per chunk that exists.
 func (q *Queries) ListChunkStates(ctx context.Context, ids []string) ([]ListChunkStatesRow, error) {
@@ -277,6 +278,168 @@ func (q *Queries) ListWorkspaceIDs(ctx context.Context) ([]uuid.UUID, error) {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pgvectorVersion = `-- name: PgvectorVersion :one
+SELECT extversion::text FROM pg_catalog.pg_extension WHERE extname = 'vector'
+`
+
+// The version of the vector extension, which decides how a search tunes the HNSW index.
+func (q *Queries) PgvectorVersion(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, pgvectorVersion)
+	var extversion string
+	err := row.Scan(&extversion)
+	return extversion, err
+}
+
+const searchChunksByKeyword = `-- name: SearchChunksByKeyword :many
+SELECT id, channel_id, source_kind, source_id, source_anchor, lang, content, source_meta,
+       ts_rank(tsv, websearch_to_tsquery('simple', $1::text))::float8 AS score
+FROM knowledge.chunks
+WHERE tsv @@ websearch_to_tsquery('simple', $1::text)
+  AND embedding_model = $2
+  AND (channel_id = ANY($3::text[]::uuid[])
+       OR (channel_id IS NULL AND $4::bool))
+ORDER BY score DESC, id
+LIMIT $5
+`
+
+type SearchChunksByKeywordParams struct {
+	QueryText      string
+	EmbeddingModel string
+	ChannelIds     []string
+	WorkspaceWide  bool
+	RowLimit       int32
+}
+
+type SearchChunksByKeywordRow struct {
+	ID           uuid.UUID
+	ChannelID    *uuid.UUID
+	SourceKind   string
+	SourceID     uuid.UUID
+	SourceAnchor string
+	Lang         string
+	Content      string
+	SourceMeta   json.RawMessage
+	Score        float64
+}
+
+// The chunks whose text matches the words of a query, among those the caller may read
+// (as in SearchChunksByVector). The query is read as web search syntax, in the same
+// 'simple' configuration the chunks were indexed with, so an identifier such as
+// REF-4471 matches itself.
+func (q *Queries) SearchChunksByKeyword(ctx context.Context, arg SearchChunksByKeywordParams) ([]SearchChunksByKeywordRow, error) {
+	rows, err := q.db.Query(ctx, searchChunksByKeyword,
+		arg.QueryText,
+		arg.EmbeddingModel,
+		arg.ChannelIds,
+		arg.WorkspaceWide,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchChunksByKeywordRow
+	for rows.Next() {
+		var i SearchChunksByKeywordRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.SourceAnchor,
+			&i.Lang,
+			&i.Content,
+			&i.SourceMeta,
+			&i.Score,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchChunksByVector = `-- name: SearchChunksByVector :many
+WITH nearest AS MATERIALIZED (
+    SELECT id, channel_id, source_kind, source_id, source_anchor, lang, content, source_meta,
+           embedding <=> $1::vector AS distance
+    FROM knowledge.chunks
+    WHERE embedding_model = $2
+      AND (channel_id = ANY($3::text[]::uuid[])
+           OR (channel_id IS NULL AND $4::bool))
+    ORDER BY embedding <=> $1::vector
+    LIMIT $5
+)
+SELECT id, channel_id, source_kind, source_id, source_anchor, lang, content, source_meta,
+       (1 - distance)::float8 AS score
+FROM nearest
+ORDER BY distance + 0, id
+`
+
+type SearchChunksByVectorParams struct {
+	Embedding      pgvector.Vector
+	EmbeddingModel string
+	ChannelIds     []string
+	WorkspaceWide  bool
+	RowLimit       int32
+}
+
+type SearchChunksByVectorRow struct {
+	ID           uuid.UUID
+	ChannelID    *uuid.UUID
+	SourceKind   string
+	SourceID     uuid.UUID
+	SourceAnchor string
+	Lang         string
+	Content      string
+	SourceMeta   json.RawMessage
+	Score        float64
+}
+
+// The chunks whose vector is nearest to a query vector, among those the caller may read:
+// the chunks of the given channels, and of no channel (workspace-wide) when
+// workspace_wide is true, embedded by the given model. Vectors of different models are
+// never compared. With hnsw.iterative_scan = relaxed_order the index can hand its rows
+// over slightly out of order, so the materialized inner query is ordered again outside.
+func (q *Queries) SearchChunksByVector(ctx context.Context, arg SearchChunksByVectorParams) ([]SearchChunksByVectorRow, error) {
+	rows, err := q.db.Query(ctx, searchChunksByVector,
+		arg.Embedding,
+		arg.EmbeddingModel,
+		arg.ChannelIds,
+		arg.WorkspaceWide,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchChunksByVectorRow
+	for rows.Next() {
+		var i SearchChunksByVectorRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.SourceAnchor,
+			&i.Lang,
+			&i.Content,
+			&i.SourceMeta,
+			&i.Score,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
