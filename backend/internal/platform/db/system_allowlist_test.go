@@ -19,6 +19,7 @@ var systemCallers = []string{
 	"internal/identity/callback.go",
 	"internal/platform/outbox/relay.go",
 	"internal/meetings/poll.go",
+	"internal/knowledge/reindex.go",
 }
 
 // callsSystem reports whether src contains a call of a method or function
