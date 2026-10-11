@@ -10,7 +10,7 @@ import { useChannels, useMe, useUsers } from '../../api/hooks';
 import type { TaskView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { useAnnouncer } from '../../lib/useAnnouncer';
-import { useGlide } from '../../lib/useGlide';
+import { Glide } from '../../lib/Glide';
 import { useMediaQuery } from '../../lib/useMediaQuery';
 import { useUiStore } from '../../state/ui';
 import { AppButtonLink, AppLink } from '../shell/AppLink';
@@ -77,7 +77,6 @@ export function BoardScreen({ initialChannelId }: BoardScreenProps) {
   // Which cell each card is in: a card that changes cell glides from its old place to its new one (a move, a confirm, a
   // change another client made).
   const cells = useMemo(() => cellsOf(board), [board]);
-  useGlide(scroller, cells);
 
   const channelNames = useMemo(() => new Map((channels.data ?? []).map((channel) => [channel.id, channel.name])), [channels.data]);
   const userNames = useMemo(() => new Map((users.data ?? []).map((user) => [user.id, user.name])), [users.data]);
@@ -193,6 +192,7 @@ export function BoardScreen({ initialChannelId }: BoardScreenProps) {
     );
 
   return (
+    <Glide root={scroller} cells={cells}>
     <ExcerptProvider load={load}>
       <div className="bd">
         <main className="main">
@@ -365,5 +365,6 @@ export function BoardScreen({ initialChannelId }: BoardScreenProps) {
         </DraftsSheet>
       )}
     </ExcerptProvider>
+    </Glide>
   );
 }
