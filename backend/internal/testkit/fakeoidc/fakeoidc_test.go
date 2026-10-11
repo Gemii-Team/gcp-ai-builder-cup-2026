@@ -1,6 +1,7 @@
 package fakeoidc_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
 
 	"kiwi/internal/testkit/fakeoidc"
 	"kiwi/internal/testkit/fakeoidc/fakeoidctest"
@@ -297,6 +300,88 @@ func TestProvider_ChooserOffersAButtonPerAccountAndFlagsTheOutsider(t *testing.T
 	loc, _ := url.Parse(back.Header.Get("Location"))
 	if back.StatusCode != http.StatusFound || loc == nil || loc.Query().Get("code") == "" || loc.Query().Get("state") != "s" {
 		t.Errorf("pressing alice: %d -> %q, want a redirect carrying a code and the state", back.StatusCode, back.Header.Get("Location"))
+	}
+}
+
+// The chooser echoes the authorization request into hidden inputs, and that
+// request is whatever a stranger put in the URL: the page must carry it back
+// byte for byte and never as markup.
+func TestProvider_ChooserEscapesAHostileAuthorizationRequest(t *testing.T) {
+	f := fakeoidctest.New(t)
+	hostileState := `"><script>alert(1)</script>`
+	q := url.Values{
+		"client_id": {fakeoidc.DefaultClientID}, "redirect_uri": {redirectURI}, "response_type": {"code"},
+		"scope": {"openid"}, "code_challenge": {challenge("v")}, "code_challenge_method": {"S256"},
+		"state":                           {hostileState},
+		"nonce":                           {"it's a & b < c é"},
+		`x"><img src=y onerror=alert(1)>`: {`v"><script>alert(2)</script>`, `'><iframe src=z>`},
+	}
+	pageURL, err := url.Parse(f.URL + "/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get(pageURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("chooser: %d", resp.StatusCode)
+	}
+
+	// Raw: no markup of the attacker's survives as markup.
+	page := string(body)
+	for _, markup := range []string{"<script", "<img", "<iframe"} {
+		if strings.Contains(page, markup) {
+			t.Errorf("the page contains %q: a request parameter reached the page unescaped", markup)
+		}
+	}
+	// Parsed: no such element and no event-handler or source attribute exists.
+	doc, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var walk func(n *html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "script", "img", "iframe", "object", "embed", "link":
+				t.Errorf("the page has a <%s> element", n.Data)
+			}
+			for _, a := range n.Attr {
+				if strings.HasPrefix(a.Key, "on") || a.Key == "src" {
+					t.Errorf("<%s> has the attribute %q: a request parameter became an attribute", n.Data, a.Key)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+
+	// Every button sends the request back as it came, plus its own login_hint:
+	// escaping neither corrupts a value nor drops a parameter.
+	for _, email := range []string{fakeoidc.AliceEmail, fakeoidc.BobEmail, fakeoidc.CarolEmail} {
+		pressed := fakeoidctest.PressAccount(t, pageURL, body, email)
+		want := pageURL.Query()
+		want.Set("login_hint", email)
+		if got := pressed.Query(); !maps.EqualFunc(got, want, slices.Equal) {
+			t.Errorf("the button of %s asks %q, want %q", email, got, want)
+		}
+	}
+
+	// And the provider reads the hostile state back unchanged.
+	pressed := fakeoidctest.PressAccount(t, pageURL, body, fakeoidc.AliceEmail)
+	back, err := noRedirect.Get(pressed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = back.Body.Close()
+	loc, _ := url.Parse(back.Header.Get("Location"))
+	if back.StatusCode != http.StatusFound || loc == nil || loc.Query().Get("state") != hostileState {
+		t.Errorf("pressing alice: %d -> %q, want a redirect that echoes the state unchanged", back.StatusCode, back.Header.Get("Location"))
 	}
 }
 

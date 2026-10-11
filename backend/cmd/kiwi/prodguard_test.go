@@ -16,6 +16,12 @@ import (
 // guard runs before anything is dialled, so it answers at once.
 const exitWithin = 10 * time.Second
 
+// refusal is the whole of stderr when config.Load refuses a prod environment
+// whose only fault is the OIDC provider. It is one message for both variables:
+// config.validate has a single check, so the text cannot tell which disjunct
+// (issuer, internal URL) tripped it.
+const refusal = "kiwi serve: KIWI_ENV=prod requires KIWI_OIDC_ISSUER to be https://accounts.google.com and KIWI_OIDC_INTERNAL_URL to be unset"
+
 // buildKiwi compiles this package's binary, so that the timeout below measures
 // the process and not the compiler.
 func buildKiwi(t *testing.T) string {
@@ -62,15 +68,18 @@ func prodEnv(extra ...string) []string {
 func TestServe_ProdRejectsMockIssuer_ExitsAtStartup(t *testing.T) {
 	bin := buildKiwi(t)
 
+	// Each case trips a different disjunct of the guard. What tells them apart is
+	// the exit-or-timeout check below, not the message: with a disjunct removed
+	// from config.Load, the case that only it catches reaches `serve` and the
+	// process keeps running (or dies on something other than the refusal), which
+	// fails the test.
 	for _, tc := range []struct {
 		name  string
 		extra []string
-		// names is every variable the refusal must name.
-		names []string
 	}{
-		{"the mock issuer", []string{"KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc"}, []string{"KIWI_OIDC_ISSUER"}},
-		{"only an internal discovery URL", []string{"KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc"}, []string{"KIWI_OIDC_INTERNAL_URL"}},
-		{"both", []string{"KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc", "KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc"}, []string{"KIWI_OIDC_ISSUER", "KIWI_OIDC_INTERNAL_URL"}},
+		{"the mock issuer", []string{"KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc"}},
+		{"only an internal discovery URL", []string{"KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc"}},
+		{"both", []string{"KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc", "KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), exitWithin)
@@ -89,19 +98,18 @@ func TestServe_ProdRejectsMockIssuer_ExitsAtStartup(t *testing.T) {
 				t.Fatalf("kiwi serve = %v, want a non-zero exit\nstderr: %s", err, stderr.String())
 			}
 			out := stderr.String()
-			for _, name := range tc.names {
-				if !strings.Contains(out, name) {
-					t.Errorf("stderr does not name %s:\n%s", name, out)
-				}
-			}
-			if !strings.Contains(out, "KIWI_ENV=prod") {
-				t.Errorf("stderr does not say that KIWI_ENV=prod is the reason:\n%s", out)
-			}
-			// The guard comes before any connection: no dial, no database, no cache.
-			for _, early := range []string{"connection refused", "dial tcp", "failed to connect", "missing required environment variables", "valkey", "postgres"} {
+
+			// No dial error precedes the refusal. Today `serve` only loads its
+			// configuration, so this cannot fail yet; it starts to mean something
+			// when L27 makes `serve` open Postgres and Valkey, and it is carried
+			// there. The exact-message check below covers it as well.
+			for _, early := range []string{"connection refused", "dial tcp", "failed to connect", "valkey", "postgres"} {
 				if strings.Contains(strings.ToLower(out), early) {
 					t.Errorf("stderr mentions %q: the process went past configuration before it was refused:\n%s", early, out)
 				}
+			}
+			if got := strings.TrimSpace(out); got != refusal {
+				t.Errorf("stderr = %q\nwant exactly %q", got, refusal)
 			}
 		})
 	}

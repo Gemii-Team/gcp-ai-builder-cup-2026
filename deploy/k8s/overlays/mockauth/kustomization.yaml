@@ -17,8 +17,5 @@ resources:
 patches:
   - path: config-patch.yaml
 
-# Where Tilt pushes the tools image (deploy/local/k3d.yaml); Tilt replaces the tag.
-images:
-  - name: mockoidc
-    newName: kiwi-registry.localhost:5001/mockoidc
-    newTag: dev
+transformers:
+  - images.yaml
