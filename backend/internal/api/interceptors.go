@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"slices"
+	"sync/atomic"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -40,40 +42,54 @@ func ActorFrom(ctx context.Context) authz.Actor {
 	return a
 }
 
-// HandlerOptions are the options every domain's Connect handler must be built
-// with, so that the errors it returns leave as Connect codes and nothing internal
-// reaches the client:
+// errorMapper is the one place where domain errors become Connect codes. New
+// builds one and hands it to every Handler.Build as a handler option, because a
+// built http.Handler cannot be given an interceptor afterwards; New also counts
+// the handlers it was applied to, which is how it knows a Build used its options.
 //
-//	path, h := chat.Handler(svc, api.ActorFrom, api.HandlerOptions(log)...)
-//
-// A built handler cannot be given an interceptor afterwards, which is why the
-// options are passed in rather than applied by New. log receives the errors that
-// are hidden from the client; nil selects slog.Default().
-func HandlerOptions(log *slog.Logger) []connect.HandlerOption {
-	return []connect.HandlerOption{connect.WithInterceptors(errorInterceptor(log))}
+// It maps unary RPCs only. A streaming RPC passes through it unmapped, so a
+// streaming service must map its own errors; the protos contain none.
+type errorMapper struct {
+	log *slog.Logger
+	// wrapped counts the handlers that took the mapper in, one per RPC.
+	wrapped atomic.Int64
 }
 
-// errorInterceptor is the one place where domain errors become Connect codes.
-func errorInterceptor(log *slog.Logger) connect.UnaryInterceptorFunc {
-	if log == nil {
-		log = slog.Default()
-	}
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			res, err := next(ctx, req)
-			if err != nil {
-				return nil, mapError(ctx, log, req.Spec().Procedure, err)
-			}
-			return res, nil
+var _ connect.Interceptor = (*errorMapper)(nil)
+
+// WrapUnary implements connect.Interceptor. Connect calls it once per unary RPC when
+// it builds the handler.
+func (m *errorMapper) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	m.wrapped.Add(1)
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		res, err := next(ctx, req)
+		if err != nil {
+			return nil, m.mapError(ctx, req.Spec().Procedure, err)
 		}
+		return res, nil
 	}
 }
 
-// sentinelCodes is every domain sentinel and the Connect code it becomes.
-var sentinelCodes = []struct {
+// WrapStreamingClient implements connect.Interceptor; the mapper is server-side.
+func (m *errorMapper) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+// WrapStreamingHandler implements connect.Interceptor. It maps nothing (see
+// errorMapper) but counts the handler, so a streaming-only service is not taken
+// for one that ignored its options.
+func (m *errorMapper) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	m.wrapped.Add(1)
+	return next
+}
+
+// sentinelCode is a domain sentinel and the Connect code it becomes.
+type sentinelCode struct {
 	sentinel error
 	code     connect.Code
-}{
+}
+
+var sentinelCodes = []sentinelCode{
 	{errs.ErrNotFound, connect.CodeNotFound},
 	{errs.ErrForbidden, connect.CodePermissionDenied},
 	{errs.ErrConflict, connect.CodeAborted},
@@ -84,29 +100,63 @@ var sentinelCodes = []struct {
 // error reaches the client as the text of its sentinel and nothing else: domains
 // wrap a sentinel with context, and some chains carry an infrastructure error
 // beside it (authz does for a failed membership lookup), so the full text could
-// carry a database address or a query. Whatever maps to no code is logged here and
-// replaced by a fixed message.
-func mapError(ctx context.Context, log *slog.Logger, procedure string, err error) error {
-	var (
-		coded   *connect.Error
-		consent *google.ConsentRequiredError
-	)
+// carry a database address or a query. The operator is told what the client is
+// not: a refusal that carries such a cause at WARN (an outage must not hide behind
+// a PermissionDenied), a plain refusal at DEBUG, anything unmapped at ERROR.
+//
+// A Connect error a handler built itself keeps its code and text, except Internal
+// and Unknown: those are what an unmapped cause becomes, so building one from a
+// cause must not publish the cause.
+func (m *errorMapper) mapError(ctx context.Context, procedure string, err error) error {
+	var coded *connect.Error
 	if errors.As(err, &coded) {
-		return err // the handler chose this code and text itself
+		if c := coded.Code(); c != connect.CodeInternal && c != connect.CodeUnknown {
+			return coded
+		}
+		return m.hide(ctx, procedure, err)
 	}
+
+	var consent *google.ConsentRequiredError
 	if errors.As(err, &consent) {
 		if ce := consentError(consent); ce != nil {
 			return ce
 		}
+		return m.hide(ctx, procedure, err)
 	}
-	for _, m := range sentinelCodes {
-		if errors.Is(err, m.sentinel) {
-			log.DebugContext(ctx, "api: rpc refused", "procedure", procedure, "code", m.code.String(), "err", err)
-			return connect.NewError(m.code, m.sentinel)
+
+	for _, s := range sentinelCodes {
+		if !errors.Is(err, s.sentinel) {
+			continue
 		}
+		if carriesForeignCause(err) {
+			m.log.WarnContext(ctx, "api: rpc refused beside an infrastructure error", "procedure", procedure, "code", s.code.String(), "err", err)
+		} else {
+			m.log.DebugContext(ctx, "api: rpc refused", "procedure", procedure, "code", s.code.String(), "err", err)
+		}
+		return connect.NewError(s.code, s.sentinel)
 	}
-	log.ErrorContext(ctx, "api: rpc failed", "procedure", procedure, "err", err)
+	return m.hide(ctx, procedure, err)
+}
+
+// hide logs err, which the client must not read, and returns the fixed answer.
+func (m *errorMapper) hide(ctx context.Context, procedure string, err error) error {
+	m.log.ErrorContext(ctx, "api: rpc failed", "procedure", procedure, "err", err)
 	return connect.NewError(connect.CodeInternal, errors.New(internalMessage))
+}
+
+// carriesForeignCause reports whether err's chain holds anything besides the
+// domain sentinels: a leaf of the error tree that is none of them. A sentinel
+// wrapped in context ("chat: join channel 7: not found") has none; authz's
+// "membership lookup: forbidden: <database error>" has the database error.
+func carriesForeignCause(err error) bool {
+	switch u := err.(type) {
+	case interface{ Unwrap() []error }:
+		return slices.ContainsFunc(u.Unwrap(), carriesForeignCause)
+	case interface{ Unwrap() error }:
+		inner := u.Unwrap()
+		return inner == nil || carriesForeignCause(inner)
+	}
+	return !slices.ContainsFunc(sentinelCodes, func(s sentinelCode) bool { return err == s.sentinel })
 }
 
 // consentError is FailedPrecondition with the consent URL in an ErrorInfo detail;

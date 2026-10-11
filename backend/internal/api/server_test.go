@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -135,6 +136,16 @@ type wireError struct {
 	Message string `json:"message"`
 }
 
+// logHas reports whether one line of the log carries every part.
+func logHas(logs string, parts ...string) bool {
+	for line := range strings.SplitSeq(logs, "\n") {
+		if !slices.ContainsFunc(parts, func(p string) bool { return !strings.Contains(line, p) }) {
+			return true
+		}
+	}
+	return false
+}
+
 // probeGet and probePost call a local test listener with the test's context.
 func probeGet(t *testing.T, target string) (*http.Response, error) {
 	t.Helper()
@@ -145,13 +156,16 @@ func probeGet(t *testing.T, target string) (*http.Response, error) {
 	return http.DefaultClient.Do(req)
 }
 
-func probePost(t *testing.T, target, body string) (*http.Response, error) {
+func probePost(t *testing.T, target, body string, hdr map[string]string) (*http.Response, error) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
 	return http.DefaultClient.Do(req)
 }
 
@@ -190,21 +204,24 @@ const probePath = "/kiwi.test.v1.ProbeService/"
 
 type probeCase func(ctx context.Context) (string, error)
 
-func probeHandler(log *slog.Logger, cases map[string]probeCase) Handler {
-	h := connect.NewUnaryHandler(probePath+"Probe",
-		func(ctx context.Context, req *connect.Request[wrapperspb.StringValue]) (*connect.Response[wrapperspb.StringValue], error) {
-			fn, ok := cases[req.Msg.GetValue()]
-			if !ok {
-				return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no probe case %q", req.Msg.GetValue()))
-			}
-			out, err := fn(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return connect.NewResponse(wrapperspb.String(out)), nil
-		},
-		HandlerOptions(log)...)
-	return Handler{Path: probePath, H: h}
+// probeHandler registers the probe service the way every domain is registered: as a
+// Build that hands the options it is given to the Connect constructor.
+func probeHandler(cases map[string]probeCase) Handler {
+	return Handler{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
+		return probePath, connect.NewUnaryHandler(probePath+"Probe",
+			func(ctx context.Context, req *connect.Request[wrapperspb.StringValue]) (*connect.Response[wrapperspb.StringValue], error) {
+				fn, ok := cases[req.Msg.GetValue()]
+				if !ok {
+					return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("no probe case %q", req.Msg.GetValue()))
+				}
+				out, err := fn(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return connect.NewResponse(wrapperspb.String(out)), nil
+			},
+			opts...)
+	}}
 }
 
 // fixture is the shell over a real Postgres, a real Valkey, the real identity and
@@ -285,12 +302,16 @@ func newFixture(t *testing.T, probe map[string]probeCase) *fixture {
 		t.Cleanup(func() { _ = closer.Close() })
 	}
 
-	opts := HandlerOptions(logger)
-	chatPath, chatH := chat.Handler(chatSvc, ActorFrom, opts...)
-	idPath, idH := identity.Handler(ident, ActorFrom, opts...)
-	handlers := []Handler{{Path: chatPath, H: chatH}, {Path: idPath, H: idH}}
+	handlers := []Handler{
+		{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
+			return chat.Handler(chatSvc, ActorFrom, opts...)
+		}},
+		{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
+			return identity.Handler(ident, ActorFrom, opts...)
+		}},
+	}
 	if probe != nil {
-		handlers = append(handlers, probeHandler(logger, probe))
+		handlers = append(handlers, probeHandler(probe))
 	}
 	h := New(Deps{
 		PublicURL: publicURL,
@@ -456,12 +477,13 @@ func decodeError(t *testing.T, r reply) wireError {
 // ---- the eight named tests --------------------------------------------------
 
 func TestErrorInterceptor_MapsDomainErrorsAndHidesInternals(t *testing.T) {
-	const secret = `pq: password authentication failed for user "kiwi_app" at 10.1.2.3:5432`
+	// cause is what an infrastructure failure looks like: it must never reach a
+	// client, and each case gets a marker of its own so the log can be read per case.
+	cause := func(marker string) error {
+		return fmt.Errorf(`pq: password authentication failed for user "kiwi_app" at 10.1.2.3:5432 [%s]`, marker)
+	}
 	consent := &google.ConsentRequiredError{URL: "/api/auth/meet-consent"}
 	missing := fmt.Errorf("chat: channel %s: %w", uuid.NewString(), errs.ErrNotFound)
-	// authz wraps the sentinel and the cause of a failed membership lookup side by
-	// side, so the full text of a mapped error can carry the database's.
-	lookupFailed := fmt.Errorf("authz: user message.post: membership lookup: %w: %w", errs.ErrForbidden, errors.New(secret))
 
 	cases := []struct {
 		name string
@@ -470,19 +492,67 @@ func TestErrorInterceptor_MapsDomainErrorsAndHidesInternals(t *testing.T) {
 		// message is all the client may read: the text of the sentinel, never the
 		// context a domain wrapped it in.
 		message string
+		// logLevel and logMarker: the operator must find a record of that level
+		// that carries the marker, at the default log level. A case with no logLevel
+		// must leave no record that carries its marker at all.
+		logLevel, logMarker string
 	}{
 		{name: "not found", err: errs.ErrNotFound, code: connect.CodeNotFound, message: "not found"},
 		{name: "wrapped not found", err: missing, code: connect.CodeNotFound, message: "not found"},
-		{name: "forbidden", err: fmt.Errorf("tasks: not yours: %w", errs.ErrForbidden), code: connect.CodePermissionDenied, message: "forbidden"},
-		{name: "forbidden beside an infrastructure error", err: lookupFailed, code: connect.CodePermissionDenied, message: "forbidden"},
+		{
+			// A plain refusal is the caller's doing, not an incident: nothing at the default level.
+			name: "forbidden", err: fmt.Errorf("tasks: not yours [plain-refusal]: %w", errs.ErrForbidden),
+			code: connect.CodePermissionDenied, message: "forbidden", logMarker: "plain-refusal",
+		},
+		{
+			// authz wraps the sentinel and the cause of a failed membership lookup side by
+			// side: the client is told "forbidden", but an outage must not hide behind it.
+			name: "forbidden beside an infrastructure error",
+			err:  fmt.Errorf("authz: user message.post: membership lookup: %w: %w", errs.ErrForbidden, cause("lookup-failed")),
+			code: connect.CodePermissionDenied, message: "forbidden", logLevel: "WARN", logMarker: "lookup-failed",
+		},
 		{name: "conflict", err: fmt.Errorf("tasks: already confirmed: %w", errs.ErrConflict), code: connect.CodeAborted, message: "conflict"},
 		{name: "invalid", err: fmt.Errorf("chat: body must be 1-8000 characters: %w", errs.ErrInvalid), code: connect.CodeInvalidArgument, message: "invalid"},
 		{name: "consent required", err: consent, code: connect.CodeFailedPrecondition, message: "consent required"},
 		{name: "wrapped consent required", err: fmt.Errorf("meetings: start: %w", consent), code: connect.CodeFailedPrecondition, message: "consent required"},
-		{name: "internal", err: errors.New(secret), code: connect.CodeInternal, message: "internal error"},
-		{name: "wrapped internal", err: fmt.Errorf("chat: lock channel: %w", errors.New(secret)), code: connect.CodeInternal, message: "internal error"},
+		{name: "internal", err: cause("internal"), code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "internal"},
+		{
+			name: "wrapped internal", err: fmt.Errorf("chat: lock channel: %w", cause("wrapped-internal")),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "wrapped-internal",
+		},
 		// Text alone is not a sentinel: only errors.Is decides.
-		{name: "lookalike text", err: errors.New("not found: " + secret), code: connect.CodeInternal, message: "internal error"},
+		{
+			name: "lookalike text", err: fmt.Errorf("not found: %w", cause("lookalike")),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "lookalike",
+		},
+		// A handler that builds its own Connect error chooses its code, except that
+		// Internal and Unknown are what an unmapped cause becomes, so their text is
+		// as private as any other's.
+		{
+			name: "handler-chosen internal code", err: connect.NewError(connect.CodeInternal, cause("coded-internal")),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "coded-internal",
+		},
+		{
+			name: "handler-chosen unknown code", err: connect.NewError(connect.CodeUnknown, cause("coded-unknown")),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "coded-unknown",
+		},
+		{
+			name: "wrapped handler-chosen internal code", err: fmt.Errorf("meetings: poll: %w", connect.NewError(connect.CodeInternal, cause("wrapped-coded"))),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "wrapped-coded",
+		},
+		{
+			// The handler said Internal: a sentinel in the cause does not turn it into NotFound.
+			name: "handler-chosen internal code over a sentinel", err: connect.NewError(connect.CodeInternal, fmt.Errorf("%w: %w", errs.ErrNotFound, cause("coded-over-sentinel"))),
+			code: connect.CodeInternal, message: "internal error", logLevel: "ERROR", logMarker: "coded-over-sentinel",
+		},
+		{
+			name: "handler-chosen other code", err: connect.NewError(connect.CodeUnavailable, errors.New("try again later")),
+			code: connect.CodeUnavailable, message: "try again later",
+		},
+		{
+			name: "wrapped handler-chosen other code", err: fmt.Errorf("docs: upload: %w", connect.NewError(connect.CodeResourceExhausted, errors.New("too many uploads"))),
+			code: connect.CodeResourceExhausted, message: "too many uploads",
+		},
 	}
 	probes := map[string]probeCase{}
 	for _, tc := range cases {
@@ -500,6 +570,19 @@ func TestErrorInterceptor_MapsDomainErrorsAndHidesInternals(t *testing.T) {
 			}
 			if strings.Contains(ce.Message(), "10.1.2.3") || strings.Contains(ce.Message(), "kiwi_app") {
 				t.Errorf("message %q leaks the internal error", ce.Message())
+			}
+
+			// The log is the operator's only view of what the client was not told.
+			logs, marker := f.logs.String(), "["+tc.logMarker+"]"
+			switch {
+			case tc.logLevel == "" && tc.logMarker != "":
+				if strings.Contains(logs, marker) {
+					t.Errorf("the default-level log carries %s of a plain refusal:\n%s", marker, logs)
+				}
+			case tc.logLevel != "":
+				if !logHas(logs, "level="+tc.logLevel, marker, probePath+"Probe") {
+					t.Errorf("no %s record names the procedure and carries %s at the default log level:\n%s", tc.logLevel, marker, logs)
+				}
 			}
 		})
 	}
@@ -540,12 +623,6 @@ func TestErrorInterceptor_MapsDomainErrorsAndHidesInternals(t *testing.T) {
 			if we := decodeError(t, r); we.Code != "internal" || we.Message != "internal error" {
 				t.Errorf("%s: body = %+v, want code internal and message %q", contentType, we, "internal error")
 			}
-		}
-	})
-
-	t.Run("the operator still sees the cause", func(t *testing.T) {
-		if logs := f.logs.String(); !strings.Contains(logs, "password authentication failed") || !strings.Contains(logs, probePath+"Probe") {
-			t.Errorf("the log does not name the failed procedure and its cause:\n%s", logs)
 		}
 	})
 }
@@ -878,14 +955,23 @@ func TestHealthzAndReadyzOutsideAuth(t *testing.T) {
 		t.Errorf("/readyz = %d %q, want 200", status, body)
 	}
 
-	// The same listener still demands a session of an RPC.
-	res, err := probePost(t, "http://"+addr+"/api"+probePath+"Probe", `"ok"`)
+	// The same listener still demands a session of an RPC. The request carries the
+	// page's Origin and the protocol header, so that the missing session is the only
+	// thing left to refuse it.
+	res, err := probePost(t, "http://"+addr+"/api"+probePath+"Probe", `"ok"`, map[string]string{
+		"Connect-Protocol-Version": "1",
+		"Origin":                   f.publicURL,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = res.Body.Close()
-	if res.StatusCode == http.StatusOK {
-		t.Errorf("an RPC without a session answered %d on the process listener", res.StatusCode)
+	defer func() { _ = res.Body.Close() }()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("an RPC without a session on the process listener: status = %d (body %q), want 401", res.StatusCode, raw)
+	}
+	if we := decodeError(t, reply{body: string(raw)}); we.Code != "unauthenticated" {
+		t.Errorf("an RPC without a session on the process listener: code = %q, want unauthenticated", we.Code)
 	}
 }
 
@@ -1003,9 +1089,10 @@ func TestRecover_PanicAnswersInternalAndTheServerSurvives(t *testing.T) {
 // stubStack is the shell over fakes: it needs no database, and its Auth handler
 // is not identity's, so only the shell's own guards can stop a request.
 type stubStack struct {
-	srv      *httptest.Server
-	authHits atomic.Int32
-	blobHits atomic.Int32
+	srv           *httptest.Server
+	authHits      atomic.Int32
+	blobHits      atomic.Int32
+	protectedHits atomic.Int32
 }
 
 const stubPublicURL = "https://kiwi.example"
@@ -1033,8 +1120,11 @@ func newStubStack(t *testing.T, sessions SessionStore, logs io.Writer) *stubStac
 		Sessions:  sessions,
 		Auth:      auth,
 		Blob:      blobStub,
-		Handlers: []Handler{probeHandler(logger, map[string]probeCase{
-			"ok": func(context.Context) (string, error) { return "ok", nil },
+		Handlers: []Handler{probeHandler(map[string]probeCase{
+			"ok": func(context.Context) (string, error) {
+				s.protectedHits.Add(1)
+				return "ok", nil
+			},
 		})},
 		Logger: logger,
 	})
@@ -1102,6 +1192,82 @@ func TestAuthRoutes_OutsideSessionAuth_LogoutInsideOriginCheck(t *testing.T) {
 	}
 }
 
+// TestRouting_PathTricksNeverReachAProtectedHandlerWithoutASession sends requests
+// that name the protected Connect procedure through the exempt prefixes or in odd
+// spellings, with everything a page sends except a live session. A redirect is as
+// good as a refusal only if following it still ends at the session check.
+func TestRouting_PathTricksNeverReachAProtectedHandlerWithoutASession(t *testing.T) {
+	const good = "good-session"
+	var lookups atomic.Int32
+	s := newStubStack(t, sessionFunc(func(_ context.Context, id string) (cache.SessionRecord, error) {
+		lookups.Add(1)
+		if id == good {
+			return cache.SessionRecord{UserID: uuid.New(), WorkspaceID: uuid.New()}, nil
+		}
+		return cache.SessionRecord{}, errs.ErrNotFound
+	}), io.Discard)
+
+	call := func(method, path, sid string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, s.srv.URL+path, strings.NewReader(`"ok"`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Connect-Protocol-Version", "1")
+		req.Header.Set("Origin", stubPublicURL)
+		req.Header.Set("Cookie", identity.SessionCookie+"="+sid)
+		res, err := s.srv.Client().Do(req) // follows redirects, as a browser does
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+
+	// The control: the same procedure with a live session does reach the handler, so
+	// the counter below can tell a bypass from a refusal.
+	const procedure = "/kiwi.test.v1.ProbeService/Probe"
+	if status := call(http.MethodPost, "/api"+procedure, good); status != http.StatusOK || s.protectedHits.Load() != 1 {
+		t.Fatalf("control: status = %d, handler hits = %d; want 200 and 1", status, s.protectedHits.Load())
+	}
+
+	cases := []struct {
+		name, path string
+		// want is the status after following redirects; sessionChecks how many
+		// session lookups the request (with its redirects) made.
+		want, sessionChecks int
+	}{
+		{"dot-dot out of the sign-in prefix", "/api/auth/.." + procedure, http.StatusUnauthorized, 1},
+		// ServeMux does not read %2e%2e (or an escaped slash) as a dot segment, so these
+		// stay inside the exempt prefix and meet the exempt handler, not the procedure.
+		{"escaped dot-dot inside the sign-in prefix", "/api/auth/%2e%2e" + procedure, http.StatusNoContent, 0},
+		{"escaped slash after dot-dot inside the blob prefix", "/api/blob/..%2f" + strings.TrimPrefix(procedure, "/"), http.StatusOK, 0},
+		{"dot-dot out of the blob prefix", "/api/blob/.." + procedure, http.StatusUnauthorized, 1},
+		{"a doubled slash in front", "//api" + procedure, http.StatusUnauthorized, 1},
+		{"a dot segment", "/api/." + procedure, http.StatusUnauthorized, 1},
+		{"upper-case prefixes", "/API/AUTH" + procedure, http.StatusNotFound, 0},
+		{"the sign-in prefix without its slash", "/api/auth", http.StatusNoContent, 0},
+		{"the procedure's service without its slash", "/api/kiwi.test.v1.ProbeService", http.StatusUnauthorized, 1},
+		{"under the sign-in prefix", "/api/auth" + procedure, http.StatusNoContent, 0},
+		{"under the blob prefix", "/api/blob" + procedure, http.StatusOK, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hits, before := s.protectedHits.Load(), lookups.Load()
+			if status := call(http.MethodPost, tc.path, "no-such-session"); status != tc.want {
+				t.Errorf("POST %s = %d, want %d", tc.path, status, tc.want)
+			}
+			if got := s.protectedHits.Load() - hits; got != 0 {
+				t.Errorf("POST %s reached the protected handler %d time(s) without a session", tc.path, got)
+			}
+			if got := int(lookups.Load() - before); got != tc.sessionChecks {
+				t.Errorf("POST %s made %d session lookup(s), want %d", tc.path, got, tc.sessionChecks)
+			}
+		})
+	}
+}
+
 func TestAuthInterceptor_SessionStoreFailureIsInternalNotUnauthenticated(t *testing.T) {
 	const cause = "dial tcp 10.0.0.5:6379: connect: connection refused"
 	logs := &syncBuffer{}
@@ -1140,22 +1306,53 @@ func TestAuthInterceptor_SessionStoreFailureIsInternalNotUnauthenticated(t *test
 	}
 }
 
+// unaryBuild is the Build of a one-RPC service at path that applies the options it
+// is given, as every generated Connect constructor does.
+func unaryBuild(path string) func(...connect.HandlerOption) (string, http.Handler) {
+	return func(opts ...connect.HandlerOption) (string, http.Handler) {
+		return path, connect.NewUnaryHandler(path+"Do",
+			func(context.Context, *connect.Request[wrapperspb.StringValue]) (*connect.Response[wrapperspb.StringValue], error) {
+				return connect.NewResponse(wrapperspb.String("")), nil
+			}, opts...)
+	}
+}
+
 func TestNew_RefusesIncompleteDeps(t *testing.T) {
 	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	sessions := sessionFunc(func(context.Context, string) (cache.SessionRecord, error) { return cache.SessionRecord{}, nil })
+	const path = "/kiwi.x.v1.X/"
 	valid := func() Deps {
-		return Deps{PublicURL: stubPublicURL, Sessions: sessions, Auth: ok, Blob: ok, Handlers: []Handler{{Path: "/kiwi.x.v1.X/", H: ok}}}
+		return Deps{PublicURL: stubPublicURL, Sessions: sessions, Auth: ok, Blob: ok, Handlers: []Handler{{Build: unaryBuild(path)}}}
+	}
+	// built returns what unaryBuild(path) builds, for a case to spoil.
+	built := func(opts []connect.HandlerOption) http.Handler {
+		_, h := unaryBuild(path)(opts...)
+		return h
 	}
 	cases := map[string]func(*Deps){
-		"no session store":          func(d *Deps) { d.Sessions = nil },
-		"no auth handler":           func(d *Deps) { d.Auth = nil },
-		"no blob handler":           func(d *Deps) { d.Blob = nil },
-		"a relative public URL":     func(d *Deps) { d.PublicURL = "/api" },
-		"a handler without a path":  func(d *Deps) { d.Handlers[0].Path = "" },
-		"a path without its slash":  func(d *Deps) { d.Handlers[0].Path = "/kiwi.x.v1.X" },
-		"a path without a start":    func(d *Deps) { d.Handlers[0].Path = "kiwi.x.v1.X/" },
-		"a handler that is nil":     func(d *Deps) { d.Handlers[0].H = nil },
-		"a path taken by sign-in":   func(d *Deps) { d.Handlers[0].Path = "/auth/" },
+		"no session store":      func(d *Deps) { d.Sessions = nil },
+		"no auth handler":       func(d *Deps) { d.Auth = nil },
+		"no blob handler":       func(d *Deps) { d.Blob = nil },
+		"a relative public URL": func(d *Deps) { d.PublicURL = "/api" },
+		"a handler without a Build": func(d *Deps) {
+			d.Handlers[0].Build = nil
+		},
+		"a Build that returns no path": func(d *Deps) {
+			d.Handlers[0].Build = func(opts ...connect.HandlerOption) (string, http.Handler) { return "", built(opts) }
+		},
+		"a path without its closing slash": func(d *Deps) {
+			d.Handlers[0].Build = func(opts ...connect.HandlerOption) (string, http.Handler) { return "/kiwi.x.v1.X", built(opts) }
+		},
+		"a path without its opening slash": func(d *Deps) {
+			d.Handlers[0].Build = func(opts ...connect.HandlerOption) (string, http.Handler) { return "kiwi.x.v1.X/", built(opts) }
+		},
+		"a Build that returns no handler": func(d *Deps) {
+			d.Handlers[0].Build = func(opts ...connect.HandlerOption) (string, http.Handler) { built(opts); return path, nil }
+		},
+		"a Build that ignores its options": func(d *Deps) {
+			d.Handlers[0].Build = func(...connect.HandlerOption) (string, http.Handler) { return path, ok }
+		},
+		"a path taken by sign-in":   func(d *Deps) { d.Handlers[0].Build = unaryBuild("/auth/") },
 		"two handlers on one route": func(d *Deps) { d.Handlers = append(d.Handlers, d.Handlers[0]) },
 	}
 	if got := New(valid()); got == nil {
@@ -1173,4 +1370,64 @@ func TestNew_RefusesIncompleteDeps(t *testing.T) {
 			New(d)
 		})
 	}
+}
+
+// TestNew_RefusesAHandlerBuiltWithoutTheErrorMapping is the guard on the one fail-open
+// spot of the shell: a domain handler that does not take the mapping in returns its
+// errors raw, and Connect sends them as code unknown with the cause's text.
+func TestNew_RefusesAHandlerBuiltWithoutTheErrorMapping(t *testing.T) {
+	const (
+		path      = "/kiwi.leaky.v1.LeakyService/"
+		procedure = path + "Leak"
+		cause     = `pq: password authentication failed for user "kiwi_app" at 10.1.2.3:5432`
+	)
+	leak := func(context.Context, *connect.Request[wrapperspb.StringValue]) (*connect.Response[wrapperspb.StringValue], error) {
+		return nil, errors.New(cause)
+	}
+	page := map[string]string{"Connect-Protocol-Version": "1", "Origin": stubPublicURL, "Cookie": identity.SessionCookie + "=sid"}
+	call := func(t *testing.T, h http.Handler, target string) (int, string) {
+		t.Helper()
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		res, err := probePost(t, srv.URL+target, `"x"`, page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		raw, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(raw)
+	}
+	sessions := sessionFunc(func(context.Context, string) (cache.SessionRecord, error) { return cache.SessionRecord{}, nil })
+	shell := func(build func(...connect.HandlerOption) (string, http.Handler)) Deps {
+		ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+		return Deps{PublicURL: stubPublicURL, Sessions: sessions, Auth: ok, Blob: ok, Handlers: []Handler{{Build: build}}, Logger: slog.New(slog.DiscardHandler)}
+	}
+
+	// What the guard prevents: the handler on its own, options dropped, leaks.
+	bare := http.NewServeMux()
+	bare.Handle(procedure, connect.NewUnaryHandler(procedure, leak))
+	if status, body := call(t, bare, procedure); status == http.StatusOK || !strings.Contains(body, "10.1.2.3") || !strings.Contains(body, `"code":"unknown"`) {
+		t.Fatalf("the unmapped handler answered %d %q; the test no longer shows what the guard prevents", status, body)
+	}
+
+	t.Run("New refuses to mount it", func(t *testing.T) {
+		defer func() {
+			if v := recover(); v == nil || !strings.Contains(fmt.Sprint(v), "ignored the options") {
+				t.Errorf("New did not refuse it: recovered %v", v)
+			}
+		}()
+		New(shell(func(...connect.HandlerOption) (string, http.Handler) {
+			return path, connect.NewUnaryHandler(procedure, leak) // the options are dropped
+		}))
+	})
+
+	t.Run("built with the options, the same handler is mounted and hides the cause", func(t *testing.T) {
+		h := New(shell(func(opts ...connect.HandlerOption) (string, http.Handler) {
+			return path, connect.NewUnaryHandler(procedure, leak, opts...)
+		}))
+		status, body := call(t, h, "/api"+procedure)
+		if status != http.StatusInternalServerError || strings.Contains(body, "10.1.2.3") || !strings.Contains(body, `"message":"internal error"`) {
+			t.Errorf("answered %d %q, want 500 internal error with no cause", status, body)
+		}
+	})
 }
