@@ -1,5 +1,5 @@
 import { createI18n, type I18n, type I18nKey, type I18nParams } from '@kiwi/core';
-import { LabelsProvider, LangRuns, Rich } from '@kiwi/ui';
+import { LabelsProvider, LangRuns, Numeral, Rich } from '@kiwi/ui';
 import { createContext, createElement, Fragment, useContext, useMemo, type ReactElement, type ReactNode } from 'react';
 import { useUiStore } from './state/ui';
 
@@ -51,6 +51,29 @@ export function TSlots({ k, params = {}, slots }: { k: I18nKey; params?: I18nPar
     parts.push(createElement(Rich, { key: `t${String(last)}`, text: text.slice(last) }));
   }
   return createElement(Fragment, null, parts);
+}
+
+/**
+ * A screen string with one count in it (`5 tasks`, `Document · 18 pages · #sales-th`): the count is set in mono, as every
+ * number is, and picks the plural form; the words around it, and the other parameters, go through `Rich`.
+ */
+export function TCount({ k, count, params = {} }: { k: I18nKey; count: number; params?: Record<string, string> }): ReactElement {
+  // The other parameters stay as `{name}` holes while the count is found, so a digit in a channel's name cannot be mistaken for it.
+  const holes = Object.fromEntries(Object.keys(params).map((name) => [name, `{${name}}`]));
+  const text = useI18n().t(k, { ...holes, count });
+  const digits = String(count);
+  const at = text.indexOf(digits);
+  const fill = (part: string) => part.replace(HOLE, (_, name: string) => params[name] ?? '');
+  if (at === -1) {
+    return createElement(Rich, { text: fill(text) });
+  }
+  return createElement(
+    Fragment,
+    null,
+    createElement(Rich, { text: fill(text.slice(0, at)) }),
+    createElement(Numeral, null, digits),
+    createElement(Rich, { text: fill(text.slice(at + digits.length)) }),
+  );
 }
 
 /**

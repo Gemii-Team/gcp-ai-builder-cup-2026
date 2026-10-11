@@ -11,83 +11,6 @@
   min-height: 0;
 }
 
-.main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-right: 1px solid var(--color-ledger-rule);
-}
-
-/* ===== Header ===== */
-.chead {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 52px;
-  padding: 0 var(--pad);
-  border-bottom: 1px solid var(--color-ledger-rule);
-}
-
-.chead h1 {
-  font-size: var(--text-headline);
-  font-weight: var(--text-headline--font-weight);
-  line-height: var(--text-headline--line-height);
-  letter-spacing: var(--text-headline--letter-spacing);
-  white-space: nowrap;
-}
-
-.chead .sub {
-  color: var(--color-carbon-copy);
-  white-space: nowrap;
-}
-
-.chead .acts {
-  display: flex;
-  flex: none;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.chead .back,
-.chead .ask-ic {
-  display: none;
-}
-
-.chead .ttl {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0 12px;
-}
-
-/* An icon-only control that is a link: the same 40px square as the icon button. */
-.ib {
-  display: inline-grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-md);
-  color: var(--color-primary);
-  cursor: pointer;
-  transition: background-color .15s;
-}
-
-.ib:hover {
-  background: var(--color-citation-wash);
-}
-
-.ib:active {
-  background: var(--color-mint-press);
-}
-
-@media (max-width: 1299px) {
-  .chead .sub {
-    display: none;
-  }
-}
-
 /* ===== Stream ===== */
 .stream {
   flex: 1;
@@ -128,15 +51,6 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-}
-
-/* A calm failure notice, in the one failure family; the control beside it retries. */
-.notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  color: var(--color-returned-ink);
 }
 
 .notice-close {
@@ -310,54 +224,11 @@
 
 /* ===== Phones and narrow (1023px and below): one stream, a 56px header, 44px controls ===== */
 @media (max-width: 1023px) {
-  .main {
-    flex: 1;
-    border-right: 0;
-  }
-
   .chan {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
-  }
-
-  .chead {
-    height: 56px;
-    gap: 4px;
-    padding: 0 8px 0 4px;
-  }
-
-  .chead .back,
-  .chead .ask-ic {
-    display: inline-grid;
-    width: 44px;
-    height: 44px;
-  }
-
-  .chead .ask-ic {
-    border: 1px solid var(--color-control-line);
-    background: var(--color-slip-paper);
-  }
-
-  .chead .ask-ic:hover {
-    background: var(--color-counter-hover);
-  }
-
-  .chead .acts {
-    display: none;
-  }
-
-  .chead .ttl {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .chead .sub {
-    display: block;
-    white-space: normal;
-    font-size: 15px;
-    line-height: 1.5;
   }
 
   .stream {
@@ -419,10 +290,6 @@
 }
 
 @media (max-width: 600px) {
-  .chead {
-    height: 52px;
-  }
-
   .stream-in {
     gap: 8px;
   }

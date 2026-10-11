@@ -1,3 +1,4 @@
+import '../shell/screen.css';
 import './channel.css';
 import { DraftsBar, DraftsPanel, ExcerptProvider, formatClock, Pending } from '@kiwi/ui';
 import { useQueryClient } from '@tanstack/react-query';

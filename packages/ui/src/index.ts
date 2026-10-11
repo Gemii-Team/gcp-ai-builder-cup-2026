@@ -37,7 +37,7 @@ export { DraftSlip, type DraftPatch, type DraftTask } from './draft/DraftSlip';
 export { DraftsBar } from './draft/DraftsBar';
 export { DraftsEmpty } from './draft/DraftsEmpty';
 export { DraftsPanel, type BoardCounts } from './draft/DraftsPanel';
-export { OwnerSelect, type Member } from './draft/OwnerSelect';
+export { NativeSelect, OwnerSelect, type Member } from './draft/OwnerSelect';
 export { SealedSlip, type SealedTask } from './draft/SealedSlip';
 export { useTearAndSeal, type TearAndSeal } from './draft/useTearAndSeal';
 
