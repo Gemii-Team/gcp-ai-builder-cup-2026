@@ -4,6 +4,8 @@ CREATE SCHEMA identity;
 
 CREATE TABLE identity.workspaces (
     id            uuid PRIMARY KEY,
+    -- Not null and no default: whoever creates a workspace (the sign-in callback,
+    -- identity.EnsureSeedWorkspace) passes its domain as the name.
     name          text NOT NULL,
     google_domain text NOT NULL UNIQUE,
     created_at    timestamptz NOT NULL DEFAULT now()

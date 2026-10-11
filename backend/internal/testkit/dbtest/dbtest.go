@@ -195,17 +195,23 @@ func (s *server) adminIn(ctx context.Context, database, sql string) error {
 	return err
 }
 
-// SeedTwoWorkspaces writes two tenants through kiwi_system and returns their
-// ids. Each gets one user (the channel's owner), channel, message, task, file,
-// meeting, chunk and agent run, so isolation tests have something to see
-// and something to hide. REFs are zero-numbered (MTG-0001) and never collide
-// with refs.Next, which starts at 1001.
+// SeedTwoWorkspaces writes two tenants and returns their ids. Each gets exactly
+// one row in every table RLS binds (identity.workspaces and every table with a
+// workspace_id), so isolation tests have something to see and something to
+// hide; a tenant table added by a later migration must be seeded here, which
+// the isolation test enforces.
+//
+// The rows go in as kiwi_owner with kiwi.workspace_id set per transaction:
+// FORCE ROW LEVEL SECURITY binds the owner too and WITH CHECK is satisfied, so
+// the seed needs no privilege beyond the migrations' and never touches
+// kiwi_system. REFs are zero-numbered (MTG-0001) and never collide with
+// refs.Next, which starts at 1001.
 func SeedTwoWorkspaces(t testing.TB, env *Env) (a, b uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, env.SystemURL)
+	conn, err := pgx.Connect(ctx, env.OwnerURL)
 	if err != nil {
-		t.Fatalf("dbtest: connect as kiwi_system: %v", err)
+		t.Fatalf("dbtest: connect as kiwi_owner: %v", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
@@ -223,7 +229,7 @@ func SeedTwoWorkspaces(t testing.TB, env *Env) (a, b uuid.UUID) {
 
 func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain string) error {
 	v7 := func() uuid.UUID { return uuid.Must(uuid.NewV7()) }
-	user, channel, meeting := v7(), v7(), v7()
+	user, channel, meeting, session := v7(), v7(), v7(), "session-"+domain
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -235,10 +241,13 @@ func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain str
 		sql  string
 		args []any
 	}{
+		{`SELECT set_config('kiwi.workspace_id', $1, true)`, []any{ws.String()}},
 		{`INSERT INTO identity.workspaces (id, name, google_domain) VALUES ($1, $2, $3)`,
-			[]any{ws, "Workspace " + domain, domain}},
+			[]any{ws, domain, domain}},
 		{`INSERT INTO identity.users (id, workspace_id, google_sub, email, name) VALUES ($1, $2, $3, $4, $5)`,
 			[]any{user, ws, "sub-" + domain, "owner@" + domain, "Owner of " + domain}},
+		{`INSERT INTO identity.oauth_tokens (user_id, workspace_id, refresh_token_enc) VALUES ($1, $2, '\x00')`,
+			[]any{user, ws}},
 		{`INSERT INTO chat.channels (id, workspace_id, name, kind, last_seq) VALUES ($1, $2, 'general', 'public', 1)`,
 			[]any{channel, ws}},
 		{`INSERT INTO chat.channel_members (channel_id, user_id, workspace_id, role) VALUES ($1, $2, $3, 'owner')`,
@@ -255,6 +264,13 @@ func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain str
 		{`INSERT INTO meetings.meetings (id, workspace_id, channel_id, owner_user_id, ref, title, status)
 		  VALUES ($1, $2, $3, $4, 'MTG-0001', 'Seeded meeting', 'ready')`,
 			[]any{meeting, ws, channel, user}},
+		{`INSERT INTO meetings.transcript_entries (meeting_id, workspace_id, idx, text) VALUES ($1, $2, 0, 'seeded entry')`,
+			[]any{meeting, ws}},
+		{`INSERT INTO meetings.summaries (meeting_id, workspace_id, summary) VALUES ($1, $2, 'seeded summary')`,
+			[]any{meeting, ws}},
+		{`INSERT INTO meetings.space_subscriptions (id, workspace_id, meeting_id, user_id, subscription_name, expires_at)
+		  VALUES ($1, $2, $3, $4, $5, now() + interval '1 day')`,
+			[]any{v7(), ws, meeting, user, "subscriptions/" + domain}},
 		{`INSERT INTO knowledge.chunks
 		    (id, workspace_id, channel_id, source_kind, source_id, source_anchor, lang, content, content_sha256, tsv, embedding_model, embedding)
 		  VALUES ($1, $2, $3, 'meeting', $4, 'entries:0-0', 'en', 'seeded chunk', 'sha', to_tsvector('simple', 'seeded chunk'),
@@ -263,6 +279,12 @@ func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain str
 		{`INSERT INTO agents.runs (id, workspace_id, agent, on_behalf_of, status, ref)
 		  VALUES ($1, $2, 'assistant', $3, 'done', 'ANS-0001')`,
 			[]any{v7(), ws, user}},
+		{`INSERT INTO agents.sessions (id, workspace_id, app_name, user_id) VALUES ($1, $2, 'kiwi', $3)`,
+			[]any{session, ws, user}},
+		{`INSERT INTO agents.session_events (session_id, workspace_id, event) VALUES ($1, $2, '{}')`,
+			[]any{session, ws}},
+		{`INSERT INTO platform.ref_counters (workspace_id, kind, last) VALUES ($1, 'MTG', 1000)`,
+			[]any{ws}},
 	}
 	for _, s := range steps {
 		if _, err := tx.Exec(ctx, s.sql, s.args...); err != nil {

@@ -114,32 +114,46 @@ CREATE POLICY workspace_isolation ON identity.workspaces
     USING (id = NULLIF(current_setting('kiwi.workspace_id', true), '')::uuid)
     WITH CHECK (id = NULLIF(current_setting('kiwi.workspace_id', true), '')::uuid);
 
--- kiwi_app: what the services connect as. DML on the domain schemas; the
--- platform schema only as the spec lists it.
+-- The grant sets below are pinned exactly by TestRoles_GrantsAreExact. Widening
+-- one is a deliberate act: add a new goose migration that does it and update
+-- that test in the same change, so the review sees the new privilege.
+
+-- kiwi_app: what the services connect as. DML on the domain tables, the REF
+-- counters, and the platform queue exactly as spec 6.2 lists it. It can only
+-- read identity.workspaces: tenants are created through db.System.
 GRANT USAGE ON SCHEMA identity, chat, files, meetings, tasks, knowledge, agents, platform TO kiwi_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity, chat, files, meetings, tasks, knowledge, agents TO kiwi_app;
+GRANT SELECT ON identity.workspaces TO kiwi_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON identity.users, identity.oauth_tokens TO kiwi_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA chat, files, meetings, tasks, knowledge, agents TO kiwi_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA agents TO kiwi_app;
 GRANT SELECT, INSERT, UPDATE ON platform.ref_counters TO kiwi_app;
 GRANT INSERT ON platform.outbox TO kiwi_app;
 GRANT USAGE ON SEQUENCE platform.outbox_id_seq TO kiwi_app;
 GRANT SELECT, INSERT ON platform.processed_events TO kiwi_app;
 
--- kiwi_system: BYPASSRLS, reachable only through db.System. DML on the domain
--- schemas and the REF counters (it already sees every tenant), and the relay's
--- SELECT/UPDATE on the outbox; nothing else in platform.
-GRANT USAGE ON SCHEMA identity, chat, files, meetings, tasks, knowledge, agents, platform TO kiwi_system;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA identity, chat, files, meetings, tasks, knowledge, agents TO kiwi_system;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA agents TO kiwi_system;
-GRANT SELECT, INSERT, UPDATE ON platform.ref_counters TO kiwi_system;
+-- kiwi_system: BYPASSRLS, reachable only through db.System by the allowlisted
+-- callers, so it gets what they need and nothing more. A bug in one of those
+-- queries must not be able to rewrite or delete a tenant's data.
+--   sign-in callback   identity.workspaces SELECT+INSERT, identity.users SELECT+INSERT+UPDATE
+--                      (resolve by hd and google_sub, create, adopt a seeded placeholder)
+--   outbox relay       platform.outbox SELECT+UPDATE (claim FOR UPDATE, mark published)
+--   meetings poll      meetings.meetings SELECT (enumerate meetings; the writes go
+--                      through db.InWorkspace)
+-- No DELETE anywhere and no default privileges: a new table is invisible to it.
+GRANT USAGE ON SCHEMA identity, meetings, platform TO kiwi_system;
+GRANT SELECT, INSERT ON identity.workspaces TO kiwi_system;
+GRANT SELECT, INSERT, UPDATE ON identity.users TO kiwi_system;
+GRANT SELECT ON meetings.meetings TO kiwi_system;
 GRANT SELECT, UPDATE ON platform.outbox TO kiwi_system;
 
 -- kiwi_ro: realtime membership checks, still bound by RLS.
 GRANT USAGE ON SCHEMA chat TO kiwi_ro;
 GRANT SELECT ON chat.channels, chat.channel_members TO kiwi_ro;
 
--- Tables and sequences added by later migrations (run as kiwi_owner) get the
--- same grants; the catalog test still fails any that forgets its policy.
+-- Tables and sequences that later migrations add to the domain schemas (run as
+-- kiwi_owner) reach kiwi_app the same way; kiwi_system and kiwi_ro get nothing
+-- by default.
 ALTER DEFAULT PRIVILEGES IN SCHEMA identity, chat, files, meetings, tasks, knowledge, agents
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO kiwi_app, kiwi_system;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO kiwi_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA identity, chat, files, meetings, tasks, knowledge, agents
-    GRANT USAGE ON SEQUENCES TO kiwi_app, kiwi_system;
+    GRANT USAGE ON SEQUENCES TO kiwi_app;

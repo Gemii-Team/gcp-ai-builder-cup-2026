@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Fails when committed generated code differs from what `task gen` produces.
-# Compares the working tree with the index, so stage generated files (or run it
-# on a clean checkout, as CI does). Untracked generated files also count as drift.
+# Fails when committed generated code differs from what `task gen` produces:
+# the protobuf output and the sqlc store of every domain. Compares the working
+# tree with the index, so stage generated files (or run it on a clean checkout,
+# as CI does). Untracked generated files also count as drift.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-paths=(backend/gen packages/api-client/src/gen)
+# The glob magic keeps `*` to one path segment, so only a domain's own
+# internal/store is covered (backend/internal/<domain>/internal/store/**).
+paths=(backend/gen packages/api-client/src/gen ':(glob)backend/internal/*/internal/store/**')
 
 task gen
 

@@ -12,6 +12,10 @@ CREATE TABLE meetings.meetings (
     ref               text,
     title             text NOT NULL DEFAULT '',
     meet_space        text, -- Meet space resource name; null for a recording
+    -- The uploaded recording (a typed reference to files.files, no constraint) a
+    -- recording meeting was made from; null for a Meet meeting. RetrySummary
+    -- re-enqueues meeting.transcribe with it.
+    recording_file_id uuid,
     meet_uri          text,
     conference_record text,
     status            text NOT NULL DEFAULT 'pending'

@@ -20,11 +20,14 @@ import (
 )
 
 // insufficientPrivilege is SQLSTATE 42501, raised both for a missing GRANT and
-// for a row-level-security violation.
+// for a row-level-security violation; the message tells them apart.
 const insufficientPrivilege = "42501"
 
 // nullifGuard is how Postgres prints the fail-closed workspace expression.
 const nullifGuard = `NULLIF(current_setting('kiwi.workspace_id'::text, true), ''::text)`
+
+// kiwiSchemas are the schemas the grant catalog test inspects.
+var kiwiSchemas = []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "platform"}
 
 func connect(t *testing.T, url string) *pgx.Conn {
 	t.Helper()
@@ -47,9 +50,10 @@ func scalar[T any](t *testing.T, q interface {
 	return v
 }
 
-// inWorkspace runs fn in a transaction with kiwi.workspace_id set the way
-// db.InWorkspace will, and rolls it back afterwards. A nil ws sets nothing.
-func inWorkspace(t *testing.T, url string, ws *uuid.UUID, fn func(tx pgx.Tx)) {
+// inTx runs fn in a transaction as the role behind url, with kiwi.workspace_id
+// set the way db.InWorkspace will (a nil ws sets nothing), then commits or
+// rolls back.
+func inTx(t *testing.T, url string, ws *uuid.UUID, commit bool, fn func(tx pgx.Tx)) {
 	t.Helper()
 	conn := connect(t, url)
 	tx, err := conn.Begin(t.Context())
@@ -63,33 +67,69 @@ func inWorkspace(t *testing.T, url string, ws *uuid.UUID, fn func(tx pgx.Tx)) {
 		}
 	}
 	fn(tx)
+	if commit {
+		if err := tx.Commit(t.Context()); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
 }
 
-// execErrCode runs sql in a throwaway transaction as the role behind url and
-// returns the SQLSTATE of the failure ("" when it succeeds).
+// inWorkspace runs fn in a rolled-back transaction bound to ws.
+func inWorkspace(t *testing.T, url string, ws *uuid.UUID, fn func(tx pgx.Tx)) {
+	t.Helper()
+	inTx(t, url, ws, false, fn)
+}
+
+// seedIn runs fn as kiwi_owner in a committed transaction bound to ws: FORCE
+// ROW LEVEL SECURITY binds the owner, and WITH CHECK is satisfied. Tests seed
+// through it so they never need a privilege kiwi_system lacks.
+func seedIn(t *testing.T, env *dbtest.Env, ws uuid.UUID, fn func(tx pgx.Tx)) {
+	t.Helper()
+	inTx(t, env.OwnerURL, &ws, true, fn)
+}
+
+// execErrIn runs sql in a throwaway transaction as the role behind url, bound
+// to ws when non-nil, and returns the Postgres error (nil when it succeeds).
+func execErrIn(t *testing.T, url string, ws *uuid.UUID, sql string, args ...any) *pgconn.PgError {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	inTx(t, url, ws, false, func(tx pgx.Tx) {
+		_, err := tx.Exec(t.Context(), sql, args...)
+		if err != nil && !errors.As(err, &pgErr) {
+			t.Fatalf("%s: not a Postgres error: %v", sql, err)
+		}
+	})
+	return pgErr
+}
+
+// execErrCode is execErrIn with no workspace, reduced to the SQLSTATE ("" on success).
 func execErrCode(t *testing.T, url, sql string, args ...any) string {
 	t.Helper()
-	conn := connect(t, url)
-	tx, err := conn.Begin(t.Context())
+	if pgErr := execErrIn(t, url, nil, sql, args...); pgErr != nil {
+		return pgErr.Code
+	}
+	return ""
+}
+
+func queryStrings(t *testing.T, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, sql string, args ...any) []string {
+	t.Helper()
+	rows, err := q.Query(t.Context(), sql, args...)
 	if err != nil {
-		t.Fatalf("begin: %v", err)
+		t.Fatalf("%s: %v", sql, err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	_, err = tx.Exec(t.Context(), sql, args...)
-	if err == nil {
-		return ""
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("%s: %v", sql, err)
 	}
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		t.Fatalf("%s: not a Postgres error: %v", sql, err)
-	}
-	return pgErr.Code
+	return out
 }
 
 // workspaceTables lists every table with a workspace_id column.
 func workspaceTables(t *testing.T, conn *pgx.Conn) []string {
 	t.Helper()
-	rows, err := conn.Query(t.Context(), `
+	return queryStrings(t, conn, `
 		SELECT n.nspname || '.' || c.relname
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -97,14 +137,20 @@ func workspaceTables(t *testing.T, conn *pgx.Conn) []string {
 		WHERE c.relkind IN ('r', 'p')
 		  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 		ORDER BY 1`)
-	if err != nil {
-		t.Fatalf("list workspace tables: %v", err)
+}
+
+// tenantTables is every table RLS binds: the tables with a workspace_id and
+// identity.workspaces, which has none and is bound by its own id.
+func tenantTables(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+	return append(workspaceTables(t, conn), "identity.workspaces")
+}
+
+func tenantColumn(table string) string {
+	if table == "identity.workspaces" {
+		return "id"
 	}
-	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatalf("list workspace tables: %v", err)
-	}
-	return tables
+	return "workspace_id"
 }
 
 func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
@@ -123,9 +169,19 @@ func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
 		}
 	}
 
-	// The tenant table itself has no workspace_id, so it is bound by its own id.
-	policied := append(slices.Clone(tables), "identity.workspaces")
-	for _, table := range policied {
+	// A table without a workspace_id is a decision, not an accident: only the
+	// platform queue, the tenant table itself and goose's bookkeeping may lack one.
+	exempt := []string{"platform.outbox", "platform.processed_events", "identity.workspaces", "public.goose_db_version"}
+	for _, table := range queryStrings(t, conn, `
+		SELECT n.nspname || '.' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1`) {
+		if !slices.Contains(tables, table) && !slices.Contains(exempt, table) {
+			t.Errorf("%s has no workspace_id column and is not an exempt table %v", table, exempt)
+		}
+	}
+
+	tenant := tenantTables(t, conn)
+	for _, table := range tenant {
 		var enabled, forced bool
 		var policies int
 		err := conn.QueryRow(t.Context(), `
@@ -141,33 +197,42 @@ func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
 		}
 	}
 
-	// Every policy must carry the NULLIF guard in both USING and WITH CHECK.
+	// Every policy is exactly the fail-closed expression on the tenant column,
+	// in both USING and WITH CHECK: `true OR ...`, a missing NULLIF or the wrong
+	// column all fail.
 	rows, err := conn.Query(t.Context(), `
-		SELECT schemaname || '.' || tablename, policyname, cmd, coalesce(qual, ''), coalesce(with_check, '')
+		SELECT schemaname || '.' || tablename, policyname, permissive, roles, cmd, coalesce(qual, ''), coalesce(with_check, '')
 		FROM pg_policies WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2`)
 	if err != nil {
 		t.Fatalf("list policies: %v", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var table, name, cmd, qual, check string
-		if err := rows.Scan(&table, &name, &cmd, &qual, &check); err != nil {
+		var table, name, permissive, cmd, qual, check string
+		var roles []string
+		if err := rows.Scan(&table, &name, &permissive, &roles, &cmd, &qual, &check); err != nil {
 			t.Fatal(err)
 		}
-		if cmd != "ALL" {
-			t.Errorf("%s policy %s applies to %s, want ALL", table, name, cmd)
+		if !slices.Contains(tenant, table) {
+			t.Errorf("%s has policy %s but is not a tenant table", table, name)
+			continue
 		}
-		for what, expr := range map[string]string{"USING": qual, "WITH CHECK": check} {
-			if !strings.Contains(expr, nullifGuard) {
-				t.Errorf("%s policy %s %s = %s, want it to contain %s", table, name, what, expr, nullifGuard)
-			}
+		want := fmt.Sprintf("(%s = (%s)::uuid)", tenantColumn(table), nullifGuard)
+		if qual != want {
+			t.Errorf("%s policy %s USING = %s, want %s", table, name, qual, want)
+		}
+		if check != want {
+			t.Errorf("%s policy %s WITH CHECK = %s, want %s", table, name, check, want)
+		}
+		if permissive != "PERMISSIVE" || cmd != "ALL" || !slices.Equal(roles, []string{"public"}) {
+			t.Errorf("%s policy %s is %s for %s on %v, want PERMISSIVE for ALL on public", table, name, permissive, cmd, roles)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
 
-	// The platform schema is infrastructure: no tenant column, no RLS.
+	// The platform queue is infrastructure: no tenant column, no RLS.
 	for _, table := range []string{"platform.outbox", "platform.processed_events"} {
 		if slices.Contains(tables, table) {
 			t.Errorf("%s has a workspace_id column; the platform queue tables are not tenant data", table)
@@ -178,83 +243,73 @@ func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
 	}
 }
 
-var isolatedTables = []string{
-	"chat.channels", "chat.messages", "tasks.tasks", "files.files",
-	"meetings.meetings", "knowledge.chunks", "agents.runs",
-}
-
 func TestIsolation_AcrossDomainTables(t *testing.T) {
 	env := dbtest.Start(t)
 	a, b := dbtest.SeedTwoWorkspaces(t, env)
 
-	for _, table := range isolatedTables {
-		t.Run(table, func(t *testing.T) {
-			inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
-				if got := scalar[int](t, tx, `SELECT count(*) FROM `+table); got != 1 {
-					t.Errorf("as workspace A: %d rows, want 1", got)
-				}
-				if got := scalar[int](t, tx, `SELECT count(*) FROM `+table+` WHERE workspace_id = $1`, b); got != 0 {
-					t.Errorf("as workspace A: %d of B's rows visible, want 0", got)
-				}
-			})
-			inWorkspace(t, env.AppURL, &b, func(tx pgx.Tx) {
-				if got := scalar[int](t, tx, `SELECT count(*) FROM `+table+` WHERE workspace_id = $1`, a); got != 0 {
-					t.Errorf("as workspace B: %d of A's rows visible, want 0", got)
-				}
-				if got := scalar[int](t, tx, `SELECT count(*) FROM `+table); got != 1 {
-					t.Errorf("as workspace B: %d rows, want 1", got)
-				}
-			})
-		})
+	// The seven tables of the brief, and every other table RLS binds: the seed
+	// puts exactly one row of each in each workspace.
+	tenant := tenantTables(t, connect(t, env.OwnerURL))
+	for _, named := range []string{"chat.channels", "chat.messages", "tasks.tasks", "files.files", "meetings.meetings", "knowledge.chunks", "agents.runs"} {
+		if !slices.Contains(tenant, named) {
+			t.Fatalf("%s is not a tenant table", named)
+		}
 	}
 
-	// Every tenant table, not only the seven above: the app role sees exactly
-	// what kiwi_system counts for its own workspace.
-	system := connect(t, env.SystemURL)
-	for _, table := range workspaceTables(t, system) {
-		want := scalar[int](t, system, `SELECT count(*) FROM `+table+` WHERE workspace_id = $1`, a)
-		inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
-			if got := scalar[int](t, tx, `SELECT count(*) FROM `+table); got != want {
-				t.Errorf("%s as workspace A: %d rows, want %d", table, got, want)
+	for _, table := range tenant {
+		col := tenantColumn(table)
+		t.Run(table, func(t *testing.T) {
+			for _, tc := range []struct {
+				name       string
+				own, other uuid.UUID
+			}{{"A", a, b}, {"B", b, a}} {
+				inWorkspace(t, env.AppURL, &tc.own, func(tx pgx.Tx) {
+					if got := scalar[int](t, tx, `SELECT count(*) FROM `+table); got != 1 {
+						t.Errorf("as workspace %s: %d rows, want 1 (does dbtest.SeedTwoWorkspaces seed this table?)", tc.name, got)
+					}
+					if got := scalar[int](t, tx, `SELECT count(*) FROM `+table+` WHERE `+col+` = $1`, tc.other); got != 0 {
+						t.Errorf("as workspace %s: %d of the other workspace's rows visible, want 0", tc.name, got)
+					}
+				})
 			}
 		})
 	}
-
-	inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
-		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.workspaces`); got != 1 {
-			t.Errorf("identity.workspaces as workspace A: %d rows, want 1", got)
-		}
-	})
 }
 
 func TestIsolation_WithCheckRejectsRowsOfAnotherWorkspace(t *testing.T) {
 	env := dbtest.Start(t)
 	a, b := dbtest.SeedTwoWorkspaces(t, env)
 
-	inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
-		_, err := tx.Exec(t.Context(),
-			`INSERT INTO chat.channels (id, workspace_id, name, kind) VALUES ($1, $2, 'smuggled', 'public')`,
-			uuid.New(), b)
-		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != insufficientPrivilege || !strings.Contains(pgErr.Message, "row-level security") {
-			t.Fatalf("inserting a row for workspace B as A: err = %v, want a row-level security violation", err)
-		}
-	})
-	inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
-		tag, err := tx.Exec(t.Context(), `UPDATE chat.channels SET workspace_id = $1`, b)
-		var pgErr *pgconn.PgError
-		if err == nil || !errors.As(err, &pgErr) || pgErr.Code != insufficientPrivilege {
-			t.Fatalf("moving A's channel to B: tag = %v, err = %v, want a row-level security violation", tag, err)
-		}
-	})
+	pgErr := execErrIn(t, env.AppURL, &a,
+		`INSERT INTO chat.channels (id, workspace_id, name, kind) VALUES ($1, $2, 'smuggled', 'public')`, uuid.New(), b)
+	if pgErr == nil || pgErr.Code != insufficientPrivilege || !strings.Contains(pgErr.Message, "row-level security") {
+		t.Errorf("inserting a row for workspace B as A: err = %v, want a row-level security violation", pgErr)
+	}
+
+	// Moving A's row to B must fail on the policy, not on a missing privilege:
+	// every table through kiwi_app, except identity.workspaces, which kiwi_app
+	// cannot update at all, so the owner (bound by FORCE) proves its policy.
+	for _, table := range tenantTables(t, connect(t, env.OwnerURL)) {
+		t.Run(table, func(t *testing.T) {
+			url := env.AppURL
+			if table == "identity.workspaces" {
+				url = env.OwnerURL
+			}
+			pgErr := execErrIn(t, url, &a, fmt.Sprintf(`UPDATE %s SET %s = $1`, table, tenantColumn(table)), b)
+			if pgErr == nil || pgErr.Code != insufficientPrivilege || !strings.Contains(pgErr.Message, "row-level security") {
+				t.Errorf("moving A's row to B: err = %v, want a row-level security violation", pgErr)
+			}
+		})
+	}
 }
 
 func TestFailClosed_NoGUC_ReturnsZeroRows(t *testing.T) {
 	env := dbtest.Start(t)
 	dbtest.SeedTwoWorkspaces(t, env)
+	tenant := tenantTables(t, connect(t, env.OwnerURL))
 
 	inWorkspace(t, env.AppURL, nil, func(tx pgx.Tx) {
-		for _, table := range append(slices.Clone(isolatedTables), "identity.users", "identity.workspaces", "platform.ref_counters") {
+		for _, table := range tenant {
 			if got := scalar[int](t, tx, `SELECT count(*) FROM `+table); got != 0 {
 				t.Errorf("%s without kiwi.workspace_id: %d rows, want 0", table, got)
 			}
@@ -321,6 +376,7 @@ func TestRoles_PlatformGrants(t *testing.T) {
 	})
 
 	enqueue := `INSERT INTO platform.outbox (topic, key, payload) VALUES ('chat.message.created', 'k', '{"workspace_id":"x"}')`
+	newWorkspace := `INSERT INTO identity.workspaces (id, name, google_domain) VALUES (gen_random_uuid(), 'new.example', 'new.example')`
 	tests := []struct {
 		name string
 		url  string
@@ -334,11 +390,30 @@ func TestRoles_PlatformGrants(t *testing.T) {
 			`INSERT INTO platform.processed_events (consumer, event_id) VALUES ('c', 'e')`, ""},
 		{"app can read processed events", env.AppURL, `SELECT count(*) FROM platform.processed_events`, ""},
 		{"app cannot delete processed events", env.AppURL, `DELETE FROM platform.processed_events`, insufficientPrivilege},
+		{"app can read workspaces", env.AppURL, `SELECT count(*) FROM identity.workspaces`, ""},
+		{"app cannot create a workspace", env.AppURL, newWorkspace, insufficientPrivilege},
+		{"app cannot update a workspace", env.AppURL, `UPDATE identity.workspaces SET name = 'x'`, insufficientPrivilege},
+		{"app cannot delete a workspace", env.AppURL, `DELETE FROM identity.workspaces`, insufficientPrivilege},
 		{"system can read the outbox", env.SystemURL, `SELECT count(*) FROM platform.outbox`, ""},
 		{"system can update the outbox", env.SystemURL, `UPDATE platform.outbox SET published_at = now()`, ""},
 		{"system cannot enqueue", env.SystemURL, enqueue, insufficientPrivilege},
 		{"system cannot delete from the outbox", env.SystemURL, `DELETE FROM platform.outbox`, insufficientPrivilege},
 		{"system cannot touch processed events", env.SystemURL, `SELECT count(*) FROM platform.processed_events`, insufficientPrivilege},
+		{"system sees every workspace", env.SystemURL, `SELECT count(*) FROM identity.workspaces`, ""},
+		{"system can create a workspace", env.SystemURL, newWorkspace, ""},
+		{"system cannot update a workspace", env.SystemURL, `UPDATE identity.workspaces SET name = 'x'`, insufficientPrivilege},
+		{"system cannot delete a workspace", env.SystemURL, `DELETE FROM identity.workspaces`, insufficientPrivilege},
+		{"system can read users", env.SystemURL, `SELECT count(*) FROM identity.users`, ""},
+		{"system can update users", env.SystemURL, `UPDATE identity.users SET name = 'x'`, ""},
+		{"system cannot delete users", env.SystemURL, `DELETE FROM identity.users`, insufficientPrivilege},
+		{"system cannot read oauth tokens", env.SystemURL, `SELECT count(*) FROM identity.oauth_tokens`, insufficientPrivilege},
+		{"system can read meetings", env.SystemURL, `SELECT count(*) FROM meetings.meetings`, ""},
+		{"system cannot update meetings", env.SystemURL, `UPDATE meetings.meetings SET title = 'x'`, insufficientPrivilege},
+		{"system cannot delete meetings", env.SystemURL, `DELETE FROM meetings.meetings`, insufficientPrivilege},
+		{"system cannot read messages", env.SystemURL, `SELECT count(*) FROM chat.messages`, insufficientPrivilege},
+		{"system cannot write channels", env.SystemURL, `UPDATE chat.channels SET name = 'x'`, insufficientPrivilege},
+		{"system cannot read chunks", env.SystemURL, `SELECT count(*) FROM knowledge.chunks`, insufficientPrivilege},
+		{"system cannot touch ref counters", env.SystemURL, `SELECT count(*) FROM platform.ref_counters`, insufficientPrivilege},
 		{"ro cannot read the outbox", env.ROURL, `SELECT count(*) FROM platform.outbox`, insufficientPrivilege},
 		{"ro cannot read messages", env.ROURL, `SELECT count(*) FROM chat.messages`, insufficientPrivilege},
 		{"ro cannot read tasks", env.ROURL, `SELECT count(*) FROM tasks.tasks`, insufficientPrivilege},
@@ -374,12 +449,116 @@ func TestRoles_PlatformGrants(t *testing.T) {
 	})
 }
 
+// TestRoles_GrantsAreExact pins every privilege kiwi_app, kiwi_system and
+// kiwi_ro hold on the kiwi schemas: relation, sequence and schema privileges,
+// column privileges (none are used) and default privileges. Any widening is a
+// red build. A task that genuinely needs one more privilege adds a new goose
+// migration for it and extends the lists below in the same change, so the
+// review sees the new privilege.
+//
+// The ACLs come from pg_class/pg_namespace/pg_default_acl rather than
+// information_schema.role_table_grants: that view omits sequences and PUBLIC
+// grants and only shows roles the connection has enabled.
+func TestRoles_GrantsAreExact(t *testing.T) {
+	env := dbtest.Start(t)
+	conn := connect(t, env.OwnerURL)
+
+	var want []string
+	add := func(role, object string, privs ...string) {
+		for _, p := range privs {
+			want = append(want, role+" "+object+" "+p)
+		}
+	}
+	dml := []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
+	for _, table := range []string{
+		"identity.users", "identity.oauth_tokens", "chat.channels", "chat.channel_members", "chat.messages",
+		"files.files", "meetings.meetings", "meetings.transcript_entries", "meetings.summaries",
+		"meetings.space_subscriptions", "tasks.tasks", "knowledge.chunks", "agents.runs", "agents.sessions",
+		"agents.session_events",
+	} {
+		add("kiwi_app", table, dml...)
+	}
+	add("kiwi_app", "identity.workspaces", "SELECT")
+	add("kiwi_app", "platform.ref_counters", "INSERT", "SELECT", "UPDATE")
+	add("kiwi_app", "platform.outbox", "INSERT")
+	add("kiwi_app", "platform.processed_events", "INSERT", "SELECT")
+	add("kiwi_app", "agents.session_events_id_seq", "USAGE")
+	add("kiwi_app", "platform.outbox_id_seq", "USAGE")
+	// kiwi_system: the three db.System callers and nothing else. No DELETE.
+	add("kiwi_system", "identity.workspaces", "INSERT", "SELECT")
+	add("kiwi_system", "identity.users", "INSERT", "SELECT", "UPDATE")
+	add("kiwi_system", "meetings.meetings", "SELECT")
+	add("kiwi_system", "platform.outbox", "SELECT", "UPDATE")
+	add("kiwi_ro", "chat.channels", "SELECT")
+	add("kiwi_ro", "chat.channel_members", "SELECT")
+
+	got := queryStrings(t, conn, `
+		SELECT pg_get_userbyid(a.grantee) || ' ' || n.nspname || '.' || c.relname || ' ' || a.privilege_type
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace,
+		LATERAL aclexplode(c.relacl) a
+		WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND a.grantee <> c.relowner`, kiwiSchemas)
+	assertSameSet(t, "relation and sequence privileges", got, want)
+
+	want = nil
+	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "platform"} {
+		add("kiwi_app", schema, "USAGE")
+	}
+	for _, schema := range []string{"identity", "meetings", "platform"} {
+		add("kiwi_system", schema, "USAGE")
+	}
+	add("kiwi_ro", "chat", "USAGE")
+	got = queryStrings(t, conn, `
+		SELECT pg_get_userbyid(a.grantee) || ' ' || n.nspname || ' ' || a.privilege_type
+		FROM pg_namespace n, LATERAL aclexplode(n.nspacl) a
+		WHERE n.nspname = ANY($1) AND a.grantee <> n.nspowner`, kiwiSchemas)
+	assertSameSet(t, "schema privileges", got, want)
+
+	// Default privileges: only kiwi_app, only the domain schemas.
+	want = nil
+	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents"} {
+		for _, p := range dml {
+			want = append(want, "kiwi_app "+schema+" r "+p)
+		}
+		want = append(want, "kiwi_app "+schema+" S USAGE")
+	}
+	got = queryStrings(t, conn, `
+		SELECT pg_get_userbyid(a.grantee) || ' ' || coalesce(n.nspname, '*') || ' ' || d.defaclobjtype::text || ' ' || a.privilege_type
+		FROM pg_default_acl d
+		LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace,
+		LATERAL aclexplode(d.defaclacl) a
+		WHERE a.grantee <> d.defaclrole`)
+	assertSameSet(t, "default privileges", got, want)
+
+	got = queryStrings(t, conn, `
+		SELECT n.nspname || '.' || c.relname || '.' || a.attname
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = ANY($1) AND a.attacl IS NOT NULL`, kiwiSchemas)
+	assertSameSet(t, "column privileges", got, nil)
+}
+
+func assertSameSet(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	got, want = slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))
+	for _, g := range got {
+		if !slices.Contains(want, g) {
+			t.Errorf("%s: unexpected grant %q", what, g)
+		}
+	}
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("%s: missing grant %q", what, w)
+		}
+	}
+}
+
 func TestChunks_VectorAndHNSW(t *testing.T) {
 	env := dbtest.Start(t)
 	a, _ := dbtest.SeedTwoWorkspaces(t, env)
-	system := connect(t, env.SystemURL)
 
-	version := scalar[string](t, system, `SELECT extversion FROM pg_extension WHERE extname = 'vector'`)
+	version := scalar[string](t, connect(t, env.OwnerURL), `SELECT extversion FROM pg_extension WHERE extname = 'vector'`)
 	major, minor, _ := strings.Cut(version, ".")
 	minor, _, _ = strings.Cut(minor, ".")
 	maj, _ := strconv.Atoi(major)
@@ -389,37 +568,44 @@ func TestChunks_VectorAndHNSW(t *testing.T) {
 	}
 	t.Logf("pgvector %s", version)
 
-	def := scalar[string](t, system, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'knowledge' AND tablename = 'chunks' AND indexdef ILIKE '%hnsw%'`)
+	def := scalar[string](t, connect(t, env.OwnerURL),
+		`SELECT indexdef FROM pg_indexes WHERE schemaname = 'knowledge' AND tablename = 'chunks' AND indexdef ILIKE '%hnsw%'`)
 	if !strings.Contains(def, "USING hnsw (embedding vector_cosine_ops)") {
 		t.Fatalf("HNSW index definition = %s, want USING hnsw (embedding vector_cosine_ops)", def)
 	}
 
-	channel := scalar[uuid.UUID](t, system, `SELECT id FROM chat.channels WHERE workspace_id = $1`, a)
-	// 1000 random 768-dim vectors; the correlated "n > 0" makes Postgres draw a
-	// fresh vector for every row.
-	if _, err := system.Exec(t.Context(), `
-		INSERT INTO knowledge.chunks
-		  (id, workspace_id, channel_id, source_kind, source_id, source_anchor, lang, content, content_sha256, tsv, embedding_model, embedding)
-		SELECT gen_random_uuid(), $1, $2, 'doc', gen_random_uuid(), 'page:' || n, 'en', 'chunk ' || n, md5(n::text),
-		       to_tsvector('simple', 'chunk ' || n), 'embeddinggemma',
-		       (SELECT array_agg((random() * 2 - 1)::real) FROM generate_series(1, 768) WHERE n > 0)::vector
-		FROM generate_series(1, 1000) AS n`, a, channel); err != nil {
-		t.Fatalf("seed chunks: %v", err)
-	}
+	var channel uuid.UUID
+	seedIn(t, env, a, func(tx pgx.Tx) {
+		channel = scalar[uuid.UUID](t, tx, `SELECT id FROM chat.channels`)
+		// 1000 random 768-dim vectors; the correlated "n > 0" makes Postgres
+		// draw a fresh vector for every row.
+		if _, err := tx.Exec(t.Context(), `
+			INSERT INTO knowledge.chunks
+			  (id, workspace_id, channel_id, source_kind, source_id, source_anchor, lang, content, content_sha256, tsv, embedding_model, embedding)
+			SELECT gen_random_uuid(), $1, $2, 'doc', gen_random_uuid(), 'page:' || n, 'en', 'chunk ' || n, md5(n::text),
+			       to_tsvector('simple', 'chunk ' || n), 'embeddinggemma',
+			       (SELECT array_agg((random() * 2 - 1)::real) FROM generate_series(1, 768) WHERE n > 0)::vector
+			FROM generate_series(1, 1000) AS n`, a, channel); err != nil {
+			t.Fatalf("seed chunks: %v", err)
+		}
+	})
 	analyze(t, env, `knowledge.chunks`)
 
 	t.Run("wrong dimension is rejected", func(t *testing.T) {
-		code := execErrCode(t, env.SystemURL, `
+		pgErr := execErrIn(t, env.OwnerURL, &a, `
 			INSERT INTO knowledge.chunks
 			  (id, workspace_id, source_kind, source_id, source_anchor, lang, content, content_sha256, tsv, embedding_model, embedding)
 			VALUES (gen_random_uuid(), $1, 'doc', gen_random_uuid(), 'page:1', 'en', 'x', 'x', to_tsvector('simple', 'x'), 'm', '[1,2,3]')`, a)
-		if code != "22000" { // data_exception: expected 768 dimensions, not 3
-			t.Errorf("SQLSTATE = %q, want 22000 (expected 768 dimensions)", code)
+		if pgErr == nil || pgErr.Code != "22000" { // data_exception: expected 768 dimensions, not 3
+			t.Errorf("err = %v, want SQLSTATE 22000 (expected 768 dimensions)", pgErr)
 		}
 	})
 
 	t.Run("nearest neighbour uses the HNSW index", func(t *testing.T) {
-		query := scalar[string](t, system, `SELECT embedding::text FROM knowledge.chunks WHERE source_anchor = 'page:500'`)
+		var query string
+		inWorkspace(t, env.OwnerURL, &a, func(tx pgx.Tx) {
+			query = scalar[string](t, tx, `SELECT embedding::text FROM knowledge.chunks WHERE source_anchor = 'page:500'`)
+		})
 		// The retriever's shape: model filter, the caller's channels or workspace-wide, RLS on top.
 		const nearest = `SELECT source_anchor FROM knowledge.chunks
 			WHERE embedding_model = 'embeddinggemma' AND (channel_id = ANY($2) OR channel_id IS NULL)
@@ -451,8 +637,8 @@ func TestChunks_VectorAndHNSW(t *testing.T) {
 	})
 }
 
-// analyze refreshes planner statistics as the table owner; kiwi_system may not
-// ANALYZE and silently skips it, which leaves the planner guessing.
+// analyze refreshes planner statistics as the table owner; kiwi_system and
+// kiwi_app may not ANALYZE and silently skip it, which leaves the planner guessing.
 func analyze(t *testing.T, env *dbtest.Env, table string) {
 	t.Helper()
 	conn := connect(t, env.OwnerURL)
@@ -464,14 +650,7 @@ func analyze(t *testing.T, env *dbtest.Env, table string) {
 // explain returns the plan of sql, with the long vector literals cut short.
 func explain(t *testing.T, tx pgx.Tx, sql string, args ...any) string {
 	t.Helper()
-	rows, err := tx.Query(t.Context(), `EXPLAIN (COSTS OFF) `+sql, args...)
-	if err != nil {
-		t.Fatalf("explain: %v", err)
-	}
-	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatalf("explain: %v", err)
-	}
+	lines := queryStrings(t, tx, `EXPLAIN (COSTS OFF) `+sql, args...)
 	for i, l := range lines {
 		if len(l) > 200 {
 			lines[i] = l[:200] + "…"
@@ -483,15 +662,17 @@ func explain(t *testing.T, tx pgx.Tx, sql string, args ...any) string {
 func TestMessages_SeqIndexServesDescendingPaging(t *testing.T) {
 	env := dbtest.Start(t)
 	a, _ := dbtest.SeedTwoWorkspaces(t, env)
-	system := connect(t, env.SystemURL)
 
-	channel := scalar[uuid.UUID](t, system, `SELECT id FROM chat.channels WHERE workspace_id = $1`, a)
-	if _, err := system.Exec(t.Context(), `
-		INSERT INTO chat.messages (id, workspace_id, channel_id, seq, author_kind, author_id, body, client_msg_id)
-		SELECT gen_random_uuid(), $1, $2, n, 'user', gen_random_uuid(), 'message ' || n, 'c' || n
-		FROM generate_series(2, 5000) AS n`, a, channel); err != nil {
-		t.Fatalf("seed messages: %v", err)
-	}
+	var channel uuid.UUID
+	seedIn(t, env, a, func(tx pgx.Tx) {
+		channel = scalar[uuid.UUID](t, tx, `SELECT id FROM chat.channels`)
+		if _, err := tx.Exec(t.Context(), `
+			INSERT INTO chat.messages (id, workspace_id, channel_id, seq, author_kind, author_id, body, client_msg_id)
+			SELECT gen_random_uuid(), $1, $2, n, 'user', gen_random_uuid(), 'message ' || n, 'c' || n
+			FROM generate_series(2, 5000) AS n`, a, channel); err != nil {
+			t.Fatalf("seed messages: %v", err)
+		}
+	})
 	analyze(t, env, `chat.messages`)
 
 	inWorkspace(t, env.AppURL, &a, func(tx pgx.Tx) {
@@ -500,6 +681,48 @@ func TestMessages_SeqIndexServesDescendingPaging(t *testing.T) {
 			t.Errorf("descending page query is not served by the (channel_id, seq) index:\n%s", plan)
 		}
 	})
+}
+
+func TestMeetings_RecordingFileIDIsANullableTypedReference(t *testing.T) {
+	env := dbtest.Start(t)
+	conn := connect(t, env.OwnerURL)
+
+	var dataType, nullable string
+	err := conn.QueryRow(t.Context(), `
+		SELECT data_type, is_nullable FROM information_schema.columns
+		WHERE table_schema = 'meetings' AND table_name = 'meetings' AND column_name = 'recording_file_id'`).Scan(&dataType, &nullable)
+	if err != nil {
+		t.Fatalf("meetings.meetings.recording_file_id: %v", err)
+	}
+	if dataType != "uuid" || nullable != "YES" {
+		t.Errorf("recording_file_id is %s, nullable=%s, want uuid, nullable=YES", dataType, nullable)
+	}
+
+	// A typed reference, not a constraint: meetings never points into the files schema.
+	if n := scalar[int](t, conn, `
+		SELECT count(*) FROM pg_constraint k
+		JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
+		WHERE k.contype = 'f' AND k.conrelid = 'meetings.meetings'::regclass AND a.attname = 'recording_file_id'`); n != 0 {
+		t.Errorf("recording_file_id is part of %d foreign keys, want none", n)
+	}
+}
+
+// TestCrossSchemaForeignKeysOnlyReferenceIdentity pins spec 3.1: foreign keys
+// leave a schema only towards identity.workspaces and identity.users; every
+// other cross-domain link is a typed reference.
+func TestCrossSchemaForeignKeysOnlyReferenceIdentity(t *testing.T) {
+	env := dbtest.Start(t)
+	conn := connect(t, env.OwnerURL)
+
+	for _, fk := range queryStrings(t, conn, `
+		SELECT cn.nspname || '.' || c.relname || ' -> ' || pn.nspname || '.' || p.relname
+		FROM pg_constraint k
+		JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace cn ON cn.oid = c.relnamespace
+		JOIN pg_class p ON p.oid = k.confrelid JOIN pg_namespace pn ON pn.oid = p.relnamespace
+		WHERE k.contype = 'f' AND cn.nspname <> pn.nspname
+		  AND pn.nspname || '.' || p.relname NOT IN ('identity.workspaces', 'identity.users')`) {
+		t.Errorf("foreign key %s crosses a domain schema; use a typed reference", fk)
+	}
 }
 
 func TestMigrateUp_IsIdempotent(t *testing.T) {
