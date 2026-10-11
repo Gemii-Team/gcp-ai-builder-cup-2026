@@ -1,0 +1,200 @@
+package oidc
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"kiwi/internal/testkit/fakeoidc"
+)
+
+// valid is what a Workspace user's token carries.
+var valid = fakeoidc.Claims{
+	Sub:           "110169484474386276334",
+	Email:         "alice@acme.test",
+	Name:          "Alice Adams",
+	Picture:       "https://photos.example/alice.png",
+	HD:            "acme.test",
+	EmailVerified: true,
+}
+
+func verifier(t *testing.T, f *fakeoidc.Server) *Verifier {
+	t.Helper()
+	v, err := NewVerifier(t.Context(), f.Issuer(), "", f.ClientID())
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return v
+}
+
+func TestVerify_Valid(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{}))
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := Claims{
+		Sub:           valid.Sub,
+		Email:         valid.Email,
+		Name:          valid.Name,
+		Picture:       valid.Picture,
+		HD:            valid.HD,
+		EmailVerified: true,
+	}
+	if got != want {
+		t.Fatalf("claims = %+v, want %+v", got, want)
+	}
+}
+
+func TestVerify_RejectsWrongAudience(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	got, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Audience: "some-other-client"}))
+	if err == nil {
+		t.Fatal("a token for another client was accepted")
+	}
+	if got != (Claims{}) {
+		t.Fatalf("claims = %+v with an error, want zero", got)
+	}
+}
+
+func TestVerify_RejectsWrongIssuer(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Issuer: "https://accounts.evil.example"})); err == nil {
+		t.Fatal("a token from another issuer was accepted")
+	}
+}
+
+func TestVerify_RejectsExpired(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{ExpiresIn: -time.Minute})); err == nil {
+		t.Fatal("an expired token was accepted")
+	}
+}
+
+func TestVerify_RejectsBadSignature(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{WrongKey: true})); err == nil {
+		t.Fatal("a token signed with an unpublished key was accepted")
+	}
+}
+
+func TestVerify_RejectsUnverifiedEmail(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	c := valid
+	c.EmailVerified = false
+	got, err := v.Verify(t.Context(), f.Mint(c, fakeoidc.MintOptions{}))
+	if err == nil {
+		t.Fatal("a token with email_verified=false was accepted")
+	}
+	if errors.Is(err, ErrNoHostedDomain) || got != (Claims{}) {
+		t.Fatalf("got %+v, %v; want zero claims and a plain error", got, err)
+	}
+}
+
+func TestVerify_MissingHD_ReturnsErrNoHostedDomainWithVerifiedClaims(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	c := valid
+	c.HD = ""
+	got, err := v.Verify(t.Context(), f.Mint(c, fakeoidc.MintOptions{}))
+	if !errors.Is(err, ErrNoHostedDomain) {
+		t.Fatalf("err = %v, want ErrNoHostedDomain", err)
+	}
+	if got.Email != valid.Email || got.Sub != valid.Sub || got.HD != "" {
+		t.Fatalf("claims = %+v, want the verified identity without hd", got)
+	}
+}
+
+func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
+	f := fakeoidc.New(t)
+	v := verifier(t, f)
+
+	noHDUnverified := valid
+	noHDUnverified.HD, noHDUnverified.EmailVerified = "", false
+	noSub := valid
+	noSub.Sub = ""
+	noEmail := valid
+	noEmail.Email = ""
+
+	tests := map[string]string{
+		"wrong audience":                      f.Mint(valid, fakeoidc.MintOptions{Audience: "other"}),
+		"wrong issuer":                        f.Mint(valid, fakeoidc.MintOptions{Issuer: "https://evil.example"}),
+		"expired":                             f.Mint(valid, fakeoidc.MintOptions{ExpiresIn: -time.Hour}),
+		"bad signature":                       f.Mint(valid, fakeoidc.MintOptions{WrongKey: true}),
+		"bad signature and no hd":             f.Mint(fakeoidc.Claims{Sub: "1", Email: "x@y.test", EmailVerified: true}, fakeoidc.MintOptions{WrongKey: true}),
+		"expired and no hd":                   f.Mint(fakeoidc.Claims{Sub: "1", Email: "x@y.test", EmailVerified: true}, fakeoidc.MintOptions{ExpiresIn: -time.Hour}),
+		"unverified email and no hd":          f.Mint(noHDUnverified, fakeoidc.MintOptions{}),
+		"no subject":                          f.Mint(noSub, fakeoidc.MintOptions{}),
+		"no email":                            f.Mint(noEmail, fakeoidc.MintOptions{}),
+		"not a token":                         "definitely-not-a-jwt",
+		"empty":                               "",
+		"header and payload but no signature": "e30.e30.",
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := v.Verify(t.Context(), raw)
+			if err == nil {
+				t.Fatal("the token was accepted")
+			}
+			if errors.Is(err, ErrNoHostedDomain) {
+				t.Fatalf("err = %v: only a fully verified token may be named by ErrNoHostedDomain", err)
+			}
+			if got != (Claims{}) {
+				t.Fatalf("claims = %+v with an error, want zero", got)
+			}
+		})
+	}
+}
+
+func TestVerify_InternalURLDiscoveryKeepsIssuerCheck(t *testing.T) {
+	// The provider is reached at f.URL but claims another issuer, the way Google's
+	// issuer is not the address of an in-cluster mock.
+	const issuer = "https://accounts.example.test"
+	f := fakeoidc.New(t, fakeoidc.WithIssuer(issuer))
+
+	v, err := NewVerifier(t.Context(), issuer, f.URL, f.ClientID())
+	if err != nil {
+		t.Fatalf("NewVerifier through the internal URL: %v", err)
+	}
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{})); err != nil {
+		t.Fatalf("token from the configured issuer: %v", err)
+	}
+	// The internal URL is where keys come from, never what iss must equal.
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Issuer: f.URL})); err == nil {
+		t.Fatal("a token whose iss is the internal discovery URL was accepted")
+	}
+	if _, err := v.Verify(t.Context(), f.Mint(valid, fakeoidc.MintOptions{Issuer: "https://accounts.evil.example"})); err == nil {
+		t.Fatal("a token from another issuer was accepted")
+	}
+
+	// Without the internal URL the same configuration cannot even discover:
+	// the issuer is not an address anything answers at.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := NewVerifier(ctx, "http://127.0.0.1:1", "", f.ClientID()); err == nil {
+		t.Fatal("NewVerifier succeeded against an address nothing listens on")
+	}
+}
+
+func TestNewVerifier_RejectsIssuerMismatchWithoutInternalURL(t *testing.T) {
+	f := fakeoidc.New(t, fakeoidc.WithIssuer("https://accounts.example.test"))
+
+	// Discovering directly at f.URL, the document's issuer is not the one asked for.
+	if _, err := NewVerifier(t.Context(), f.URL, "", f.ClientID()); err == nil {
+		t.Fatal("discovery whose document names another issuer was accepted")
+	}
+}
