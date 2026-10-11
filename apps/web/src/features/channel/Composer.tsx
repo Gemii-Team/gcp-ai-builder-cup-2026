@@ -1,4 +1,4 @@
-import { Button, Icon } from '@kiwi/ui';
+import { Button, Icon, isImeKey } from '@kiwi/ui';
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { MentionView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
@@ -89,7 +89,7 @@ export function Composer({ channelName, people, canSend, onSend, attach, notice 
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     // A key that belongs to the IME: `isComposing` while it composes, keyCode 229 on the Enter that Safari delivers just after.
-    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+    if (isImeKey(event)) {
       return;
     }
     if (open) {

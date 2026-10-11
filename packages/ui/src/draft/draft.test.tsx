@@ -222,6 +222,32 @@ describe('OwnerSelect', () => {
   });
 });
 
+describe('DraftSlip editing with an input method', () => {
+  // The Escape that dismisses a Thai IME candidate and the Enter that commits one belong to the IME, not to the edit.
+  it('DraftSlip_ImeEscapeAndEnterNeitherCancelNorSaveTheEdit', async () => {
+    const user = userEvent.setup();
+    const { edit } = renderPanel({ drafts: [quotation] });
+    const slip = draftItem(quotation.title);
+    await user.click(slip.getByRole('button', { name: `Edit: ${quotation.title}` }));
+    const field = slip.getByRole('textbox', { name: 'Task title' });
+    await user.clear(field);
+    await user.type(field, 'ส่งใบเสนอราคา');
+
+    fireEvent.keyDown(field, { key: 'Escape', isComposing: true, keyCode: 229 });
+    fireEvent.keyDown(field, { key: 'Escape', isComposing: false, keyCode: 229 });
+    fireEvent.keyDown(field, { key: 'Enter', isComposing: true, keyCode: 229 });
+    fireEvent.keyDown(field, { key: 'Enter', isComposing: false, keyCode: 229 });
+
+    expect(slip.getByRole('textbox', { name: 'Task title' })).toHaveValue('ส่งใบเสนอราคา');
+    expect(edit).not.toHaveBeenCalled();
+
+    // Outside composition the same keys work as they always did.
+    await user.keyboard('{Escape}');
+    expect(slip.queryByRole('textbox')).toBeNull();
+    expect(edit).not.toHaveBeenCalled();
+  });
+});
+
 describe('DraftSlip editing', () => {
   it('DraftSlip_EnterSavesEscapeCancelsEmptyTitleInvalid', async () => {
     const user = userEvent.setup();

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Button, ButtonLink } from '../Button';
 import { formatOffset } from '../format';
+import { isImeKey } from '../ime';
 import { Icon } from '../icons';
 import { useLabels } from '../labels';
 import { LangRuns } from '../LangRuns';
@@ -140,7 +141,11 @@ export function DraftSlip(props: DraftSlipProps) {
   }
 
   function onFieldKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+    if (isImeKey(event)) {
+      // The Enter that commits an IME candidate and the Escape that dismisses one belong to the IME.
+      return;
+    }
+    if (event.key === 'Enter') {
       event.preventDefault();
       void finishEdit(true);
     } else if (event.key === 'Escape') {

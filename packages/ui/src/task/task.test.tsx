@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -104,6 +104,27 @@ describe('TaskForm', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledTimes(2);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  // The Escape that dismisses a Thai IME candidate and the Enter that commits one belong to the IME, not to the form.
+  it('TaskForm_ImeEscapeAndEnterDoNotCancelOrSubmit_ButAPlainEscapeStillCancels', async () => {
+    const user = userEvent.setup();
+    const { onCancel, onSubmit } = await renderForm();
+    const title = screen.getByRole('textbox', { name: 'Title' });
+
+    fireEvent.keyDown(title, { key: 'Escape', isComposing: true, keyCode: 229 });
+    fireEvent.keyDown(title, { key: 'Escape', isComposing: false, keyCode: 229 });
+    const enter = fireEvent.keyDown(title, { key: 'Enter', isComposing: true, keyCode: 229 });
+    const safariEnter = fireEvent.keyDown(title, { key: 'Enter', isComposing: false, keyCode: 229 });
+
+    expect(onCancel).not.toHaveBeenCalled();
+    // The press is cancelled before it can become an implicit submit of the form.
+    expect(enter).toBe(false);
+    expect(safariEnter).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('TaskForm_OwnerDefaultsToNoOwnerWithoutTheAmberWarningLook', async () => {

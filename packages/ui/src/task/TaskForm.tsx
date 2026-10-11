@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Button } from '../Button';
 import { NativeSelect, OwnerSelect, thaiLang, type Member } from '../draft/OwnerSelect';
+import { isImeKey } from '../ime';
 import { useLabels } from '../labels';
 import { LangRuns } from '../LangRuns';
 import { DateField } from './DateField';
@@ -92,6 +93,14 @@ export function TaskForm({ heading, subtitle, initialTitle, channels, channelId:
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (isImeKey(event)) {
+      // The Enter that commits a candidate must not become an implicit submit, and the Escape that dismisses one belongs
+      // to the IME: cancelling the press here loses the title the person was composing.
+      if (event.key === 'Enter') {
+        event.preventDefault();
+      }
+      return;
+    }
     if (event.key === 'Escape') {
       // The form may sit in a sheet or a list that closes on Escape: this one only closes the form.
       event.preventDefault();
