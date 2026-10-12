@@ -152,6 +152,12 @@ func parseID(raw, what string) (uuid.UUID, error) {
 	return id, nil
 }
 
+// validTitle reports whether a trimmed meeting title is 1-maxTitleRunes characters of
+// valid text.
+func validTitle(title string) bool {
+	return title != "" && utf8.RuneCountInString(title) <= maxTitleRunes && utf8.ValidString(title) && !strings.ContainsRune(title, 0)
+}
+
 // load reads a meeting; a meeting of another workspace is as good as missing.
 func load(ctx context.Context, d *db.DB, ws, id uuid.UUID) (row store.MeetingsMeeting, err error) {
 	err = d.InWorkspace(ctx, ws, func(ctx context.Context, tx pgx.Tx) (err error) {
@@ -251,7 +257,7 @@ func (s *service) CreateFromRecording(ctx context.Context, a authz.Actor, channe
 		return nil, err
 	}
 	title = strings.TrimSpace(title)
-	if title == "" || utf8.RuneCountInString(title) > maxTitleRunes || !utf8.ValidString(title) || strings.ContainsRune(title, 0) {
+	if !validTitle(title) {
 		return nil, fmt.Errorf("meetings: a meeting title must be 1-%d characters: %w", maxTitleRunes, errs.ErrInvalid)
 	}
 	if fileID == uuid.Nil {

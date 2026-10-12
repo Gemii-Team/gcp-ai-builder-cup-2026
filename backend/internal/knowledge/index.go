@@ -77,6 +77,12 @@ type source struct {
 // one source do not overlap within one Service (keyedLock), not within one process: Jobs
 // builds the Service whose job is the only caller, and a second caller would need to
 // share that lock, for instance through Deps.
+//
+// The other caller is the operator command `kiwi seed` (package seed), which acts as the
+// same kind of system actor in a process that no request reaches, so it opens nothing to
+// a person. Like `kiwi reindex` it builds a Service of its own and does not share the
+// job's lock; the writes are upserts of deterministic chunk ids, so runs of one source
+// that overlap end with the chunks one run alone would leave.
 func (s *service) Index(ctx context.Context, a authz.Actor, req IndexRequest) error {
 	if err := s.complete(); err != nil {
 		return err

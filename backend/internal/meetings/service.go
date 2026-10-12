@@ -10,6 +10,10 @@
 // failed with a reason (see settleOnFinalDelivery). The one residual is a database that
 // stays unreachable for the whole of the bus's retry window: the meeting then stays
 // ingesting, and only a future pass that recovers stale meetings would re-drive it.
+//
+// A third way in is not a Service method, because only an operator command uses it:
+// ImportMeeting records a finished meeting whose transcript and summary the caller
+// already has (the demo workspace of `kiwi seed`), through the write the ingest ends in.
 package meetings
 
 import (
