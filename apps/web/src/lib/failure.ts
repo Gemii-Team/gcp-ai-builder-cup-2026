@@ -1,4 +1,5 @@
 import type { I18nKey } from '@kiwi/core';
+import { webReason } from './serverReasons';
 
 /**
  * The reasons the server gives for a file it will not take: the `<reason>` of `docs: upload rejected (<reason>): <detail>`
@@ -24,7 +25,7 @@ export function rejectionReasonOf(message: string): RejectionReason | null {
 
 /** What a failed file or meeting says, as the sentence fragment that follows `Couldn't summarize {name}:`. */
 export function failureReasonKey(code: string): I18nKey {
-  switch (code) {
+  switch (webReason(code)) {
     case 'too_large':
       return 'reasonTooLarge';
     case 'unsupported_type':
