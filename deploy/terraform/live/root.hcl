@@ -7,6 +7,22 @@
 #
 # Terragrunt never creates the state bucket here: the bucket is created by hand once (see the
 # README) and the backend is not bootstrapped, because --backend-bootstrap is never passed.
+#
+# Apply order (each unit: plan to a file, review, apply exactly that file, delete it):
+#   apis -> iam, network, public-url -> registry, storage, cloudsql, valkey, secrets -> cloudrun
+#   budget, if a billing account is set, depends only on apis and can go any time after it.
+# Dependencies are dependency blocks (outputs from the other unit's state) with mock outputs that
+# stand in only for init, validate and providers, never for plan or apply.
+#
+# Runtime seam. Only the cloudrun unit (module cloudrun-app) knows the runtime. apis, iam, network,
+# public-url, registry, storage, cloudsql, valkey, secrets and budget serve any runtime. To run on
+# GKE instead, add a module for it (cluster, node pools or Autopilot, a Gateway and Kubernetes
+# service accounts bound to kiwi-run and kiwi-jobs with roles/iam.workloadIdentityUser) and a unit
+# beside cloudrun that depends on the same units, then drop cloudrun from the stack. Three things
+# assume Cloud Run today and need that module's attention: the network's "run" subnet (a cluster
+# brings its own node and pod ranges), the public-url module's default host (a run.app one; GKE
+# needs custom_domain), and the identities' member strings (federated principals cannot sign
+# URLs, so Workload Identity must stay in linked mode).
 locals {
   # KIWI_IAC_ENV_FILE points the checks at env.check.hcl (fake values) so they need no real
   # project; a person applying never sets it.
