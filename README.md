@@ -100,6 +100,8 @@ task local:up
 
 This creates (or starts) the k3d cluster `kiwi`, loads `.env` into the cluster, and runs Tilt with the `mockauth` overlay. Tilt builds the images and deploys Postgres, the migration job, Valkey, Ollama (the first start downloads the embedding model), then `kiwi` and `web`. It stays in the foreground: use a second terminal for the next step, and wait until Tilt shows every resource ready.
 
+If, after a Docker or host restart, the k3d agent node stays `NotReady` with "failed to find interface with specified node ip", `docker restart k3d-kiwi-agent-0` fixes it (seen once, on rootless Docker: **real-condition**).
+
 ### 4. Seed the demo workspace
 
 ```bash
@@ -132,7 +134,7 @@ To set up the Google side (nothing secret goes into the repository):
 4. Enable the Google Meet REST API.
 5. Create an OAuth client of type **Web application** with the redirect URI `http://localhost:8080/api/auth/callback`.
 6. Put its client id and secret into the git-ignored `.env` as `KIWI_OAUTH_CLIENT_ID` and `KIWI_OAUTH_CLIENT_SECRET`.
-7. Start the stack with the real sign-in, then seed yourself:
+7. Stop Tilt (Ctrl-C in the terminal where `task local:up` is running), then start the stack with the real sign-in and seed yourself:
 
 ```bash
 OVERLAY=local task local:up
@@ -140,6 +142,8 @@ task seed -- --members you@gmail.com
 ```
 
 With `--members` alone, `task seed` creates the one workspace without a Google domain, called "Team". Two demo people, Nok and Pim, on the reserved `.invalid` top-level domain (no Google account can have such an address), own the channels and write the demo conversation; the addresses you list are plain members of the public channels and cannot read the private one. Separate several addresses with commas. Add `--domain <workspace domain>` (together with `--members`) only if your team has a Google Workspace domain.
+
+Switching overlays keeps the data that is already in the cluster: a `demo.example` workspace seeded on the mock stack coexists with "Team". Only `task local:down` deletes it.
 
 How this was checked: **real-condition**, by a human, once, through an External/Testing OAuth client: the consent screen, then the "has not been invited" page for a test user who was not yet seeded, then the sign-in of the invited test user. The `hd` (Workspace) branch is built and tested but cannot be exercised for real without a Workspace domain: **automated** and **simulated** checks only.
 
@@ -155,6 +159,7 @@ KIWI_LIVE_E2E=1 task smoke
 - `task test` runs the Go tests with the race detector, then the TypeScript tests. The Go tests start real Postgres and Valkey containers, so Docker must be running. On rootless Docker, if starting containers fails with `bind: address already in use`, run `cd backend && go test -race -p 1 ./...` instead.
 - `task lint` checks Go formatting, runs golangci-lint and the TypeScript linters.
 - `task smoke` runs the five flows in headless Chromium (a desktop viewport; flows 1 and 3 again at a 390x844 phone viewport) against the cluster, from a clean state, with a recorded LLM and the mock sign-in, so it needs no model session. **It deletes the application data in the cluster first**, seeds `demo.example`, and leaves the cluster on the `mockauth` overlay. Flags after `--` go to Playwright. It builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set; elsewhere, point that variable at a Playwright browsers directory.
+- The smoke suite never touches live Meet: flow 2 goes through the WAV recording upload, with a recorded transcript.
 - `KIWI_LIVE_E2E=1 task smoke` runs the `@live` tests against the real LiteLLM and Ollama (overlay `mockauth`) instead of the recorded LLM. It is opt-in and never part of the default run; it needs real values in `.env`.
 - `task reindex` rebuilds the knowledge embeddings after you change the embedding model.
 
@@ -171,10 +176,10 @@ Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race test
 | Google sign-in, invite-only | A human, once, through the External/Testing OAuth client: consent, the invite rejection, the sign-in of an invited test user | **real-condition** |
 | The Workspace (`hd`) sign-in branch | Go tests with a fake OIDC provider; flow 1 through the mock provider | **automated**, **simulated** only |
 | Start meeting (creating a Meet space) | A human, against the real Meet API, with a personal Google account | **real-condition** |
-| The Meet tab opened with `authuser=<your email>` | A human, in a real browser signed in to several Google accounts | **real-condition** |
-| Meet offering a transcript to a personal Gmail account | A human, in three real calls: Meet offered neither Transcripts nor "Take notes" | **real-condition**: unavailable for a personal Gmail account |
+| The Meet tab opened with `authuser=<your email>` | A human, in a real browser signed in to several Google accounts (Google documents nothing about the parameter) | **real-condition** |
+| Meet offering a transcript to a personal Gmail account | A human, against the real Meet API, in three calls: the poll saw each conference start and end, Meet offered neither Transcripts nor "Take notes", and no transcript was exposed | **real-condition**: unavailable for a personal Gmail account |
 | Meet transcript polling and ingestion | Go tests with a fake Google client | **simulated**: no real transcript has been ingested |
-| The five flows in a browser | The smoke suite (`task smoke`): recorded LLM, mock sign-in, headless Chromium (desktop; flows 1 and 3 also at 390x844) | **simulated** |
+| The five flows in a browser | The five-flow Playwright suite (recorded LLM, mock sign-in, headless Chromium; desktop, and flows 1 and 3 also at 390x844) | **simulated** |
 | Go and TypeScript logic | `task test`: real Postgres and Valkey in containers, jsdom for the web | **automated** |
 | The real LLM and embeddings | The opt-in `KIWI_LIVE_E2E=1 task smoke` only | **real-condition** when run; not part of the default checks |
 
@@ -187,16 +192,18 @@ Real-device behaviour of everything on the web side is **simulated** (headless C
 ### Google sign-in and Meet
 
 - **Google sign-in and Meet are real only where [What was checked, and how](#what-was-checked-and-how) says so.** Sign-in, Start meeting and the Meet tab were checked against real Google by a human (**real-condition**); transcript polling and ingestion are **simulated** only, because no real transcript has ever been obtained.
+- **Sign-in is invite-only.** Only an address that has a user row can sign in, and the rows are made by `kiwi seed --members <emails>`: there is no invite flow yet. A Google account without a row gets K.I.W.I.'s "has not been invited" page naming the address. A token with a Workspace hosted domain (`hd`) must match the domain of an existing workspace, and sign-in never creates a workspace. The invite rule was checked **real-condition** once; the `hd` branch is **automated** and **simulated** only.
 - **The app is External in Testing status.** Google expires its refresh tokens after 7 days, so Meet access needs re-consent about weekly: Start meeting sends you through Google's consent screen again (K.I.W.I. forces that screen so a lost grant can be given again). Only test users can sign in, and Google shows an "unverified app" warning.
 - **No push delivery.** A transcript is noticed up to 30 seconds (one poll interval) after Meet makes it available, on top of Meet's own delay. Meetings that were not started from K.I.W.I. are never seen.
 - **The host's token must stay valid.** If the host revokes access or the refresh token expires, the meeting fails with a reason and a Retry after re-consent.
 - **One transcript per meeting.** If transcription is stopped and restarted inside one meeting, only the first transcript is ingested.
-- **The live-Meet transcript path is unavailable for a personal Gmail account.** Start meeting works (**real-condition**), but in none of three real calls did Meet offer Transcripts or "Take notes" to the personal Gmail account that hosted the meeting (verified by a human): automatic transcription is a Google Workspace feature. K.I.W.I. creates the space without transcription and tells the host, in English and Thai, to turn it on in Meet if the account offers it. So flow 2, the meeting summary, runs on the recording upload (WAV only), which is the supported route; a meeting that gets no transcript ends as "no transcript" 30 minutes after it ends. The transcript path itself, polling and ingestion, is tested only against a fake Google client; a Google Workspace account that offers transcription has not been tried.
-- **The Meet tab opens with `authuser=<your email>`**, so a browser signed in to several Google accounts joins as the space owner. This works on a real multi-account browser (**real-condition**); the parameter is still undocumented by Google, so it may stop working.
+- **The live-Meet transcript path is unavailable for a personal Gmail account** (verified by a human against the real Meet API in three calls: **real-condition**). Start meeting works and the poll saw each conference start and end, but in none of the three calls did Meet offer Transcripts or "Take notes" to the personal Gmail account that hosted the meeting, and no transcript was exposed: automatic transcription is a Google Workspace feature. K.I.W.I. creates the space without transcription and tells the host, in English and Thai, to turn it on in Meet if the account offers it. Meeting summaries therefore come from the WAV recording upload, the supported route, and that is how flow 2 runs. The Meet transcript path (polling, ingestion, summary) stays wired and is tested only against a fake Google client: it has never ingested a real transcript, and a Google Workspace account that offers transcription has not been tried. By design, a meeting with no transcript ends as `no_transcript` 30 minutes after it ends; that outcome has not been observed against real Meet.
+- **The Meet tab opens with `authuser=<your email>`**, so a browser signed in to several Google accounts joins as the space owner. A human verified this on a real multi-account browser (**real-condition**), though Google documents nothing about the parameter, so it may stop working.
 
 ### Recordings, models and indexing
 
 - **Recordings must be PCM16 WAV.** Phone recordings (m4a, webm, mp4) are not accepted locally: convert them first.
+- **Upload limits.** A message attachment is a PDF, PNG, JPEG, plain-text, Markdown or CSV file of at most 25 MiB. A recording is a WAV file of at most 200 MiB: 16-bit PCM, mono or stereo, 8,000 to 96,000 Hz, with at least 250 ms of audio. A file of another type or over its limit is refused where it is attached; a recording that is not such a WAV fails with its reason.
 - **Local transcripts have no speaker names and no timing.** Slips from a recording show no speaker names and no transcript offset links (the interface shows nothing rather than a false `0:00:00`), and tasks drafted from them cite the meeting without a transcript moment.
 - **The speech-to-text model runs at about 5 times real time and is shared.** A bad upload can stall it for a minute, hence the strict WAV check.
 - **Thai/English code-switched audio is the target; Thai speech recognition quality has only been checked on synthetic speech.**
