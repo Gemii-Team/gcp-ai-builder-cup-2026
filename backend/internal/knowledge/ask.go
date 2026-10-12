@@ -45,6 +45,12 @@ var notFound = map[string]string{
 func (s *service) Ask(ctx context.Context, a authz.Actor, in AskInput) (*knowledgev1.Answer, error) {
 	question := strings.TrimSpace(in.Question)
 	lang := DetectLang(question)
+	// The language of the answer is the one of the person's words when the caller says so (an agent searches with a question
+	// it wrote itself, often a translation); the search stays in the language of the text it searches with.
+	answerLang := lang
+	if _, known := languageDirective[in.AnswerLang]; known {
+		answerLang = in.AnswerLang
+	}
 	r, err := s.retrieve(ctx, a, Query{Text: question, Lang: lang, ChannelID: in.ChannelID})
 	if err != nil {
 		return nil, err
@@ -54,18 +60,18 @@ func (s *service) Ask(ctx context.Context, a authz.Actor, in AskInput) (*knowled
 		scope[i] = c.String()
 	}
 	if len(r.hits) == 0 {
-		return notFoundAnswer(lang, scope), nil
+		return notFoundAnswer(answerLang, scope), nil
 	}
 
-	out, err := s.generate(ctx, answerRequest(lang, question, r.hits))
+	out, err := s.generate(ctx, answerRequest(answerLang, question, r.hits))
 	if err != nil {
 		return nil, err
 	}
 	markdown, citations := validate(out, r)
 	if len(citations) == 0 {
-		return notFoundAnswer(lang, scope), nil
+		return notFoundAnswer(answerLang, scope), nil
 	}
-	return &knowledgev1.Answer{Language: lang, Markdown: markdown, Citations: citations, Found: true, ScopeChannelIds: scope}, nil
+	return &knowledgev1.Answer{Language: answerLang, Markdown: markdown, Citations: citations, Found: true, ScopeChannelIds: scope}, nil
 }
 
 func notFoundAnswer(lang string, scope []string) *knowledgev1.Answer {

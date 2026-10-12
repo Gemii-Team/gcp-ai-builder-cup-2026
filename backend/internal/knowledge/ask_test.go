@@ -1158,3 +1158,32 @@ func TestSearch_WorkspaceWideChunksAreForTheWorkspaceAndUnscopedSearchOnly(t *te
 		}
 	}
 }
+
+// An agent searches with a question it wrote itself, often an English rewrite of what the person said in Thai: the answer
+// must still come in the language of the person, while the search keeps to the text it searches with.
+func TestAsk_AnswerLangOverridesTheLanguageOfTheQuestion(t *testing.T) {
+	f := newFixture(t)
+	f.topics(topic{"pallets", 0})
+	chunk := f.docChunk(f.doc(f.public, "ops.pdf", "The warehouse holds 4,000 pallets."), 1)
+	alice := userActor(f.ws, f.alice)
+
+	for _, c := range []struct{ answerLang, directive, other, lang string }{
+		{"th", "Write the answer in Thai", "in English", "th"},
+		{"en", "Write the answer in English.", "in Thai", "en"},
+		{"", "Write the answer in English.", "in Thai", "en"},
+		{"fr", "Write the answer in English.", "in Thai", "en"},
+	} {
+		f.reply(answerResult("4,000 [1]", cite{ChunkID: chunk.String(), Quote: "4,000 pallets"}))
+		ans, err := f.svc.Ask(t.Context(), alice, AskInput{Question: "How many pallets?", AnswerLang: c.answerLang})
+		if err != nil {
+			t.Fatalf("Ask(AnswerLang %q): %v", c.answerLang, err)
+		}
+		call := f.llm.GenerateCalls()[len(f.llm.GenerateCalls())-1]
+		if !strings.Contains(call.System, c.directive) || strings.Contains(call.System, c.other) {
+			t.Errorf("AnswerLang %q: the system prompt lacks %q or carries the other language's directive:\n%s", c.answerLang, c.directive, call.System)
+		}
+		if ans.GetLanguage() != c.lang || !ans.GetFound() {
+			t.Errorf("AnswerLang %q: language %q found %v, want %q found", c.answerLang, ans.GetLanguage(), ans.GetFound(), c.lang)
+		}
+	}
+}

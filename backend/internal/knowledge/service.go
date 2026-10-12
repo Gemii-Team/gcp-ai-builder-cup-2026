@@ -27,6 +27,10 @@ type IndexRequest struct {
 type AskInput struct {
 	Question  string
 	ChannelID *uuid.UUID
+	// AnswerLang is the language the answer is written in, "th" or "en". Empty (or anything else) is the language
+	// of Question. A caller that asks on behalf of a person, with a question it wrote itself, passes the language of the
+	// person's own words: the answer follows the person, the search follows the text it searches with.
+	AnswerLang string
 }
 
 // Query is a search. Lang is "th" or "en"; Limit caps the hits; a non-nil ChannelID

@@ -1729,3 +1729,32 @@ func TestSummarizeChannelTool_ClipsTheNameOfAnAuthor(t *testing.T) {
 		t.Errorf("collector summary = %+v, want one source labelled with the cut name", sum)
 	}
 }
+
+// The model writes the question it searches with and often translates it into English: the answer is still in the language
+// of the person who asked, which is what the run's question says.
+func TestSearchKnowledgeTool_AnswersInTheLanguageOfThePerson(t *testing.T) {
+	for _, c := range []struct{ name, person, directive, lang string }{
+		{"a Thai question the model translated", "คลังสินค้าบางนาเก็บพาเลทได้กี่ที่", "Write the answer in Thai", "th"},
+		{"an English question", "How many pallets does the warehouse hold?", "Write the answer in English.", "en"},
+		{"a run with no words of the person's", "", "Write the answer in English.", "en"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.llm.HandleGenerate(citeEveryChunk)
+			f.indexedMeeting(f.public, f.bob, "Warehouse review", "The Bang Na warehouse holds 4,000 pallets.")
+			col := &Collector{}
+			tools := NewTools(ToolDeps{Knowledge: f.kb, Tasks: f.tasks, Chat: f.chat, LLM: f.llm, Collector: col, Question: c.person})
+
+			if _, err := f.call(f.as(f.agentFor(f.alice)), tools, "search_knowledge", map[string]any{"question": "How many pallets does the Bang Na warehouse hold?"}); err != nil {
+				t.Fatalf("search_knowledge: %v", err)
+			}
+			calls := f.llm.GenerateCalls()
+			if len(calls) != 1 || !strings.Contains(calls[0].System, c.directive) {
+				t.Errorf("the answer call asked for another language than %q:\n%v", c.directive, calls)
+			}
+			if ans := col.Answer(); ans == nil || ans.GetLanguage() != c.lang {
+				t.Errorf("answer language = %v, want %q", ans.GetLanguage(), c.lang)
+			}
+		})
+	}
+}

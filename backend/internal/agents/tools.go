@@ -106,6 +106,9 @@ type ToolDeps struct {
 	// Prior is what earlier attempts of the same run already did. The zero value is a
 	// run that has done nothing.
 	Prior Prior
+	// Question is what the person wrote (the message that started the run, or the Ask panel's question): the language the
+	// replies are written in. Empty for a caller that has none; the tools then follow the question the model gives them.
+	Question string
 }
 
 // Prior is what the earlier attempts of one run used: a run that is tried again carries
@@ -506,7 +509,8 @@ func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (s
 	if err := tooLong("question", question, maxQuestionArgRunes); err != nil {
 		return searchKnowledgeResult{}, err
 	}
-	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question})
+	// The model writes the question it searches with and often translates it: the answer is in the language of the person.
+	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question, AnswerLang: personLang(tb.Question, question)})
 	if err != nil {
 		return searchKnowledgeResult{}, err
 	}
@@ -886,4 +890,13 @@ func attribute(name string) string {
 		}
 		return r
 	}, clip(name, maxAuthorRunes-1))
+}
+
+// personLang is the language a reply is written in: the language of what the person wrote, or of the model's own question
+// when the run has no words of the person's to go by.
+func personLang(person, modelQuestion string) string {
+	if strings.TrimSpace(person) == "" {
+		return knowledge.DetectLang(modelQuestion)
+	}
+	return knowledge.DetectLang(person)
 }
