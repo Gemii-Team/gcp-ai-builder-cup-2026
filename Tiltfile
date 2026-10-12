@@ -10,8 +10,12 @@
 # deployed; running it again with another overlay switches the cluster over.
 #
 # Start order, on the first start only: postgres -> migrate -> kiwi,
-# ollama -> ollama-pull -> kiwi, valkey -> kiwi and, under mockauth and smoke,
-# mockoidc -> kiwi and, under smoke, llmreplay -> kiwi. resource_deps make a
+# ollama -> ollama-pull -> kiwi, valkey -> kiwi, kiwi-config -> kiwi and, under mockauth
+# and smoke, kiwi-config -> mockoidc -> kiwi and, under smoke, llmreplay -> kiwi.
+# kiwi-config is the ConfigMap of that name on a resource of its own: mockoidc and kiwi both
+# read it, and Tilt applies an object only after the resource that owns it has its
+# dependencies (it used to belong to kiwi, which waits for mockoidc, whose pod then never
+# started on a cluster that had not run the local overlay first). resource_deps make a
 # resource wait until its dependencies are ready (a Job is ready once it has
 # completed); they do not order later updates: after a code change kiwi and
 # migrate are rebuilt and redeployed in parallel.
@@ -86,6 +90,7 @@ if overlay in ['mockauth', 'smoke']:
     k8s_resource(
         'mockoidc',
         objects=['mockoidc:ingress'],
+        resource_deps=['kiwi-config'],
         links=[link('http://localhost:8080/mockoidc/.well-known/openid-configuration', 'mock sign-in')],
         labels=['deps'],
     )
@@ -130,6 +135,15 @@ k8s_resource(
     labels=['deps'],
 )
 
+# The ConfigMap kiwi-config has a resource of its own and no dependencies: mockoidc and kiwi
+# both read it, kiwi waits for mockoidc, and Tilt applies an object only after the resource
+# that owns it is allowed to start.
+k8s_resource(
+    new_name='kiwi-config',
+    objects=['kiwi-config:configmap'],
+    labels=['deps'],
+)
+
 k8s_resource(
     'ollama-pull',
     resource_deps=['ollama'],
@@ -144,8 +158,8 @@ k8s_resource(
 
 k8s_resource(
     'kiwi',
-    objects=['kiwi-config:configmap', 'kiwi-data:persistentvolumeclaim', 'kiwi:ingress'],
-    resource_deps=['migrate', 'ollama-pull', 'valkey'] + auth_deps + llm_deps,
+    objects=['kiwi-data:persistentvolumeclaim', 'kiwi:ingress'],
+    resource_deps=['kiwi-config', 'migrate', 'ollama-pull', 'valkey'] + auth_deps + llm_deps,
     links=[link('http://localhost:8080', 'K.I.W.I.')],
     labels=['app'],
 )

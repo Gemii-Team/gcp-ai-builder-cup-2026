@@ -705,6 +705,42 @@ tilt_kiwi_waits_for_llmreplay() { # [Tiltfile]
 }
 check "Tiltfile: kiwi waits for llmreplay under the smoke overlay only" tilt_kiwi_waits_for_llmreplay
 
+# Tilt applies a resource's YAML only after the resources it waits for are ready, and the ConfigMap
+# kiwi-config is applied with the resource that lists it in objects=. mockoidc (KIWI_ENV from it)
+# and kiwi (envFrom) both read it. When kiwi owned it, a cluster that had never run the local
+# overlay deadlocked on its first start under mockauth or smoke: kiwi waited for mockoidc, whose
+# pod sat in CreateContainerConfigError because the ConfigMap came with kiwi. So the owner is a
+# resource of its own with no resource_deps, and every reader waits for it. (The calls are read
+# the way the Tiltfile writes them, indented ones included: mockoidc's is inside an if.)
+tilt_config_before_readers() { # [Tiltfile]
+  awk '
+    /^[ \t]*#/ { next }
+    /^[ \t]*k8s_resource\($/ { incall = 1; name = ""; next }
+    incall && name == "" { n = $0; sub(/^[ \t]*new_name=/, "", n); gsub(/[ \047,"]/, "", n); name = n; next }
+    incall && /objects=\[.*\047kiwi-config:configmap\047/ { owner = name }
+    incall && /resource_deps=\[/ {
+      l = $0; sub(/.*resource_deps=\[/, "", l); sub(/\].*/, "", l); gsub(/[\047" ]/, "", l); gsub(/,/, " ", l)
+      deps[name] = l
+    }
+    /^[ \t]*\)$/ { incall = 0 }
+    END {
+      if (owner == "") { print "no resource applies the ConfigMap kiwi-config"; exit 1 }
+      if (deps[owner] != "") { printf "%s applies the ConfigMap kiwi-config but waits for %s\n", owner, deps[owner]; bad = 1 }
+      n = split("mockoidc kiwi", readers, " ")
+      for (i = 1; i <= n; i++) {
+        r = readers[i]
+        if (r == owner) continue
+        found = 0
+        m = split(deps[r], d, " ")
+        for (j = 1; j <= m; j++) if (d[j] == owner) found = 1
+        if (!found) { printf "%s reads the ConfigMap kiwi-config but does not wait for %s\n", r, owner; bad = 1 }
+      }
+      exit bad
+    }
+  ' "${1:-Tiltfile}"
+}
+check "Tiltfile: the ConfigMap kiwi-config is applied by a resource with no dependencies, and mockoidc and kiwi wait for it" tilt_config_before_readers
+
 # The guards themselves: each mutated copy of the Tiltfile must be refused.
 tilt_mutant() { # name check-function sed-script
   local f="$WORK/Tiltfile.mutant"
@@ -734,6 +770,11 @@ tilt_mutant "llm_deps that no longer names llmreplay is refused" tilt_kiwi_waits
 tilt_mutant "llm_deps that applies to every overlay is refused" tilt_kiwi_waits_for_llmreplay "s/^(llm_deps = .*) if overlay == 'smoke' else \[\]/\1 if overlay != 'x' else []/"
 tilt_mutant "kiwi not waiting for ollama-pull is refused" tilt_orders "s/'migrate', 'ollama-pull', 'valkey'/'migrate', 'valkey'/"
 tilt_mutant "migrate not waiting for postgres is refused" tilt_orders "s/resource_deps=\['postgres'\]/resource_deps=[]/"
+tilt_mutant "mockoidc not waiting for kiwi-config is refused" tilt_config_before_readers "/^ +resource_deps=\['kiwi-config'\],\$/d"
+tilt_mutant "kiwi not waiting for kiwi-config is refused" tilt_config_before_readers "s/resource_deps=\['kiwi-config', /resource_deps=[/"
+tilt_mutant "kiwi-config applied by a resource that waits for another is refused" tilt_config_before_readers "s/^( +)objects=\['kiwi-config:configmap'\],\$/&\n\1resource_deps=['valkey'],/"
+tilt_mutant "kiwi-config handed back to the kiwi resource (the first-start deadlock) is refused" tilt_config_before_readers "s/objects=\['kiwi-data:persistentvolumeclaim'/objects=['kiwi-config:configmap', 'kiwi-data:persistentvolumeclaim'/"
+tilt_mutant "kiwi-config applied by no resource is refused" tilt_config_before_readers "/^ +objects=\['kiwi-config:configmap'\],\$/d"
 
 tasks_listed() {
   local listing
