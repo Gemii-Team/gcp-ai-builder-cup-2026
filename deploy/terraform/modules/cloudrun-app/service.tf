@@ -2,8 +2,9 @@
 #
 #   web   the ingress container (Caddy): serves the PWA, proxies /api and /ws to localhost.
 #         Listening on the one port Cloud Run routes traffic to.
-#   kiwi  the sidecar: the one binary, every role, the in-process bus. Listens on loopback only
-#         in effect (it is not the ingress port, so nothing outside the instance reaches it).
+#   kiwi  the sidecar: the one binary, every role, the in-process bus. It listens on its own port
+#         (KIWI_LISTEN_ADDR, all interfaces so the platform's probes reach it); Cloud Run routes
+#         outside traffic only to the ingress container's port, so only web can reach it.
 #
 # Exactly one instance (min = max = 1) because the bus is in-process and the Meet poll, the
 # outbox relay and delayed jobs run in the process itself: two instances would each run them
