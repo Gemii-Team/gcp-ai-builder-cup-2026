@@ -70,6 +70,10 @@ describe('the tables', () => {
     expect(en.draftsToConfirm.one).not.toBe(en.draftsToConfirm.other);
     expect(th.draftsToConfirm.one).toBe(th.draftsToConfirm.other);
   });
+
+  it('says in Thai that no answer with a source was received (ไม่ได้รับ: "did not receive"), not that none was obtained', () => {
+    expect(createI18n('th').plain('reasonNoAnswer')).toBe('ไม่ได้รับคำตอบที่มีแหล่งที่มา ลองอีกครั้ง');
+  });
 });
 
 describe('createI18n', () => {
