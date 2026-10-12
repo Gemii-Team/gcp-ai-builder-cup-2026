@@ -26,6 +26,7 @@ env:
   TASK_VERSION: v3.45.5
   BUF_VERSION: v1.59.0
   SQLC_VERSION: v1.30.0
+  CADDY_VERSION: v2.11.7
 
 jobs:
   go:
@@ -109,11 +110,13 @@ jobs:
           go-version-file: backend/go.mod
           cache: false
 
-      - name: Install kustomize, kubeconform and task
+      # caddy validates apps/web/Caddyfile in render.test.sh (a missing caddy fails there in CI).
+      - name: Install kustomize, kubeconform, task and caddy
         run: |
           go install "sigs.k8s.io/kustomize/kustomize/v5@${KUSTOMIZE_VERSION}"
           go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
           go install "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}"
+          go install "github.com/caddyserver/caddy/v2/cmd/caddy@${CADDY_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Rendered manifests, Tiltfile and scripts

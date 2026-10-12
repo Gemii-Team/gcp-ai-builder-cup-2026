@@ -277,8 +277,12 @@ web_image_sources() {
 }
 check "web image: Dockerfile and Caddyfile run as 65532 on 8080 without the file capability, with the safe headers and no CSP" web_image_sources
 
+# The Caddyfile is validated with the caddy binary. Where it is missing the check is skipped,
+# loudly; in GitHub Actions a missing caddy is a failure, because the scripts job installs it.
 if command -v caddy >/dev/null 2>&1; then
   check "web image: caddy validate accepts the Caddyfile" caddy validate --config apps/web/Caddyfile --adapter caddyfile
+elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+  bad "web image: caddy validate accepts the Caddyfile" "caddy is not installed in CI: the scripts job must install it"
 else
   printf 'SKIP web image: caddy is not installed, the Caddyfile is not validated\n'
 fi
@@ -1235,7 +1239,7 @@ check "every guard suite runs from task check:scripts and from CI; the drift che
 # minor that mise.toml pins, so that CI and a developer's mise run the same tools.
 ci_tools_match_mise() { # [mise.toml [ci.yml]]
   local mise=${1:-mise.toml} ci=${2:-.github/workflows/ci.yml} rc=0 pair tool var pin want
-  for pair in kustomize:KUSTOMIZE_VERSION kubeconform:KUBECONFORM_VERSION task:TASK_VERSION buf:BUF_VERSION sqlc:SQLC_VERSION; do
+  for pair in kustomize:KUSTOMIZE_VERSION kubeconform:KUBECONFORM_VERSION task:TASK_VERSION buf:BUF_VERSION sqlc:SQLC_VERSION caddy:CADDY_VERSION; do
     tool=${pair%%:*}
     var=${pair##*:}
     pin=$(awk -F'"' -v t="$tool" '$1 ~ "^" t " *= *$" { print $2; exit }' "$mise")
@@ -1247,6 +1251,10 @@ ci_tools_match_mise() { # [mise.toml [ci.yml]]
   return "$rc"
 }
 check "the tool versions CI installs are releases of the minors mise.toml pins" ci_tools_match_mise
+
+# render.test.sh validates the Caddyfile with caddy: the scripts job builds it too (go install, no action).
+ci_installs_caddy() { grep -qF "go install \"github.com/caddyserver/caddy/v2/cmd/caddy@\${CADDY_VERSION}\"" .github/workflows/ci.yml; }
+check "ci.yml: the scripts job installs caddy with go install at CADDY_VERSION, so the Caddyfile is validated" ci_installs_caddy
 
 # Prove the two guards: each fails when what it guards is taken out.
 mkdir -p "$WORK/wired"
