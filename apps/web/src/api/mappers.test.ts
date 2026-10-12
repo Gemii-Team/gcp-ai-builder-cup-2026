@@ -148,9 +148,31 @@ describe('Ask runs', () => {
     expect(mapRun(run({ status: RunStatus.DONE, ref: 'ANS-2211', answer: artifact({ kind: ArtifactKind.ANSWER, ref: '' }) })).answer?.ref).toBe('ANS-2211');
   });
 
-  it('has no answer for a failed run, whose failure reason is the server code, and none for an artifact Ask cannot show', () => {
+  it('reads a channel summary as the answer of an Ask run, with its REF and the messages it rests on: summarize_channel is a legitimate Ask result', () => {
+    const summary = artifact({
+      kind: ArtifactKind.CHANNEL_SUMMARY,
+      ref: 'ANS-2212',
+      title: 'Catch me up on q4-launch',
+      bodyMarkdown: 'The launch moves to Friday.',
+      scopeChannelIds: ['ch-q4'],
+      sources: [{ kind: SourceKind.MESSAGE, id: 'msg-1', anchor: '1', label: 'Pim', channelId: 'ch-q4' }],
+    });
+    const mapped = mapRun(run({ status: RunStatus.DONE, answer: summary }));
+
+    expect(mapped.answer).toMatchObject({ kind: 'channel_summary', ref: 'ANS-2212', bodyMarkdown: 'The launch moves to Friday.', sources: [{ kind: 'message', id: 'msg-1', seq: 1 }] });
+    const event = runFrame({ state: AgentRunState.DONE, answer: summary }).event;
+    expect(event.case === 'agentRunProgress' ? mapRunProgress(event.value).answer : null).toMatchObject({ kind: 'channel_summary', ref: 'ANS-2212' });
+  });
+
+  it('has no answer for a failed run, whose failure reason is the server code', () => {
     expect(mapRun(run({ status: RunStatus.FAILED, failureReason: 'model_unavailable' }))).toMatchObject({ status: 'failed', answer: null, failureReason: 'model_unavailable' });
-    expect(mapRun(run({ status: RunStatus.DONE, answer: artifact({ kind: ArtifactKind.MEETING_SUMMARY, ref: 'MTG-1014' }) })).answer).toBeNull();
+  });
+
+  it('has no answer for an artifact that is none of answer, not_found or channel_summary: a meeting or file summary, one of no kind, one of a kind this build does not know', () => {
+    for (const kind of [ArtifactKind.MEETING_SUMMARY, ArtifactKind.DOC_SUMMARY, ArtifactKind.UNSPECIFIED, 99 as ArtifactKind]) {
+      expect(mapRun(run({ status: RunStatus.DONE, answer: artifact({ kind, ref: 'MTG-1014', bodyMarkdown: 'plain text' }) })).answer, String(kind)).toBeNull();
+    }
+    expect(mapRun(run({ status: RunStatus.DONE })).answer).toBeNull();
   });
 
   it('reads a run that has not started as queued, and one with no channel as unscoped', () => {

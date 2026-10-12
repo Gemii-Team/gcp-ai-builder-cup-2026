@@ -4,6 +4,7 @@ import type { ArtifactView } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { failureReasonKey } from '../../lib/failure';
 import { initialOf } from '../../lib/text';
+import { ArtifactSlip } from '../channel/ArtifactSlip';
 import { AnswerBlock } from './AnswerBlock';
 import { NotFoundSlip } from './NotFoundSlip';
 import type { AskExchange } from './useAskRun';
@@ -31,10 +32,13 @@ type ExchangeProps = {
   say: (text: string) => void;
 };
 
-/** The label of the assistant's row: which language the answer is in (any Thai character makes it Thai), or that nothing was found. */
-function kindKey(answer: ArtifactView): 'askKindNotFound' | 'askKindThai' | 'askKindEnglish' {
+/** The label of the assistant's row: that it is a channel summary, which language the answer is in (any Thai character makes it Thai), or that nothing was found. */
+function kindKey(answer: ArtifactView): 'askKindNotFound' | 'kindChannelSummary' | 'askKindThai' | 'askKindEnglish' {
   if (answer.kind === 'not_found') {
     return 'askKindNotFound';
+  }
+  if (answer.kind === 'channel_summary') {
+    return 'kindChannelSummary';
   }
   return /[\u0E00-\u0E7F]/.test(answer.bodyMarkdown) ? 'askKindThai' : 'askKindEnglish';
 }
@@ -42,7 +46,8 @@ function kindKey(answer: ArtifactView): 'askKindNotFound' | 'askKindThai' | 'ask
 /**
  * One question of the thread, as an article: the asker's row, the question as a Title line, the assistant's row (the small
  * mark, `@assistant`, a Carbon Copy kind label and the time) and under it what came of the question: two calm pending steps,
- * an answer slip, a not-found slip (an answer, not a failure) or a failed slip with Retry.
+ * an answer slip, a not-found slip (an answer, not a failure), the channel summary slip of a catch-up (the one the channel
+ * shows) or a failed slip with Retry.
  */
 export function Exchange({ exchange, asker, channelNames, channelCount, pressed, selected, onPress, onSelect, onSources, onRetry, onEdit, say }: ExchangeProps) {
   const { t } = useI18n();
@@ -110,6 +115,7 @@ export function Exchange({ exchange, asker, channelNames, channelCount, pressed,
         {answer?.kind === 'answer' && (
           <AnswerBlock answer={answer} channelNames={channelNames} pressed={pressed} onPress={onPress} selected={selected} onSources={onSources} say={say} />
         )}
+        {answer?.kind === 'channel_summary' && <ArtifactSlip artifact={answer} />}
       </div>
     </article>
   );

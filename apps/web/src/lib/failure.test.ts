@@ -40,7 +40,7 @@ describe('rejectionReasonOf', () => {
 
 describe('failureReasonKey', () => {
   it('has its own sentence for each of the five rejection reasons and for each other reason a job gives', () => {
-    const codes = [...REJECTION_REASONS, 'unreadable', 'no_text_layer', 'unsupported_by_provider', 'no_speech', 'transcript_too_long', 'model_unavailable', 'not_reached', 'timed_out'];
+    const codes = [...REJECTION_REASONS, 'unreadable', 'no_text_layer', 'unsupported_by_provider', 'no_speech', 'transcript_too_long', 'model_unavailable', 'not_reached', 'timed_out', 'no_answer'];
     const keys = codes.map(failureReasonKey);
 
     expect(keys).not.toContain('reasonUnknown');

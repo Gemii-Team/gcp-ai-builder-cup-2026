@@ -58,11 +58,13 @@ export function AskScreen({ initialChannelId }: AskScreenProps) {
   const opener = useRef<HTMLElement | null>(null);
 
   const { exchanges, ask, retry } = useAskRun((id, outcome) => {
-    // Each answer, not-found answer and failure is said once, when it arrives. A new answer puts its sources on show.
+    // Each answer, not-found answer, channel summary and failure is said once, when it arrives. A new cited answer puts its sources on show.
     if (outcome.kind === 'failed') {
       say(plain('askFailed', { reason: plain(failureReasonKey(outcome.reason)) }));
     } else if (outcome.answer.kind === 'not_found') {
       say(plain('askNotFoundAnnounced'));
+    } else if (outcome.answer.kind === 'channel_summary') {
+      say(plain('askAnswerReady', { ref: outcome.answer.ref, count: outcome.answer.sources.length }));
     } else {
       say(plain('askAnswerReady', { ref: outcome.answer.ref, count: outcome.answer.citations.length }));
       setSelectedId(id);

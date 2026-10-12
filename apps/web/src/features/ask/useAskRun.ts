@@ -91,10 +91,10 @@ function followRun({ api, realtime, question, channelId, onPhase, onSettled }: F
     }
   }
 
-  /** What a run the server says is over comes to. A `done` run with no usable answer issued nothing to show. */
+  /** What a run the server says is over comes to. A `done` run with no usable answer (see `mapAnswer`) issued nothing to show, and says so. */
   function absorb(run: RunView) {
     if (run.status === 'done') {
-      finish(run.answer === null ? failed('') : { kind: 'answered', answer: run.answer });
+      finish(run.answer === null ? failed('no_answer') : { kind: 'answered', answer: run.answer });
     } else if (run.status === 'failed') {
       finish(failed(run.failureReason));
     }

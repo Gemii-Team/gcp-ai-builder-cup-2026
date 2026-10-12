@@ -102,6 +102,7 @@ export const en = {
   reasonModelUnavailable: 'the AI service was unavailable. Try again.',
   reasonNotReached: "K.I.W.I. couldn't be reached.",
   reasonTimedOut: 'it took too long.',
+  reasonNoAnswer: 'no answer with a source came back. Try again.',
   reasonUnknown: 'something went wrong.',
 
   // Channel: composer, mentions and uploads

@@ -285,6 +285,55 @@ describe('a question and its run', () => {
     expect(await screen.findByText('Not found in channels you can access. Next steps are listed below the answer.', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
+  it('shows a run that ended with a channel summary as the channel summary slip: its REF and the messages it rests on, never the failure', async () => {
+    const opened = openAsk();
+    await screen.findByText(/Searching/);
+    await askQuestion(opened);
+    emit(opened, {
+      state: AgentRunState.DONE,
+      answer: artifact({
+        kind: ArtifactKind.CHANNEL_SUMMARY,
+        ref: 'ANS-2212',
+        title: QUESTION,
+        bodyMarkdown: 'The launch moves to **Friday**.',
+        scopeChannelIds: ['ch-q4'],
+        generatedAt: timestampFromDate(at('14:57')),
+        sources: [
+          { kind: SourceKind.MESSAGE, id: 'msg-41', anchor: '41', label: 'Arthit K.', channelId: 'ch-q4', at: timestampFromDate(at('14:02')) },
+          { kind: SourceKind.MESSAGE, id: 'msg-42', anchor: '42', label: 'Pimchanok S.', channelId: 'ch-q4', at: timestampFromDate(at('14:09')) },
+        ],
+      }),
+    });
+
+    const article = screen.getByRole('article');
+    expect(article.querySelector('[data-tone="failed"]')).toBeNull();
+    expect(article).not.toHaveTextContent('something went wrong');
+    expect(within(article).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(within(article).getByText('REF ANS-2212')).toBeInTheDocument();
+    expect(within(article).getByText('Friday').tagName).toBe('STRONG');
+    expect(within(article).getByText('channel summary')).toBeInTheDocument();
+    expect(within(article).getAllByRole('listitem').map((item) => item.textContent)).toEqual([expect.stringContaining('Arthit K.'), expect.stringContaining('Pimchanok S.')]);
+    expect(article).toHaveTextContent('Generated 14:57');
+    expect(await screen.findByText('Answer ready, ANS-2212: 2 sources.', { selector: '[role="status"]' })).toBeInTheDocument();
+  });
+
+  it('says in words why a finished run with nothing to show has no answer, not that something went wrong', async () => {
+    const opened = openAsk();
+    await screen.findByText(/Searching/);
+    opened.api.agents.getRun.mockResolvedValue(
+      create(GetRunResponseSchema, { run: run({ status: RunStatus.DONE, answer: artifact({ kind: ArtifactKind.UNSPECIFIED, bodyMarkdown: 'plain text of an older run' }) }) }),
+    );
+    await askQuestion(opened);
+
+    emit(opened, { state: AgentRunState.DONE });
+
+    const article = screen.getByRole('article');
+    expect(await within(article).findByText("Couldn't answer this question: no answer with a source came back. Try again.")).toBeInTheDocument();
+    expect(article).not.toHaveTextContent('something went wrong');
+    expect(article).not.toHaveTextContent('plain text of an older run');
+    expect(within(article).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('names a searched channel the person has since left only by what it is, and never by its name', async () => {
     const opened = openAsk();
     await screen.findByText(/Searching/);

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -398,7 +399,7 @@ func TestAsk_ForcedSearch_SharesTheRunsToolBudget(t *testing.T) {
 	})
 }
 
-func TestAsk_RedeliveredRun_DoesNotSearchTwice(t *testing.T) {
+func TestAsk_CompletedRun_IsNotRunAgainOnRedelivery(t *testing.T) {
 	a := newAgentFixture(t)
 	a.seedWarehouse()
 	svc := New(a.deps)
@@ -430,6 +431,61 @@ func TestAsk_RedeliveredRun_DoesNotSearchTwice(t *testing.T) {
 	if slip := a.answerOf(svc, id); slip.GetRef() != "ANS-1001" || a.ansCounters() != 1 {
 		t.Errorf("slip = %v, want ANS-1001 once", slip)
 	}
+}
+
+// refuseResults makes the commit of a run's result fail while it is installed, as a database that goes away at that moment
+// does: the search before it has been recorded and the REF it took is rolled back.
+func (a *agentFixture) refuseResults() (restore func()) {
+	a.t.Helper()
+	a.exec(`CREATE FUNCTION agents.refuse_result() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'the commit of the result failed'; END $$`)
+	a.exec(`CREATE TRIGGER refuse_result BEFORE UPDATE ON agents.runs FOR EACH ROW WHEN (NEW.status = 'done') EXECUTE FUNCTION agents.refuse_result()`)
+	return func() {
+		a.t.Helper()
+		a.exec(`DROP TRIGGER refuse_result ON agents.runs`)
+		a.exec(`DROP FUNCTION agents.refuse_result()`)
+	}
+}
+
+func TestAsk_RedeliveredAfterTheResultFailedToCommit_SearchesAgainWithinTheBudgetAndAnswersOnce(t *testing.T) {
+	a := newAgentFixture(t)
+	captureLogs(t)
+	a.seedWarehouse()
+	svc := New(a.deps)
+	a.model.script(say(fromMemory), say(fromMemory))
+	run, ev := a.startAsk(svc, palletsQuestion)
+	id := uuid.MustParse(run.GetId())
+
+	// Attempt 1 searches and records it, and then its result cannot be committed: nothing is stored, no REF is taken.
+	restore := a.refuseResults()
+	if err := a.job()(t.Context(), a.delivery(ev, "evt-1", 1)); err == nil {
+		t.Fatal("attempt 1 could not commit its result but was acked: nothing would deliver it again")
+	}
+	if row := a.run(id); row.Status != "running" || row.Ref != nil || len(row.Result) != 0 || a.ansCounters() != 0 {
+		t.Fatalf("run after attempt 1 = %+v (ANS counters %d), want running with no REF and no answer", row, a.ansCounters())
+	}
+	if calls := a.recordedCalls(id); len(calls) != 1 || !calls[0].Forced {
+		t.Fatalf("tool_calls after attempt 1 = %+v, want its forced search recorded: that is the budget a retry starts from", calls)
+	}
+	restore()
+
+	// A retry searches again by design (nothing but the budget is carried over), and the run still has one slip and one REF.
+	if err := a.job()(t.Context(), a.delivery(ev, "evt-1", 2)); err != nil {
+		t.Fatalf("attempt 2: %v", err)
+	}
+	if calls := a.recordedCalls(id); len(calls) != 2 || !calls[0].Forced || !calls[1].Forced || calls[1].Error != "" {
+		t.Errorf("tool_calls = %+v, want the forced search of each attempt: two calls of the run's budget", calls)
+	}
+	slip := a.answerOf(svc, id)
+	if slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_ANSWER || slip.GetRef() != "ANS-1001" || len(slip.GetCitations()) == 0 {
+		t.Errorf("slip = %v, want the ANSWER ANS-1001 of the retry", slip)
+	}
+	if n := a.ansCounters(); n != 1 {
+		t.Errorf("ANS counters = %d, want 1", n)
+	}
+	if row := a.run(id); row.Status != "done" || row.Ref == nil || *row.Ref != "ANS-1001" {
+		t.Errorf("run = %+v, want done with ANS-1001", row)
+	}
+	unseen(t, fromMemory, map[string]string{"the stored result": string(a.run(id).Result)})
 }
 
 func TestAsk_ForcedSearchFails_IsRetriedAndNeverAnsweredFromMemory(t *testing.T) {
@@ -468,6 +524,153 @@ func TestAsk_ForcedSearchFails_IsRetriedAndNeverAnsweredFromMemory(t *testing.T)
 		t.Errorf("tool_calls = %+v, want the failed search and then the one that answered", calls)
 	}
 	unseen(t, fromMemory, map[string]string{"the stored result": string(a.run(id).Result)})
+}
+
+func TestAsk_ForcedSearchAtTheFinalAttempt_FailsTheRunWithTheUsualReasonAndNoAnswer(t *testing.T) {
+	a := newAgentFixture(t)
+	captureLogs(t)
+	a.seedWarehouse()
+	svc := New(a.deps)
+	w := a.watch("u:" + a.alice.String())
+	run, ev := a.startAsk(svc, palletsQuestion)
+	id := uuid.MustParse(run.GetId())
+	a.llm.QueueGenerate(fakellm.GenerateReply{Err: errors.New("provider is down")})
+	a.model.script(say(fromMemory))
+
+	// The last delivery the bus makes: the failure is recorded and the message acked, as for any run that cannot be answered.
+	if err := a.job()(t.Context(), a.delivery(ev, "evt-1", defaultFinalAttempt)); err != nil {
+		t.Fatalf("final attempt: %v, want the failure recorded and the message acked", err)
+	}
+
+	row := a.run(id)
+	if row.Status != "failed" || row.FailureReason == nil || *row.FailureReason != "model_unavailable" || row.Ref != nil || len(row.Result) != 0 {
+		t.Errorf("run = %+v, want failed with model_unavailable, no REF and no answer", row)
+	}
+	if a.ansCounters() != 0 {
+		t.Errorf("a failed run took a REF")
+	}
+	got, err := svc.GetRun(t.Context(), a.person(a.alice), id)
+	if err != nil || got.GetStatus() != agentsv1.RunStatus_RUN_STATUS_FAILED || got.GetFailureReason() != "model_unavailable" || got.GetRef() != "" || got.GetAnswer() != nil {
+		t.Errorf("GetRun = %v, %v, want FAILED with its reason and nothing the model said", got, err)
+	}
+	w.waitFor("the FAILED frame", hasState(realtimev1.AgentRunState_AGENT_RUN_STATE_FAILED))
+	unseen(t, fromMemory, map[string]string{"the stored result": string(row.Result), "GetRun": got.String()})
+}
+
+func TestAsk_LongQuestion_IsSearchedClippedAndAnswered(t *testing.T) {
+	a := newAgentFixture(t)
+	a.seedWarehouse()
+	// An embedding model has a context of its own: what the program searches with is bounded as the tool's question is.
+	a.llm.HandleEmbed(func(_ context.Context, texts []string, _ llm.EmbedTask) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i, text := range texts {
+			if utf8.RuneCountInString(text) > maxQuestionArgRunes {
+				return nil, errors.New("the input is longer than the context of the embedding model")
+			}
+			out[i] = fakellm.Vector(text)
+		}
+		return out, nil
+	})
+	// The longest question StartRun takes, whose pasted part is Thai: the cut has to fall between characters.
+	pasted := palletsQuestion + " " + strings.Repeat("คลังสินค้าบางนา ", 400)
+	question := strings.TrimSpace(string([]rune(pasted)[:maxQuestionRunes]))
+	a.model.script(say(fromMemory))
+	svc := New(a.deps)
+
+	id := a.ask(svc, question)
+
+	calls := a.recordedCalls(id)
+	if len(calls) != 1 || !calls[0].Forced || calls[0].Error != "" {
+		t.Fatalf("tool_calls = %+v, want the one forced search, which did not fail", calls)
+	}
+	searched, _ := calls[0].Args["question"].(string)
+	if n := utf8.RuneCountInString(searched); n == 0 || n > maxQuestionArgRunes || !utf8.ValidString(searched) || !strings.HasPrefix(question, searched) {
+		t.Errorf("searched %d runes (valid UTF-8 %v), want a clean prefix of the question of at most %d", n, utf8.ValidString(searched), maxQuestionArgRunes)
+	}
+	if embeds := a.llm.EmbedCalls(); len(embeds) == 0 || embeds[len(embeds)-1].Texts[0] != searched {
+		t.Errorf("the question embedded is not the one recorded as searched")
+	}
+	slip := a.answerOf(svc, id)
+	if slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_ANSWER || len(slip.GetCitations()) == 0 {
+		t.Errorf("slip = %v, want the answer of the clipped search, not a failure", slip)
+	}
+	if slip.GetTitle() != clip(question, maxTitleRunes) {
+		t.Errorf("slip title is not the person's own question, cut as a title is")
+	}
+}
+
+func TestAsk_ForcedSearch_AnswersInTheLanguageOfTheQuestion(t *testing.T) {
+	const thaiQuestion = "คลังสินค้าบางนาเก็บพาเลทได้กี่ที่"
+	isThai := func(s string) bool {
+		return strings.ContainsFunc(s, func(r rune) bool { return r >= 0x0E00 && r <= 0x0E7F })
+	}
+
+	t.Run("an answer", func(t *testing.T) {
+		a := newAgentFixture(t)
+		a.seedWarehouse()
+		// The answer model writes Thai only when its instruction says so: the language comes from the person's question.
+		a.llm.HandleGenerate(func(ctx context.Context, req llm.Request) (llm.Result, error) {
+			res, err := citeEveryChunk(ctx, req)
+			if err != nil || !strings.Contains(req.System, "Write the answer in Thai") {
+				return res, err
+			}
+			raw, err := json.Marshal(map[string]any{
+				"answer_markdown": "คลังสินค้าบางนาเก็บได้ 4,000 พาเลท [1]",
+				"citations":       []map[string]string{{"chunk_id": chunkTag.FindStringSubmatch(req.Parts[0].Text)[1], "quote": "x"}},
+			})
+			return llm.Result{Text: string(raw)}, err
+		})
+		a.model.script(say(fromMemory)) // English, from the conversation
+		svc := New(a.deps)
+
+		id := a.ask(svc, thaiQuestion)
+
+		slip := a.answerOf(svc, id)
+		if slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_ANSWER || !isThai(slip.GetBodyMarkdown()) || len(slip.GetCitations()) == 0 {
+			t.Errorf("slip = %v, want a cited answer in Thai", slip)
+		}
+		if calls := a.llm.GenerateCalls(); len(calls) != 1 || !strings.Contains(calls[0].System, "Write the answer in Thai") {
+			t.Errorf("answer calls = %v, want one that asks for Thai", calls)
+		}
+	})
+
+	t.Run("nothing found", func(t *testing.T) {
+		a := newAgentFixture(t)
+		a.seedWarehouse()
+		a.exec(`DELETE FROM knowledge.chunks`)
+		a.model.script(say(fromMemory))
+		svc := New(a.deps)
+
+		id := a.ask(svc, thaiQuestion)
+
+		slip := a.answerOf(svc, id)
+		if slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_NOT_FOUND || slip.GetBodyMarkdown() != "ไม่พบข้อมูลนี้ในช่องที่คุณเข้าถึงได้" {
+			t.Errorf("slip = %v, want the not-found slip in Thai", slip)
+		}
+	})
+}
+
+func TestAsk_ModelToolFailsThenAnswersFromMemory_IsAnsweredByTheForcedSearch(t *testing.T) {
+	a := newAgentFixture(t)
+	a.seedWarehouse()
+	a.model.script(
+		callTool("summarize_channel", map[string]any{"channel_id": a.private.String()}), // alice is not in it: refused
+		say(fromMemory),
+	)
+	svc := New(a.deps)
+
+	id := a.ask(svc, palletsQuestion)
+
+	calls := a.recordedCalls(id)
+	if len(calls) != 2 || calls[0].Name != "summarize_channel" || calls[0].Forced || calls[0].Error == "" ||
+		calls[1].Name != "search_knowledge" || !calls[1].Forced || calls[1].Error != "" {
+		t.Fatalf("tool_calls = %+v, want the model's refused summary, then the search the program made", calls)
+	}
+	slip := a.answerOf(svc, id)
+	if slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_ANSWER || len(slip.GetCitations()) == 0 || slip.GetRef() != "ANS-1001" {
+		t.Errorf("slip = %v, want the cited ANSWER of the forced search: a tool that failed left nothing to build a slip from", slip)
+	}
+	unseen(t, fromMemory, map[string]string{"the stored result": string(a.run(id).Result), "the slip": slip.String()})
 }
 
 func TestMention_PlainReply_StillAPlainReply(t *testing.T) {

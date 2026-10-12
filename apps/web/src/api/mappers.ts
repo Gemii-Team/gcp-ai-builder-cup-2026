@@ -180,12 +180,14 @@ export function mapArtifact(artifact: Artifact): ArtifactView | null {
 }
 
 /**
- * The answer of an Ask run: an `answer` or a `not_found` artifact, the only two a run issues, and null for anything else
- * (no artifact, or one of a kind Ask cannot show). `ref` fills the artifact's own REF when the server left it empty.
+ * The answer of an Ask run: what the server builds an Ask's result from, an `answer` (cited), a `not_found` (the channels
+ * searched) or, when the model summarised a channel, a `channel_summary` (its sources). Null for anything else: no
+ * artifact, one of no kind (a run of an older build that stored the model's plain text) or of a kind Ask cannot show, so
+ * the run is read as one that issued no answer. `ref` fills the artifact's own REF when the server left it empty.
  */
 function mapAnswer(artifact: Artifact | undefined, ref: string): ArtifactView | null {
   const view = artifact === undefined ? null : mapArtifact(artifact);
-  if (view === null || (view.kind !== 'answer' && view.kind !== 'not_found')) {
+  if (view === null || (view.kind !== 'answer' && view.kind !== 'not_found' && view.kind !== 'channel_summary')) {
     return null;
   }
   return view.ref === '' ? { ...view, ref } : view;

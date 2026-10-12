@@ -189,16 +189,35 @@ describe('useAskRun', () => {
     expect(api.agents.getRun).not.toHaveBeenCalled();
   });
 
-  it('reads a finished run with no usable answer as a failure, never as an answer', async () => {
-    const { api, ask, emit, started, outcome } = setup();
+  it('settles a run that ended with a channel summary as answered, from the frame and from the run', async () => {
+    const summary = artifact({ kind: ArtifactKind.CHANNEL_SUMMARY, ref: 'ANS-2212', bodyMarkdown: 'The launch moves to Friday.' });
+    const { ask, emit, started, outcome } = setup();
     started();
-    api.agents.getRun.mockResolvedValue(create(GetRunResponseSchema, { run: run({ status: RunStatus.DONE }) }));
     await ask();
 
-    emit({ state: AgentRunState.DONE });
-    await act(async () => {});
+    emit({ state: AgentRunState.DONE, answer: summary });
 
-    expect(outcome()).toMatchObject({ kind: 'failed', reason: '' });
+    expect(outcome()).toMatchObject({ kind: 'answered', answer: { kind: 'channel_summary', ref: 'ANS-2212' } });
+
+    const polled = setup();
+    polled.api.agents.startRun.mockResolvedValue(create(StartRunResponseSchema, { run: run({ status: RunStatus.DONE, answer: summary }) }));
+    await polled.ask();
+    expect(polled.outcome()).toMatchObject({ kind: 'answered', answer: { kind: 'channel_summary', ref: 'ANS-2212' } });
+    expect(polled.api.agents.getRun).not.toHaveBeenCalled();
+  });
+
+  it('reads a finished run with no usable answer (no artifact, or one of no kind) as a failure with its own reason, never as an answer and never as an unknown one', async () => {
+    for (const answer of [undefined, artifact({ kind: ArtifactKind.UNSPECIFIED, bodyMarkdown: 'plain text of an older run' })]) {
+      const { api, ask, emit, started, outcome } = setup();
+      started();
+      api.agents.getRun.mockResolvedValue(create(GetRunResponseSchema, { run: run({ status: RunStatus.DONE, ...(answer === undefined ? {} : { answer }) }) }));
+      await ask();
+
+      emit({ state: AgentRunState.DONE });
+      await act(async () => {});
+
+      expect(outcome()).toMatchObject({ kind: 'failed', reason: 'no_answer' });
+    }
   });
 
   it('scopes a question to a channel', async () => {

@@ -549,30 +549,36 @@ func (tb *toolbox) ask(ctx context.Context, a authz.Actor, question string) (sea
 // nothing for a slip to be built from: the model answered from the conversation, or
 // chatted. It is the call of search_knowledge (the same retrieval as the same actor, so
 // the person's channels and no others, and its answer in the collector) over the
-// question the person wrote, and it spends a call of the run's budget like any other.
-// The call comes back for the run's record, marked as forced and, when the search
-// failed, with the error as the model would have read it. When the budget is used up
-// nothing is searched and the error says the run took too many steps.
-func (tb *toolbox) forceSearch(ctx context.Context) (ToolCall, error) {
+// question the person wrote, cut to the bound of the tool's own question so that a long
+// pasted one is searched as the model's would be and not failed, and it spends a call of
+// the run's budget like any other. made says whether a call was made, and so whether it
+// is to be recorded: it is not when nobody acts or the budget is used up (then nothing is
+// searched and the error says the run took too many steps). The call is marked as forced
+// and, when the search failed, carries the error as the model would have read it.
+func (tb *toolbox) forceSearch(ctx context.Context) (call ToolCall, made bool, err error) {
 	a, err := invoker(ctx)
 	if err != nil {
-		return ToolCall{}, err
+		return ToolCall{}, false, err
 	}
 	if err := tb.spendCall(); err != nil {
-		return ToolCall{}, fmt.Errorf("agents: no tool call is left to search with: %w", errTooManySteps)
+		return ToolCall{}, false, fmt.Errorf("agents: no tool call is left to search with: %w", errTooManySteps)
 	}
-	call := ToolCall{Name: toolSearchKnowledge, Args: map[string]any{"question": tb.Question}, Forced: true}
-	out, err := tb.ask(ctx, a, tb.Question)
+	question := strings.TrimSpace(tb.Question)
+	if utf8.RuneCountInString(question) > maxQuestionArgRunes {
+		question = strings.TrimSpace(string([]rune(question)[:maxQuestionArgRunes]))
+	}
+	call = ToolCall{Name: toolSearchKnowledge, Args: map[string]any{"question": question}, Forced: true}
+	out, err := tb.ask(ctx, a, question)
 	if err != nil {
 		call.Error = forModel(ctx, toolSearchKnowledge, err).Error()
-		return call, err
+		return call, true, err
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
-		return call, fmt.Errorf("agents: encode the forced search: %w", err)
+		return call, true, fmt.Errorf("agents: encode the forced search: %w", err)
 	}
 	call.Result = clip(string(raw), maxRecordedResult)
-	return call, nil
+	return call, true, nil
 }
 
 // ---- create_task_draft ------------------------------------------------------

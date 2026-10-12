@@ -38,10 +38,15 @@ const (
 //     on every RUNNING, DONE and FAILED frame, and when the run's message arrives as a
 //     message_created frame; whatever STREAMING text follows the last RUNNING is the
 //     answer so far.
-//   - DONE carries the slip when the run produced one, and nothing else of the answer: a
-//     reply without a slip is the message the channel receives, or for an Ask-panel run
-//     the answer GetRun returns. A frame may be lost or arrive twice; DONE and FAILED
-//     are repeated by nobody, so a client that is waiting for a run also asks GetRun.
+//   - An Ask-panel run streams no text until a tool has left a result to build its slip
+//     from: before that the model may be answering from the conversation, which is
+//     never an Ask's answer.
+//   - DONE carries the slip when the run produced one, and nothing else of the answer.
+//     Every Ask-panel run ends with a slip (the search the program makes itself when the
+//     model made none: see execute), so its answer is that slip; a reply without a slip is
+//     the plain message a channel mention posts. A frame may be lost or arrive twice;
+//     DONE and FAILED are repeated by nobody, so a client that is waiting for a run also
+//     asks GetRun.
 type progress struct {
 	fan   outbox.FanoutPublisher
 	topic string

@@ -487,13 +487,15 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand
 // asks the knowledge domain itself, as the person's agent, with the person's own
 // question, through the call search_knowledge makes. The call is recorded on the run,
 // marked as forced, as the model's calls are. A person is answered from the retrieval of
-// their own turn: the conversation only helps the model word a search.
+// their own turn: the conversation only helps the model word a search. A retry of the run
+// searches again by design: what an attempt carries over to the next is the budget its
+// recorded calls spent (see priorOf), never the result.
 func (s *service) search(ctx context.Context, inv invoke, actor authz.Actor, tb *toolbox) error {
 	searchCtx, cancel := context.WithTimeout(WithActor(ctx, actor), s.runTimeout)
 	defer cancel()
 	bus.KeepAlive(searchCtx)
-	call, err := tb.forceSearch(searchCtx)
-	if call.Name != "" {
+	call, made, err := tb.forceSearch(searchCtx)
+	if made {
 		if rerr := s.recordCall(ctx, inv, call); rerr != nil {
 			return rerr
 		}

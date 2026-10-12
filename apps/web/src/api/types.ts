@@ -38,7 +38,7 @@ export type ArtifactView = {
   runId?: string;
 };
 
-/** What `AgentService` says about an Ask run. `answer` is an `answer` or `not_found` artifact; a run that failed has none and no REF. */
+/** What `AgentService` says about an Ask run. `answer` is an `answer`, `not_found` or `channel_summary` artifact; a run that failed has none and no REF. */
 export type RunView = {
   id: string;
   status: 'queued' | 'running' | 'done' | 'failed';

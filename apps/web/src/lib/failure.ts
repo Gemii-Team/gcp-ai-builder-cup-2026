@@ -51,6 +51,9 @@ export function failureReasonKey(code: string): I18nKey {
       return 'reasonNotReached';
     case 'timed_out':
       return 'reasonTimedOut';
+    // An Ask run that is over but carries no answer to show: an artifact of no kind, as an older build stored a model's plain reply.
+    case 'no_answer':
+      return 'reasonNoAnswer';
     default:
       return 'reasonUnknown';
   }
