@@ -47,11 +47,15 @@ var answerSchema = json.RawMessage(`{
 
 // modelAnswer is the model's answer as answerSchema words it.
 type modelAnswer struct {
-	AnswerMarkdown string `json:"answer_markdown"`
-	Citations      []struct {
-		ChunkID string `json:"chunk_id"`
-		Quote   string `json:"quote"`
-	} `json:"citations"`
+	AnswerMarkdown string          `json:"answer_markdown"`
+	Citations      []modelCitation `json:"citations"`
+}
+
+// modelCitation is one citation of the model: the id of the chunk it rests on, and the
+// passage of that chunk it says supports the answer.
+type modelCitation struct {
+	ChunkID string `json:"chunk_id"`
+	Quote   string `json:"quote"`
 }
 
 // answerRequest is the call that asks the model to answer question from hits, in lang.

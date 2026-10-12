@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -648,8 +650,10 @@ func TestAsk_CitationSourcesCarryChannelOffsetPageAndMessageTime(t *testing.T) {
 	}
 	pdf := f.doc(f.public, "capacity.pdf", "Introduction.", "Pallets: 4,000 at Bang Na.")
 
+	// Every quote is a passage of its chunk, so each is kept as the model wrote it.
 	rows := []struct {
 		chunk         uuid.UUID
+		quote         string
 		kind          chatv1.SourceKind
 		id            uuid.UUID
 		anchor, label string
@@ -657,16 +661,16 @@ func TestAsk_CitationSourcesCarryChannelOffsetPageAndMessageTime(t *testing.T) {
 		offset        *int64
 		page          *int32
 	}{
-		{ChunkID(f.ws, kindChat, f.public, "seq:1-1"), chatv1.SourceKind_SOURCE_KIND_MESSAGE, f.public, "1", "Alice", new(at(10, 1, 30)), nil, nil},
-		{ChunkID(f.ws, kindMeeting, timed, "entries:0-1"), chatv1.SourceKind_SOURCE_KIND_MEETING, timed, "0", "Launch review", nil, new(int64(61000)), nil},
-		{ChunkID(f.ws, kindMeeting, timed, "summary"), chatv1.SourceKind_SOURCE_KIND_MEETING, timed, "summary", "Launch review", nil, nil, nil},
-		{ChunkID(f.ws, kindMeeting, untimed, "entries:0-0"), chatv1.SourceKind_SOURCE_KIND_MEETING, untimed, "0", "Dock call", nil, nil, nil},
-		{f.docChunk(pdf, 2), chatv1.SourceKind_SOURCE_KIND_FILE, pdf, "page:2", "capacity.pdf", nil, nil, new(int32(2))},
+		{ChunkID(f.ws, kindChat, f.public, "seq:1-1"), "Bang Na holds 4,000 pallets", chatv1.SourceKind_SOURCE_KIND_MESSAGE, f.public, "1", "Alice", new(at(10, 1, 30)), nil, nil},
+		{ChunkID(f.ws, kindMeeting, timed, "entries:0-1"), "Pallets arrive on Monday.", chatv1.SourceKind_SOURCE_KIND_MEETING, timed, "0", "Launch review", nil, new(int64(61000)), nil},
+		{ChunkID(f.ws, kindMeeting, timed, "summary"), "use Bang Na for pallets", chatv1.SourceKind_SOURCE_KIND_MEETING, timed, "summary", "Launch review", nil, nil, nil},
+		{ChunkID(f.ws, kindMeeting, untimed, "entries:0-0"), "The pallets are late.", chatv1.SourceKind_SOURCE_KIND_MEETING, untimed, "0", "Dock call", nil, nil, nil},
+		{f.docChunk(pdf, 2), "4,000 at Bang Na", chatv1.SourceKind_SOURCE_KIND_FILE, pdf, "page:2", "capacity.pdf", nil, nil, new(int32(2))},
 	}
 	var cites []cite
 	var markdown []string
 	for i, r := range rows {
-		cites = append(cites, cite{ChunkID: r.chunk.String(), Quote: fmt.Sprintf("quote %d", i+1)})
+		cites = append(cites, cite{ChunkID: r.chunk.String(), Quote: r.quote})
 		markdown = append(markdown, fmt.Sprintf("Claim %d. [%d]", i+1, i+1))
 	}
 	f.reply(answerResult(strings.Join(markdown, " "), cites...))
@@ -686,7 +690,7 @@ func TestAsk_CitationSourcesCarryChannelOffsetPageAndMessageTime(t *testing.T) {
 	}
 	for i, r := range rows {
 		c, src := ans.GetCitations()[i], ans.GetCitations()[i].GetSource()
-		if c.GetN() != int32(i+1) || c.GetChunkId() != r.chunk.String() || c.GetQuote() != fmt.Sprintf("quote %d", i+1) {
+		if c.GetN() != int32(i+1) || c.GetChunkId() != r.chunk.String() || c.GetQuote() != r.quote {
 			t.Errorf("citation %d = n %d chunk %s quote %q", i+1, c.GetN(), c.GetChunkId(), c.GetQuote())
 		}
 		if src.GetKind() != r.kind || src.GetId() != r.id.String() || src.GetAnchor() != r.anchor || src.GetLabel() != r.label || src.GetChannelId() != f.public.String() {
@@ -877,5 +881,280 @@ func TestAsk_GenerateIsStructuredAndBounded(t *testing.T) {
 	slices.Sort(schema.Required)
 	if !slices.Equal(schema.Required, []string{"answer_markdown", "citations"}) || len(schema.Properties) != 2 {
 		t.Errorf("schema = %s, want answer_markdown and citations", call.Schema.JSON)
+	}
+}
+
+// ---- Ask: what a citation may claim -----------------------------------------
+
+// unitRetrieval is a retrieval of one document chunk per text, page i+1 of one file in
+// one channel, for the tests of validate, which needs no database.
+func unitRetrieval(texts ...string) (retrieval, []uuid.UUID) {
+	ws, file, channel := uuid.New(), uuid.New(), uuid.New()
+	r := retrieval{meta: map[uuid.UUID]sourceMeta{}}
+	ids := make([]uuid.UUID, len(texts))
+	for i, text := range texts {
+		anchor := fmt.Sprintf("page:%d", i+1)
+		ids[i] = ChunkID(ws, kindDoc, file, anchor)
+		r.hits = append(r.hits, Hit{ChunkID: ids[i], ChannelID: &channel, SourceKind: kindDoc, SourceID: file, SourceAnchor: anchor, Lang: "en", Content: text})
+		r.meta[ids[i]] = sourceMeta{Label: "ops.pdf"}
+	}
+	return r, ids
+}
+
+func unitAnswer(markdown string, cites ...cite) modelAnswer {
+	out := modelAnswer{AnswerMarkdown: markdown}
+	for _, c := range cites {
+		out.Citations = append(out.Citations, modelCitation(c))
+	}
+	return out
+}
+
+func TestAsk_CitesOneSourceAnchorOnce(t *testing.T) {
+	f := newFixture(t)
+	f.topics(topic{"pallets", 0})
+	long := strings.Repeat("The warehouse holds 4,000 pallets in total. ", 150)
+	pdf := f.doc(f.public, "ops.pdf", "Cover page about pallets.", long)
+	other := f.doc(f.public, "other.pdf", "Another file about pallets.")
+
+	// A page too long for one chunk is several chunks that share the anchor page:2.
+	first, second, cover := f.docChunk(pdf, 2), pieceID(f.ws, kindDoc, pdf, "page:2", 1), f.docChunk(pdf, 1)
+	var onPage2 []uuid.UUID
+	for _, c := range f.sourceChunks(pdf) {
+		if c.Anchor == "page:2" {
+			onPage2 = append(onPage2, c.ID)
+		}
+	}
+	if !slices.Contains(onPage2, first) || !slices.Contains(onPage2, second) {
+		t.Fatalf("page 2 is cut into %v, want it to hold the pieces %s and %s", onPage2, first, second)
+	}
+
+	f.reply(answerResult("Total [1], the cover [2], again the total [3], another file [4].",
+		cite{ChunkID: second.String(), Quote: "4,000 pallets in total"},
+		cite{ChunkID: cover.String(), Quote: "Cover page"},
+		cite{ChunkID: first.String(), Quote: "holds 4,000 pallets"},
+		cite{ChunkID: f.docChunk(other, 1).String(), Quote: "Another file"},
+	))
+	ans, err := f.ask(userActor(f.ws, f.alice), "How many pallets?", nil)
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	type shown struct {
+		n                            int32
+		chunk, source, anchor, quote string
+	}
+	var got []shown
+	for _, c := range ans.GetCitations() {
+		got = append(got, shown{c.GetN(), c.GetChunkId(), c.GetSource().GetId(), c.GetSource().GetAnchor(), c.GetQuote()})
+	}
+	want := []shown{
+		{1, second.String(), pdf.String(), "page:2", "4,000 pallets in total"}, // the first cited piece, with its quote
+		{2, cover.String(), pdf.String(), "page:1", "Cover page"},
+		{3, f.docChunk(other, 1).String(), other.String(), "page:1", "Another file"}, // the same anchor of another file is another source
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("citations = %+v, want %+v: one chip for each source and anchor", got, want)
+	}
+	if want := "Total [1], the cover [2], again the total [1], another file [3]."; ans.GetMarkdown() != want {
+		t.Errorf("markdown = %q, want %q: the markers of both pieces name the one citation", ans.GetMarkdown(), want)
+	}
+}
+
+func TestAsk_OnlyCitationMarkersAreRenumbered(t *testing.T) {
+	r, ids := unitRetrieval("Alpha one.", "Beta two.", "Gamma three.")
+	const none = -1 // a citation of a chunk that was not retrieved
+	all := []int{0, 1, 2}
+	for _, c := range []struct {
+		name     string
+		cites    []int // the model's citations: indexes of ids, or none
+		in, want string
+		order    []int // the chunks of the answer's citations in the order of their n, as indexes of ids
+	}{
+		{"plain markers follow first appearance", all, "B [2] then A [1].", "B [1] then A [2].", []int{1, 0, 2}},
+		{"inline code span", all, "Use `retries[1]` and `[2]` then [2].", "Use `retries[1]` and `[2]` then [1].", []int{1, 0, 2}},
+		{"double backtick span", all, "Run ``a ` [1] b`` then [3].", "Run ``a ` [1] b`` then [1].", []int{2, 0, 1}},
+		{"fenced block", all, "Code:\n```\nx := a[1] + b[2]\n```\nDone [2].", "Code:\n```\nx := a[1] + b[2]\n```\nDone [1].", []int{1, 0, 2}},
+		{"indented fence with an info string", all, "Code:\n  ```go\nx := a[1]\n  ```\nDone [3].", "Code:\n  ```go\nx := a[1]\n  ```\nDone [1].", []int{2, 0, 1}},
+		{"fence that is never closed", all, "Intro [2]\n```\ncode [1]", "Intro [1]\n```\ncode [1]", []int{1, 0, 2}},
+		{"link text", all, "See [3](https://example.test/a) and [2].", "See [3](https://example.test/a) and [1].", []int{1, 0, 2}},
+		{"reference definition", all, "Claim [2].\n\n[3]: https://example.test/ref", "Claim [1].\n\n[3]: https://example.test/ref", []int{1, 0, 2}},
+		{"colon after a marker in a sentence", all, "Capacity [2]: 4,000 pallets.", "Capacity [1]: 4,000 pallets.", []int{1, 0, 2}},
+		{"a year", all, "In [2024] the plan [2] shipped.", "In [2024] the plan [1] shipped.", []int{1, 0, 2}},
+		{"a range of years", all, "From [2023-2024] we grew [1].", "From [2023-2024] we grew [1].", []int{0, 1, 2}},
+		{"an index of zero", all, "Set retries[0] to zero [2].", "Set retries[0] to zero [1].", []int{1, 0, 2}},
+		{"a number beyond the list", all, "Odd [9] marker [2].", "Odd [9] marker [1].", []int{1, 0, 2}},
+		{"Thai text with no space before the marker", all, "ความจุ 4,000 พาเลท[2]", "ความจุ 4,000 พาเลท[1]", []int{1, 0, 2}},
+		{"a group of numbers", all, "Both [2, 3] agree.", "Both [1][2] agree.", []int{1, 2, 0}},
+		{"a range of citations", all, "All three [1-3].", "All three [1][2][3].", []int{0, 1, 2}},
+		{"a range with an en dash", all, "All three [1–3].", "All three [1][2][3].", []int{0, 1, 2}},
+		{"a group with a number beyond the list", all, "Mixed [1, 9].", "Mixed [1].", []int{0, 1, 2}},
+		{"a dropped citation in a group and alone", []int{0, none, 2}, "x [1, 2] y [3] z [2].", "x [1] y [2] z.", []int{0, 2}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var cites []cite
+			for _, k := range c.cites {
+				if k == none {
+					cites = append(cites, cite{ChunkID: uuid.NewString(), Quote: "x"})
+					continue
+				}
+				cites = append(cites, cite{ChunkID: ids[k].String(), Quote: strings.Fields(r.hits[k].Content)[0]})
+			}
+			markdown, citations := validate(unitAnswer(c.in, cites...), r)
+			if markdown != c.want {
+				t.Errorf("markdown = %q, want %q", markdown, c.want)
+			}
+			var order []int
+			for _, ci := range citations {
+				order = append(order, slices.Index(ids, uuid.MustParse(ci.GetChunkId())))
+			}
+			if !slices.Equal(order, c.order) {
+				t.Errorf("citations are of chunks %v in the order of n, want %v", order, c.order)
+			}
+		})
+	}
+}
+
+func TestAsk_QuoteIsKeptOnlyWhenTheChunkSaysIt(t *testing.T) {
+	const text = "Alice: The Bang Na warehouse holds 4,000 pallets in total.\nBob: Café opens at nine."
+	const whole = "Alice: The Bang Na warehouse holds 4,000 pallets in total. Bob: Café opens at nine."
+	for _, c := range []struct {
+		name, content, quote string
+		want                 string // "" keeps the quote as the model wrote it, trimmed
+	}{
+		{"verbatim", text, "holds 4,000 pallets", ""},
+		{"case and white space", text, "  THE bang na\n   WAREHOUSE holds  ", ""},
+		{"a decomposed accent against a precomposed one", text, "Cafe\u0301 opens at nine", ""},
+		{"a precomposed accent against a decomposed one", "Cafe\u0301 opens at nine.", "Café opens", ""},
+		{"zero-width characters in the chunk", "It holds 4,000\u200b pallets\u200c.", "holds 4,000 pallets.", ""},
+		{"zero-width characters in the quote", "It holds 4,000 pallets.", "holds 4,000\u200c pallets\u200b.", ""},
+		{"a tag defanged by the prompt", "Write <chunk> tags.", "Write <\u200bchunk> tags", ""},
+		{"a number the chunk does not say", text, "The Bang Na warehouse holds 9,000 pallets", whole},
+		{"no quote", text, "", whole},
+		{"only white space", text, " \n\t ", whole},
+		{"a Thai paraphrase", "โกดังบางนาจุพาเลทได้ 4,000 ที่", "คลังสินค้าบางนาเก็บพาเลทได้ 4,000", "โกดังบางนาจุพาเลทได้ 4,000 ที่"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, ids := unitRetrieval(c.content)
+			_, citations := validate(unitAnswer("A [1]", cite{ChunkID: ids[0].String(), Quote: c.quote}), r)
+			if len(citations) != 1 {
+				t.Fatalf("%d citations, want the one: a quote that does not match never drops a valid citation", len(citations))
+			}
+			want := c.want
+			if want == "" {
+				want = strings.TrimSpace(c.quote)
+			}
+			if got := citations[0].GetQuote(); got != want {
+				t.Errorf("quote = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestAsk_ExcerptIsBoundedAndCutOnACluster(t *testing.T) {
+	check := func(t *testing.T, content string) {
+		t.Helper()
+		r, ids := unitRetrieval(content)
+		_, citations := validate(unitAnswer("A [1]", cite{ChunkID: ids[0].String(), Quote: "never said"}), r)
+		if len(citations) != 1 {
+			t.Fatalf("%d citations, want the one", len(citations))
+		}
+		got := citations[0].GetQuote()
+		kept, cut := strings.CutSuffix(got, "…")
+		whole := strings.Join(strings.Fields(content), " ")
+		if !cut || !strings.HasPrefix(whole, kept) || !utf8.ValidString(got) {
+			t.Fatalf("excerpt %q is not the start of the chunk followed by an ellipsis", got)
+		}
+		if n := utf8.RuneCountInString(got); n < 140 || n > 161 {
+			t.Errorf("excerpt has %d runes, want about 160", n)
+		}
+		rest, last := []rune(strings.TrimPrefix(whole, kept)), []rune(kept)
+		if len(rest) > 0 && isCombining(rest[0]) {
+			t.Errorf("excerpt ends before the mark %U that belongs to its last character", rest[0])
+		}
+		if l := last[len(last)-1]; l >= 0x0E40 && l <= 0x0E44 {
+			t.Errorf("excerpt ends with the leading vowel %U, which belongs to the next consonant", l)
+		}
+	}
+	t.Run("English", func(t *testing.T) {
+		check(t, strings.Repeat("The warehouse holds pallets and the dock is open.\n", 20))
+	})
+	t.Run("Thai without spaces", func(t *testing.T) {
+		for seed := uint64(1); seed <= 40; seed++ {
+			check(t, thaiText(rand.New(rand.NewPCG(seed, seed)), 900))
+		}
+	})
+}
+
+func TestAsk_FabricatedQuoteIsReplacedByAnExcerptOfTheChunk(t *testing.T) {
+	f := newFixture(t)
+	f.topics(topic{"pallets", 0})
+	const text = "The Bang Na warehouse holds 4,000 pallets in total."
+	chunk := f.docChunk(f.doc(f.public, "ops.pdf", text), 1)
+	f.reply(answerResult("It holds 9,000 pallets. [1]", cite{ChunkID: chunk.String(), Quote: "The Bang Na warehouse holds 9,000 pallets in total."}))
+
+	ans, err := f.ask(userActor(f.ws, f.alice), "How many pallets?", nil)
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if !ans.GetFound() || len(ans.GetCitations()) != 1 || ans.GetCitations()[0].GetChunkId() != chunk.String() {
+		t.Fatalf("answer = %s, want the answer kept with its one citation", protojson.Format(ans))
+	}
+	if got := ans.GetCitations()[0].GetQuote(); got != text {
+		t.Errorf("quote = %q, want the chunk's own words %q: a quote the chunk does not hold is never shown as evidence", got, text)
+	}
+}
+
+func TestAsk_QuoteMatchIgnoresCaseWhitespaceAndUnicodeForm(t *testing.T) {
+	f := newFixture(t)
+	f.topics(topic{"pallets", 0})
+	chunk := f.docChunk(f.doc(f.public, "ops.pdf", "Café opens at nine.\nThe Bang Na warehouse holds 4,000\u200b pallets in total."), 1)
+	const quote = "  CAFE\u0301   opens at NINE.  the bang na\nwarehouse holds 4,000 pallets "
+	f.reply(answerResult("Nine, and 4,000 pallets. [1]", cite{ChunkID: chunk.String(), Quote: quote}))
+
+	ans, err := f.ask(userActor(f.ws, f.alice), "When does it open?", nil)
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if len(ans.GetCitations()) != 1 || ans.GetCitations()[0].GetQuote() != strings.TrimSpace(quote) {
+		t.Errorf("citations = %s, want the quote kept as the model wrote it", protojson.Format(ans))
+	}
+}
+
+// ---- Search: workspace-wide chunks ------------------------------------------
+
+func TestSearch_WorkspaceWideChunksAreForTheWorkspaceAndUnscopedSearchOnly(t *testing.T) {
+	f := newFixture(t)
+	f.topics(topic{"pallets", 0}, topic{"storage capacity", 0})
+	wide := f.docChunk(f.doc(f.public, "wide.pdf", "The Bang Na warehouse holds 4,000 pallets, reference REF-5512."), 1)
+	f.exec(f.ws, `UPDATE knowledge.chunks SET channel_id = NULL WHERE id = $1`, wide)
+	// 45 pages on the axis of "REF-5512" itself: the chunk is outside the vector's top 40
+	// for that query, and "storage capacity" shares no word with it, so each query is
+	// answered by one side alone.
+	f.doc(f.public, "menu.pdf", menu(45)...)
+	lonely := f.user(f.ws, "Dana") // a member of no channel at all
+	queries := []string{"storage capacity", "REF-5512"}
+
+	for _, who := range []struct {
+		name  string
+		actor authz.Actor
+	}{{"bob", userActor(f.ws, f.bob)}, {"dana, who is in no channel", userActor(f.ws, lonely)}, {"@assistant acting for bob", agentActor(f.ws, f.bob)}} {
+		for _, q := range queries {
+			if !has(f.search(who.actor, q, nil), wide) {
+				t.Errorf("%s did not find the workspace-wide chunk by %q", who.name, q)
+			}
+		}
+	}
+	for _, q := range queries {
+		if has(f.search(userActor(f.ws, f.bob), q, &f.public), wide) {
+			t.Errorf("a search scoped to one channel returned the workspace-wide chunk by %q", q)
+		}
+	}
+
+	other := f.workspace("other.example")
+	carol := f.user(other, "Carol")
+	f.channel(other, "public", carol)
+	for _, q := range queries {
+		if hits := f.search(userActor(other, carol), q, nil); len(hits) != 0 {
+			t.Errorf("carol, of another workspace, found %d chunks by %q", len(hits), q)
+		}
 	}
 }
