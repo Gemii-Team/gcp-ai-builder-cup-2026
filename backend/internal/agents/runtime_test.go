@@ -1136,30 +1136,6 @@ func TestAskPanelRun_ProgressOnUserTopicAndResultViaGetRun(t *testing.T) {
 	}
 }
 
-func TestAskPanelRun_PlainTextAnswerIsKeptForGetRun(t *testing.T) {
-	a := newAgentFixture(t)
-	a.model.script(say("I can search what your team said."))
-	svc := New(a.deps)
-	run, err := svc.StartRun(t.Context(), a.person(a.alice), &agentsv1.StartRunRequest{Agent: "assistant", Question: "what can you do?"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload string
-	a.scan(&payload, `SELECT payload::text FROM platform.outbox WHERE topic = 'agent.invoke'`)
-	var ev eventsv1.AgentInvoke
-	if err := protojson.Unmarshal([]byte(payload), &ev); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.job()(t.Context(), a.delivery(&ev, "evt-ask", 1)); err != nil {
-		t.Fatalf("agent.run: %v", err)
-	}
-	got, err := svc.GetRun(t.Context(), a.person(a.alice), uuid.MustParse(run.GetId()))
-	if err != nil || got.GetStatus() != agentsv1.RunStatus_RUN_STATUS_DONE || got.GetRef() != "" ||
-		got.GetAnswer().GetBodyMarkdown() != "I can search what your team said." || got.GetAnswer().GetRef() != "" {
-		t.Errorf("GetRun = %v, %v, want DONE with the plain text and no REF", got, err)
-	}
-}
-
 // startAsk asks the Ask panel as alice and returns the run with the event the relay
 // delivers for it.
 func (a *agentFixture) startAsk(svc Service, question string) (*agentsv1.Run, *eventsv1.AgentInvoke) {
@@ -1168,13 +1144,7 @@ func (a *agentFixture) startAsk(svc Service, question string) (*agentsv1.Run, *e
 	if err != nil {
 		a.t.Fatalf("StartRun: %v", err)
 	}
-	var payload string
-	a.scan(&payload, `SELECT payload::text FROM platform.outbox WHERE topic = 'agent.invoke' AND key = $1`, run.GetId())
-	var ev eventsv1.AgentInvoke
-	if err := protojson.Unmarshal([]byte(payload), &ev); err != nil {
-		a.t.Fatal(err)
-	}
-	return run, &ev
+	return run, a.queuedInvoke(run)
 }
 
 func TestAskPanelRun_DraftToolHasNoMessageToCite(t *testing.T) {
@@ -1194,10 +1164,14 @@ func TestAskPanelRun_DraftToolHasNoMessageToCite(t *testing.T) {
 	if row.Status != "done" {
 		t.Fatalf("run = %+v, want done: a tool that refuses is an answer for the model, not a failure of the run", row)
 	}
-	var calls []ToolCall
-	if err := json.Unmarshal(row.ToolCalls, &calls); err != nil || len(calls) != 1 || calls[0].Name != "create_task_draft" ||
-		calls[0].Result != "" || !strings.Contains(calls[0].Error, "invalid") {
-		t.Errorf("tool_calls = %s (%v), want the refused call recorded with its error", row.ToolCalls, err)
+	calls := a.recordedCalls(id)
+	if len(calls) != 2 || calls[0].Name != "create_task_draft" || calls[0].Result != "" || !strings.Contains(calls[0].Error, "invalid") ||
+		calls[1].Name != "search_knowledge" || !calls[1].Forced {
+		t.Errorf("tool_calls = %+v, want the refused call recorded with its error, then the search the program made", calls)
+	}
+	// The model had nothing to source its text with, so the Ask is answered by the search, and its text is not.
+	if slip := a.answerOf(svc, id); slip.GetKind() != chatv1.ArtifactKind_ARTIFACT_KIND_NOT_FOUND || strings.Contains(slip.String(), "only draft") {
+		t.Errorf("slip = %v, want the NOT_FOUND slip of the program's search and nothing the model said", slip)
 	}
 	if n := a.count(`SELECT count(*) FROM tasks.tasks`); n != 0 {
 		t.Errorf("tasks = %d, want none", n)

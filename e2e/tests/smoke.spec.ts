@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { account, ask, attachFile, ghostsSeen, isPhone, signIn, signedIn, watchGhosts } from '../helpers';
 
 // The five flows the demo shows, in order, on the seeded workspace: each builds on the data the one before it left.
@@ -332,19 +332,52 @@ test('flow 2 live: a recording becomes a meeting summary', { tag: '@live' }, asy
   await context.close();
 });
 
+// The same fact as QUESTION_EN, asked again in other words and then in the other language: the conversation of the Ask panel
+// already holds its answer, which is where a real model is tempted to take it from instead of searching.
+const FOLLOW_UP_EN = 'In other words, what share of the Bang Na pallet positions is taken today?';
+const FOLLOW_UP_TH = 'ตอนนี้คลังสินค้าบางนาเต็มแค่ไหน';
 const QUESTION_TH_LIVE = 'วันเปิดตัวตามแผนไตรมาสสี่คือวันที่เท่าไร';
+
+/**
+ * Asks a follow-up on a topic the conversation already holds and checks only the structure of what comes back: every Ask is
+ * answered from the search of its own turn, so the newest slip has its REF and is either an answer with at least one source
+ * row or the not-found slip that says where it looked, and no slip of the thread is a failure. Returns that slip.
+ */
+async function askFollowUp(page: Page, thread: Locator, slips: Locator, question: string, settled: number): Promise<Locator> {
+  const failed = thread.locator('[data-tone="failed"]');
+  await ask(page, question);
+  await expect(slips.or(failed)).toHaveCount(settled, { timeout: LIVE_WAIT });
+  await expect(failed, 'the follow-up ended as a failed slip').toHaveCount(0);
+  await expect(thread).not.toContainText('something went wrong');
+  const slip = slips.first(); // newest first
+  if (await slip.evaluate((el) => el.classList.contains('ak-nf'))) {
+    await expect(slip.getByRole('list', { name: 'Channels searched' })).toBeVisible();
+  } else {
+    await expect(slip.locator('.kiwi-src').first()).toBeVisible();
+  }
+  return slip;
+}
+
 test('flow 4 live: questions get slips with a REF, a Thai one in Thai', { tag: '@live' }, async ({ browser }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
   const { context, page } = await signedIn(browser, 'alice');
   await page.goto('/ask');
   const thread = page.getByRole('log', { name: 'Questions and answers' });
   const slips = thread.locator('.kiwi-slip').filter({ hasText: /REF ANS-\d{4}/ });
   await ask(page, QUESTION_EN);
   await expect(slips).toHaveCount(1, { timeout: LIVE_WAIT });
-  // A different topic from the English question: the agent keeps its session, and a real model answers a follow-up on the same
-  // topic from that memory, without searching, which gives plain text with no source and no REF (not a slip).
+
+  // Follow-ups on the same topic, in English and then in Thai: each is a slip with a REF that cites a source or says nothing was
+  // found, never plain text from the conversation and never the failed slip. A Thai answer's text is marked as Thai.
+  await askFollowUp(page, thread, slips, FOLLOW_UP_EN, 2);
+  const thai = await askFollowUp(page, thread, slips, FOLLOW_UP_TH, 3);
+  if (!(await thai.evaluate((el) => el.classList.contains('ak-nf')))) {
+    await expect(thai.locator('.kiwi-prose [lang="th"]').first()).toBeVisible();
+  }
+
+  // Another topic, in Thai: an answer slip in Thai.
   await ask(page, QUESTION_TH_LIVE);
-  await expect(slips).toHaveCount(2, { timeout: LIVE_WAIT });
+  await expect(slips).toHaveCount(4, { timeout: LIVE_WAIT });
   await expect(slips.first().locator('.kiwi-prose [lang="th"]').first()).toBeVisible();
   await context.close();
 });

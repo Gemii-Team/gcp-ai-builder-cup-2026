@@ -52,12 +52,15 @@ type Final struct {
 }
 
 // ToolCall is one call of a tool as agents.runs records it: the arguments the model
-// wrote and either what the tool answered (cut when long) or why it failed.
+// wrote and either what the tool answered (cut when long) or why it failed. Forced marks
+// the one search the program made itself because the model of an Ask-panel run made none
+// (see service.search): the arguments are then the person's own question, not the model's.
 type ToolCall struct {
 	Name   string         `json:"name"`
 	Args   map[string]any `json:"args,omitempty"`
 	Result string         `json:"result,omitempty"`
 	Error  string         `json:"error,omitempty"`
+	Forced bool           `json:"forced,omitempty"`
 }
 
 // adkRuntime is the Runtime over the ADK: llmagent with the model of the spec's tier

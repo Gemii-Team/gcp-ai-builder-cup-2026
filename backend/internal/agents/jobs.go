@@ -426,11 +426,13 @@ func (s *service) findMessage(ctx context.Context, person authz.Actor, channel, 
 
 // execute runs the agent as the person the run is for, with the tools of this run, which
 // start from what the run's earlier attempts used (prior). It holds the conversation while
-// it runs, and its clock starts once it has it: one attempt may take s.runTimeout.
+// it runs, and its clock starts once it has it: one attempt may take s.runTimeout. A run of
+// the Ask panel whose model left nothing to build a slip from (it answered from the
+// conversation, or chatted) is searched for by the program, and what the model said is dropped.
 func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand, prior Prior, p *progress) (Final, *Collector, error) {
 	actor := authz.Actor{Kind: authz.ActorAgent, WorkspaceID: inv.ws, OnBehalfOf: inv.user, Agent: spec.Name}
 	col := &Collector{}
-	tools := NewTools(ToolDeps{
+	tb := newToolbox(ToolDeps{
 		Knowledge: s.knowledge, Tasks: s.tasks, Chat: s.chat, LLM: s.llm, Collector: col, Trigger: job.trigger, Prior: prior, Question: job.question,
 	})
 	sessionChannel := inv.channel
@@ -439,7 +441,7 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand
 	}
 	sess := Session{
 		ID: sessionID(spec.Name, inv.user, sessionChannel), UserID: inv.user.String(),
-		Service: newSessionService(s.db, inv.ws), Tools: tools,
+		Service: newSessionService(s.db, inv.ws), Tools: tb.tools(),
 	}
 
 	var final Final
@@ -457,6 +459,11 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand
 		var err error
 		final, err = s.runtime.Run(runCtx, spec, job.input, sess, func(delta string) {
 			bus.KeepAlive(runCtx)
+			// An Ask is answered by the slip of a search, and a model that has not searched yet may be
+			// answering from the conversation: its words are not previewed, as they are not kept.
+			if job.trigger == nil && col.empty() {
+				return
+			}
 			p.delta(runCtx, delta)
 		})
 		if err != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
@@ -467,7 +474,34 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand
 	if err != nil {
 		return Final{}, nil, err
 	}
+	if job.trigger == nil && col.empty() {
+		if err := s.search(ctx, inv, actor, tb); err != nil {
+			return Final{}, nil, err
+		}
+		final.Text = ""
+	}
 	return final, col, nil
+}
+
+// search is the retrieval of a run of the Ask panel that ended without one: the program
+// asks the knowledge domain itself, as the person's agent, with the person's own
+// question, through the call search_knowledge makes. The call is recorded on the run,
+// marked as forced, as the model's calls are. A person is answered from the retrieval of
+// their own turn: the conversation only helps the model word a search.
+func (s *service) search(ctx context.Context, inv invoke, actor authz.Actor, tb *toolbox) error {
+	searchCtx, cancel := context.WithTimeout(WithActor(ctx, actor), s.runTimeout)
+	defer cancel()
+	bus.KeepAlive(searchCtx)
+	call, err := tb.forceSearch(searchCtx)
+	if call.Name != "" {
+		if rerr := s.recordCall(ctx, inv, call); rerr != nil {
+			return rerr
+		}
+	}
+	if err != nil && errors.Is(searchCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		return fmt.Errorf("agents: run %s: no search within %s: %w", inv.run, s.runTimeout, errRunTimeout)
+	}
+	return err
 }
 
 // recordCall adds a tool call to the calls recorded on the run, as the call ends: they
@@ -487,7 +521,7 @@ func (s *service) recordCall(ctx context.Context, inv invoke, call ToolCall) err
 }
 
 // finish returns the Apply that ends the run: it numbers the slip, posts the reply to
-// the channel or keeps the answer for GetRun, and records the run's result, in the
+// the channel or keeps the slip for GetRun, and records the run's result, in the
 // transaction that records the message. A run that another delivery ended meanwhile makes
 // it fail with errRunEnded, which rolls back the REF it took and the reply it posted.
 func (s *service) finish(inv invoke, job errand, final Final, slip *chatv1.Artifact, text string, oc *outcome) outbox.Apply {
@@ -500,8 +534,6 @@ func (s *service) finish(inv invoke, job errand, final Final, slip *chatv1.Artif
 			}
 			slip.Ref, ref = n, &n
 		}
-		var result json.RawMessage
-		answer := slip
 		if job.trigger != nil {
 			actor := authz.Actor{Kind: authz.ActorAgent, WorkspaceID: inv.ws, OnBehalfOf: inv.user, Agent: inv.agent}
 			if _, err := s.chat.PostMessageTx(ctx, tx, actor, &chatv1.SendMessageRequest{
@@ -510,12 +542,12 @@ func (s *service) finish(inv invoke, job errand, final Final, slip *chatv1.Artif
 			}); err != nil {
 				return fmt.Errorf("agents: post the reply of run %s: %w", inv.run, err)
 			}
-		} else if answer == nil {
-			// An Ask-panel run has no channel to post to: its text is its answer.
-			answer = &chatv1.Artifact{BodyMarkdown: text, GeneratedAt: timestamppb.Now(), RunId: proto.String(inv.run.String())}
 		}
-		if answer != nil {
-			raw, err := protoJSON.Marshal(answer)
+		// An Ask-panel run has no channel to post to, and always has its slip (execute searches
+		// when the model did not): the slip is its answer, and GetRun and the DONE frame give it.
+		var result json.RawMessage
+		if slip != nil {
+			raw, err := protoJSON.Marshal(slip)
 			if err != nil {
 				return fmt.Errorf("agents: encode the answer of run %s: %w", inv.run, err)
 			}
@@ -531,7 +563,7 @@ func (s *service) finish(inv invoke, job errand, final Final, slip *chatv1.Artif
 		if n == 0 {
 			return fmt.Errorf("agents: complete run %s: %w", inv.run, errRunEnded)
 		}
-		oc.answer, oc.applied = answer, true
+		oc.answer, oc.applied = slip, true
 		return nil
 	}
 }
@@ -546,8 +578,9 @@ func tokens(n int) int32 { return int32(min(max(n, 0), math.MaxInt32)) }
 // slipOf builds the slip of what the run's tools returned, from the collector and
 // never from what the model wrote, so a slip carries only citations that were checked.
 // A found answer comes first, then a channel summary, then a search that found nothing
-// (a completed search, whose slip says where it looked). A run that used none of those
-// tools has no slip; the Ref is given by the transaction that posts it.
+// (a completed search, whose slip says where it looked). A mention run that used none of
+// those tools has no slip, and its reply is plain text; an Ask-panel run always has one
+// (see execute). The Ref is given by the transaction that posts it.
 func slipOf(col *Collector, question string, run uuid.UUID, now time.Time) *chatv1.Artifact {
 	slip := func(kind chatv1.ArtifactKind) *chatv1.Artifact {
 		return &chatv1.Artifact{
@@ -601,14 +634,19 @@ func mentionInput(channel uuid.UUID, author string, mentions []*chatv1.Mention, 
 	return b.String()
 }
 
-// askInput is what the model reads for an Ask-panel run: the question, and the
-// channel when the person asked about one.
+// askInput is what the model reads for an Ask-panel run: the question, with the reminder
+// that every question is searched for, and the channel when the person asked about one.
+// The reminder only makes a model that finds the answer in the conversation search anyway;
+// the program does not rely on it (see execute).
 func askInput(question string, channel *uuid.UUID) string {
 	if channel == nil {
-		return question
+		return fmt.Sprintf("[Context for your tools: %s.]\n\n%s", askReminder, question)
 	}
-	return fmt.Sprintf("[Context for your tools: this question is about the channel with id %s.]\n\n%s", channel, question)
+	return fmt.Sprintf("[Context for your tools: this question is about the channel with id %s; %s.]\n\n%s", channel, askReminder, question)
 }
+
+// askReminder is the sentence of askInput that sends a model to search first.
+const askReminder = "this question comes from the Ask panel, so call search_knowledge for it first, even if the conversation above already answers it"
 
 // oneLine makes a name safe to put in the bracketed context line.
 func oneLine(s string) string {

@@ -190,6 +190,13 @@ func (c *Collector) Summary() *ChannelSummary {
 	return c.summary.clone()
 }
 
+// empty reports whether no tool has left anything to build a slip from.
+func (c *Collector) empty() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.answer == nil && c.summary == nil
+}
+
 func (c *Collector) recordAnswer(a *knowledgev1.Answer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -227,7 +234,11 @@ type toolbox struct {
 // reach the model as the tools word them (see forModel): never as an upstream service
 // worded them. NewTools panics when a service is missing, which is a mistake of the
 // program that wires it.
-func NewTools(d ToolDeps) map[string]tool.Tool {
+func NewTools(d ToolDeps) map[string]tool.Tool { return newToolbox(d).tools() }
+
+// newToolbox is the toolbox of one run, started from what d.Prior says its earlier attempts
+// used. It panics when a service is missing.
+func newToolbox(d ToolDeps) *toolbox {
 	switch {
 	case d.Knowledge == nil:
 		panic("agents: ToolDeps.Knowledge is required")
@@ -246,6 +257,11 @@ func NewTools(d ToolDeps) map[string]tool.Tool {
 			Ref: p.Ref, ChannelID: p.ChannelID, Title: p.Title, State: p.State, OwnerUserID: p.OwnerUserID, DueDate: p.DueDate,
 		})
 	}
+	return tb
+}
+
+// tools is the toolbox as the model reads it, by name.
+func (tb *toolbox) tools() map[string]tool.Tool {
 	return map[string]tool.Tool{
 		toolSearchKnowledge: newTool(toolSearchKnowledge,
 			"Answer a question from what the channels, meetings and documents of the person you act for say. "+
@@ -494,9 +510,7 @@ type citationView struct {
 	Quote string `json:"quote"`
 }
 
-// searchKnowledge asks the knowledge domain as the agent actor, so the search covers
-// the channels of the invoking user and no others, and keeps the validated answer for
-// the slip. A not-found answer is kept as well: it is a completed search.
+// searchKnowledge is the tool: the question the model wrote, searched by ask.
 func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (searchKnowledgeResult, error) {
 	a, err := tb.begin(ctx)
 	if err != nil {
@@ -509,6 +523,14 @@ func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (s
 	if err := tooLong("question", question, maxQuestionArgRunes); err != nil {
 		return searchKnowledgeResult{}, err
 	}
+	return tb.ask(ctx, a, question)
+}
+
+// ask asks the knowledge domain as the agent actor, so the search covers the channels of
+// the invoking user and no others, and keeps the validated answer for the slip. A
+// not-found answer is kept as well: it is a completed search. It is the one retrieval of
+// a run: the tool calls it with the model's question and forceSearch with the person's.
+func (tb *toolbox) ask(ctx context.Context, a authz.Actor, question string) (searchKnowledgeResult, error) {
 	// The model writes the question it searches with and often translates it: the answer is in the language of the person.
 	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question, AnswerLang: personLang(tb.Question, question)})
 	if err != nil {
@@ -521,6 +543,36 @@ func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (s
 		out.Citations = append(out.Citations, citationView{N: int(c.GetN()), Label: c.GetSource().GetLabel(), Quote: c.GetQuote()})
 	}
 	return out, nil
+}
+
+// forceSearch is the search the program makes when a run of the Ask panel ended with
+// nothing for a slip to be built from: the model answered from the conversation, or
+// chatted. It is the call of search_knowledge (the same retrieval as the same actor, so
+// the person's channels and no others, and its answer in the collector) over the
+// question the person wrote, and it spends a call of the run's budget like any other.
+// The call comes back for the run's record, marked as forced and, when the search
+// failed, with the error as the model would have read it. When the budget is used up
+// nothing is searched and the error says the run took too many steps.
+func (tb *toolbox) forceSearch(ctx context.Context) (ToolCall, error) {
+	a, err := invoker(ctx)
+	if err != nil {
+		return ToolCall{}, err
+	}
+	if err := tb.spendCall(); err != nil {
+		return ToolCall{}, fmt.Errorf("agents: no tool call is left to search with: %w", errTooManySteps)
+	}
+	call := ToolCall{Name: toolSearchKnowledge, Args: map[string]any{"question": tb.Question}, Forced: true}
+	out, err := tb.ask(ctx, a, tb.Question)
+	if err != nil {
+		call.Error = forModel(ctx, toolSearchKnowledge, err).Error()
+		return call, err
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return call, fmt.Errorf("agents: encode the forced search: %w", err)
+	}
+	call.Result = clip(string(raw), maxRecordedResult)
+	return call, nil
 }
 
 // ---- create_task_draft ------------------------------------------------------
