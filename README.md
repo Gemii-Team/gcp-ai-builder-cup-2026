@@ -13,7 +13,7 @@ Every statement here about how something was checked says whether it was **autom
 | 1 | Sign in and chat | Sign in with Google and land in `#general`. A message in English or Thai reaches the other member without a reload; a message sent while offline waits, says so, and arrives once when the connection is back. |
 | 2 | Meeting summary and action items | A recording uploaded to a channel becomes a summary slip with its decisions, open questions and action items, and AI drafts of the tasks. A Google Meet started from a channel is built to feed the same pipeline, but no real Meet transcript has been obtained (see [Limitations](#limitations-of-this-phase)), so the demo runs this flow on the recording upload. |
 | 3 | AI-drafted tasks on the Board | The AI's drafts wait for a person. Pick an owner, press Confirm: the stub tears away, the slip is sealed, and the task lands in To do, from where a menu moves it on. |
-| 4 | Cited answers in English and Thai | Ask a question on the Ask page. The answer is a slip with a REF code and clickable sources; a Thai question gets a Thai answer. Someone who is not a member of a channel gets a "not found in channels you can access" answer, never its content. |
+| 4 | Cited answers in English and Thai | Ask a question on the Ask page. The answer is a slip with a REF code and clickable sources; a Thai question gets a Thai answer. Every Ask is answered from a search made for that question itself, never from the earlier conversation, so an answer always carries its sources; when nothing is found, the not-found slip says so and names the channels searched. Someone who is not a member of a channel gets a "not found in channels you can access" answer, never its content. |
 | 5 | Instant file summaries | Attach a file to a channel and its summary slip arrives with a REF code. A type that is not supported is refused where it is attached; a scan with no text layer fails with its reason and a Retry button. |
 
 Every AI result is a **slip**: it carries its sources and a REF code (`MTG-…` for a meeting, `DOC-…` for a file, `ANS-…` for an answer, `TSK-…` for a task). A failed attempt shows its reason with Retry and issues no REF.
@@ -143,7 +143,7 @@ task seed -- --members you@gmail.com
 
 With `--members` alone, `task seed` creates the one workspace without a Google domain, called "Team". Two demo people, Nok and Pim, on the reserved `.invalid` top-level domain (no Google account can have such an address), own the channels and write the demo conversation; the addresses you list are plain members of the public channels and cannot read the private one. Separate several addresses with commas. Add `--domain <workspace domain>` (together with `--members`) only if your team has a Google Workspace domain.
 
-Switching overlays keeps the data that is already in the cluster: a `demo.example` workspace seeded on the mock stack coexists with "Team". Only `task local:down` deletes it.
+Switching overlays keeps the data that is already in the cluster: a `demo.example` workspace seeded on the mock stack coexists with "Team". Three commands remove it: `task local:down`, and `task smoke` and `task reset` ([Testing](#testing)), which wipe the workspace data of the cluster, a real-Google "Team" workspace and its Meet grant included.
 
 How this was checked: **real-condition**, by a human, once, through an External/Testing OAuth client: the consent screen, then the "has not been invited" page for a test user who was not yet seeded, then the sign-in of the invited test user. The `hd` (Workspace) branch is built and tested but cannot be exercised for real without a Workspace domain: **automated** and **simulated** checks only.
 
@@ -158,10 +158,12 @@ KIWI_LIVE_E2E=1 task smoke
 
 - `task test` runs the Go tests with the race detector, then the TypeScript tests. The Go tests start real Postgres and Valkey containers, so Docker must be running. On rootless Docker, if starting containers fails with `bind: address already in use`, run `cd backend && go test -race -p 1 ./...` instead.
 - `task lint` checks Go formatting, runs golangci-lint and the TypeScript linters.
-- `task smoke` runs the five flows in headless Chromium (a desktop viewport; flows 1 and 3 again at a 390x844 phone viewport) against the cluster, from a clean state, with a recorded LLM and the mock sign-in, so it needs no model session. **It deletes the application data in the cluster first**, seeds `demo.example`, and leaves the cluster on the `mockauth` overlay. Flags after `--` go to Playwright. It builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set; elsewhere, point that variable at a Playwright browsers directory.
+- `task smoke` runs the five flows in headless Chromium (a desktop viewport; flows 1 and 3 again at a 390x844 phone viewport) from a clean seed, with a recorded LLM and the mock sign-in, so it needs no model session. **It wipes the workspace data of the cluster** (every table of the application schemas and Valkey: a real-Google "Team" workspace and its Meet grant included), seeds `demo.example` with alice and bob, and runs the suite. It installs the JavaScript dependencies as the lockfile has them, builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set (elsewhere, point that variable at a Playwright browsers directory with the chromium headless shell that the pinned `@playwright/test` runs), and at the end removes the older Tilt-built images from the host (the newest of each repository, and every image a container uses, are kept). A machine with the five LLM values (`KIWI_LLM_BASE_URL`, `KIWI_LLM_API_KEY`, `KIWI_LLM_MODEL_FLASH`, `KIWI_LLM_MODEL_PRO`, `KIWI_ASR_MODEL`) in `.env` ends on the `mockauth` overlay, wiped again and freshly seeded with the default seed (`demo.example`: alice and bob). A machine without them cannot start `mockauth`: it ends on the `smoke` overlay, still holding the replay's seed, and says so on its last line. Flags after `--` go to Playwright; `task smoke -- --list` lists the suite and touches nothing.
 - The smoke suite never touches live Meet: flow 2 goes through the WAV recording upload, with a recorded transcript.
-- `KIWI_LIVE_E2E=1 task smoke` runs the `@live` tests against the real LiteLLM and Ollama (overlay `mockauth`) instead of the recorded LLM. It is opt-in and never part of the default run; it needs real values in `.env`.
+- `KIWI_LIVE_E2E=1 task smoke` runs the three `@live` tests (flows 2, 4 and 5) against the real LiteLLM and Ollama (overlay `mockauth` throughout) instead of the recorded LLM. It is opt-in and never part of the default run; it needs the five LLM values in `.env`. It wipes and seeds the same way, and ends on `mockauth`, freshly seeded.
+- `task reset` wipes the workspace data of the running cluster and nothing else: kiwi is stopped while the tables are truncated, Valkey is flushed, kiwi is started again; run `task seed` afterwards.
 - `task reindex` rebuilds the knowledge embeddings after you change the embedding model.
+- `bash scripts/smoke/run.test.sh` tests the end of `task smoke` and `task reset` (the order of their steps, what they refuse, their exit status and last line) with every program they call replaced by a stub, so it needs no cluster. It is not part of CI.
 
 Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race tests; lint, typecheck and tests of the web workspaces) and the hygiene workflow (no private paths, no secrets). Neither builds an image or deploys.
 
@@ -179,11 +181,11 @@ Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race test
 | The Meet tab opened with `authuser=<your email>` | A human, in a real browser signed in to several Google accounts (Google documents nothing about the parameter) | **real-condition** |
 | Meet offering a transcript to a personal Gmail account | A human, against the real Meet API, in three calls: the poll saw each conference start and end, Meet offered neither Transcripts nor "Take notes", and no transcript was exposed | **real-condition**: unavailable for a personal Gmail account |
 | Meet transcript polling and ingestion | Go tests with a fake Google client | **simulated**: no real transcript has been ingested |
-| The five flows in a browser | The five-flow Playwright suite (recorded LLM, mock sign-in, headless Chromium; desktop, and flows 1 and 3 also at 390x844) | **simulated** |
+| The five flows in a browser | `task smoke` (the replay run: recorded LLM, mock sign-in, headless Chromium; desktop, and flows 1 and 3 also at 390x844), run on the k3d cluster twice in a row through the task itself: 9 tests each (6 desktop, 3 phone), all passed | **automated** and **simulated**: headless browsers, not a device |
 | Go and TypeScript logic | `task test`: real Postgres and Valkey in containers, jsdom for the web | **automated** |
-| The real LLM and embeddings | The opt-in `KIWI_LIVE_E2E=1 task smoke` only | **real-condition** when run; not part of the default checks |
+| The real LLM and embeddings | `KIWI_LIVE_E2E=1 task smoke`, once, through the task itself on the k3d cluster: the 3 live tests passed (flow 2 with one real WAV transcription, flow 4 with four Ask runs in English and Thai that each ended in a slip with its REF, flow 5 with a file summary) and the end-of-run wipe and default seed completed | **real-condition** for the LLM and the embeddings only; the sign-in (mock) and the headless Chromium are still **simulated** |
 
-The five-flow suite has been run on a local docker harness (the real `kiwi`, the recorded LLM, the mock sign-in and headless Chromium; **simulated**), but not through `task smoke`: its first full run on the k3d cluster is pending.
+These runs were made on one machine; CI does not run them. The default checks are `task test` and the pull-request workflows.
 
 Real-device behaviour of everything on the web side is **simulated** (headless Chromium, jsdom): a physical phone and installing the app as a PWA have not been checked.
 
@@ -217,6 +219,7 @@ Real-device behaviour of everything on the web side is **simulated** (headless C
 - **Unsent messages are lost on reload.**
 - A recording's pending or failed slip follows only the browser session that uploaded it: after a reload, a failed recording shows no slip.
 - The message `Meeting started: <link>` is posted under the `@assistant` label: the API has no system author kind.
+- An @mention of the assistant in a channel can still be answered in plain text with no source and no REF; only the Ask page always ends in a slip with its sources.
 - Not built: typing and presence indicators, rate limits and spend budgets, Board drag and drop (cards move through a menu).
 - No claim about users, connections or requests per second is made for this phase.
 
