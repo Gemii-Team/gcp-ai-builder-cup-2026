@@ -324,7 +324,7 @@ kiwi_env_differs_only_in_oidc() {
   local changed rc=0 pair kind name
   { [ -s "$RENDER" ] && [ -s "$MOCK" ]; } || { echo "nothing rendered"; return 1; }
   changed=$(diff <(config_data "$RENDER") <(config_data "$MOCK") | sed -nE 's/^[<>] ([A-Z0-9_]+)=.*/\1/p' | sort -u | tr '\n' ' ')
-  [ "$changed" = "KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER " ] || { printf 'kiwi-config differs in: %s\nwant: KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER\n' "$changed"; rc=1; }
+  [ "$changed" = "KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER KIWI_WORKSPACE_DOMAIN KIWI_WORKSPACE_NAME " ] || { printf 'kiwi-config differs in: %s\nwant: KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER KIWI_WORKSPACE_DOMAIN KIWI_WORKSPACE_NAME\n' "$changed"; rc=1; }
   # The workloads that read it are the same documents.
   for pair in "Deployment kiwi" "Job migrate" "Deployment valkey" "Deployment postgres"; do
     read -r kind name <<<"$pair"
@@ -332,11 +332,12 @@ kiwi_env_differs_only_in_oidc() {
   done
   config_data "$MOCK" | grep -qxF 'KIWI_OIDC_ISSUER=http://localhost:8080/mockoidc' || { echo "KIWI_OIDC_ISSUER is not http://localhost:8080/mockoidc"; rc=1; }
   config_data "$MOCK" | grep -qxF 'KIWI_OIDC_INTERNAL_URL=http://mockoidc:8090/mockoidc' || { echo "KIWI_OIDC_INTERNAL_URL is not http://mockoidc:8090/mockoidc"; rc=1; }
+  config_data "$MOCK" | grep -qxF 'KIWI_WORKSPACE_DOMAIN=demo.example' || { echo "KIWI_WORKSPACE_DOMAIN is not demo.example"; rc=1; }
   # The mock addresses are accepted only because this stays local.
   config_data "$MOCK" | grep -qxF 'KIWI_ENV=local' || { echo "KIWI_ENV is not local"; rc=1; }
   return "$rc"
 }
-check "mockauth: the kiwi environment differs from local only in KIWI_OIDC_ISSUER and KIWI_OIDC_INTERNAL_URL" kiwi_env_differs_only_in_oidc
+check "mockauth: the kiwi environment differs from local only in the OIDC addresses and the workspace heading" kiwi_env_differs_only_in_oidc
 
 # --- the Postgres bootstrap and its probe ----------------------------------------
 # Pinned here and, from the other side, by backend/internal/testkit/dbtest

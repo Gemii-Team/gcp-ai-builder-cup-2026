@@ -127,7 +127,7 @@ k8s_resource(
 
 if web_enabled:
     # The host builds the bundle; a change is synced into the running Caddy
-    # container (apps/web/Dockerfile serves /srv) instead of rebuilding the image.
+    # container (apps/web/Dockerfile serves /usr/share/caddy) instead of rebuilding the image.
     local_resource(
         'web-build',
         cmd='pnpm --filter web build',
@@ -141,7 +141,7 @@ if web_enabled:
         dockerfile='apps/web/Dockerfile',
         only=['apps/web', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json'],
         ignore=['**/node_modules'],
-        live_update=[sync('apps/web/dist', '/srv')],
+        live_update=[sync('apps/web/dist', '/usr/share/caddy')],
     )
     k8s_resource(
         'web',
