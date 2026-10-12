@@ -433,7 +433,8 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand
 	actor := authz.Actor{Kind: authz.ActorAgent, WorkspaceID: inv.ws, OnBehalfOf: inv.user, Agent: spec.Name}
 	col := &Collector{}
 	tb := newToolbox(ToolDeps{
-		Knowledge: s.knowledge, Tasks: s.tasks, Chat: s.chat, LLM: s.llm, Collector: col, Trigger: job.trigger, Prior: prior, Question: job.question,
+		Knowledge: s.knowledge, Tasks: s.tasks, Chat: s.chat, LLM: s.llm, Collector: col, Trigger: job.trigger, Channel: inv.channel,
+		Prior: prior, Question: job.question,
 	})
 	sessionChannel := inv.channel
 	if job.trigger == nil {

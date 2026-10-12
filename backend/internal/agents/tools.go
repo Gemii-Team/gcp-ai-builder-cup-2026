@@ -103,6 +103,12 @@ type ToolDeps struct {
 	// Trigger is the message that started the run; nil for a run of the Ask panel,
 	// which has none. A draft the run proposes cites it as its source.
 	Trigger *Trigger
+	// Channel is the only channel the run searches: the one the run was asked in, which
+	// is the channel of the @mention that started it, or the one an Ask-panel request
+	// named. A reply is read by the audience of the channel it is posted in, so a run
+	// never carries another channel's content into it. nil, an Ask-panel run with no
+	// channel, searches every channel of the person, which only they read.
+	Channel *uuid.UUID
 	// Prior is what earlier attempts of the same run already did. The zero value is a
 	// run that has done nothing.
 	Prior Prior
@@ -526,13 +532,14 @@ func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (s
 	return tb.ask(ctx, a, question)
 }
 
-// ask asks the knowledge domain as the agent actor, so the search covers the channels of
-// the invoking user and no others, and keeps the validated answer for the slip. A
+// ask asks the knowledge domain as the agent actor, so the search covers the channel the
+// run was asked in (tb.Channel), or every channel of the invoking user when there is
+// none, and no others, and keeps the validated answer for the slip. A
 // not-found answer is kept as well: it is a completed search. It is the one retrieval of
 // a run: the tool calls it with the model's question and forceSearch with the person's.
 func (tb *toolbox) ask(ctx context.Context, a authz.Actor, question string) (searchKnowledgeResult, error) {
 	// The model writes the question it searches with and often translates it: the answer is in the language of the person.
-	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question, AnswerLang: personLang(tb.Question, question)})
+	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question, ChannelID: tb.Channel, AnswerLang: personLang(tb.Question, question)})
 	if err != nil {
 		return searchKnowledgeResult{}, err
 	}
@@ -548,7 +555,7 @@ func (tb *toolbox) ask(ctx context.Context, a authz.Actor, question string) (sea
 // forceSearch is the search the program makes when a run of the Ask panel ended with
 // nothing for a slip to be built from: the model answered from the conversation, or
 // chatted. It is the call of search_knowledge (the same retrieval as the same actor, so
-// the person's channels and no others, and its answer in the collector) over the
+// the run's channel, or the person's channels when it has none, and no others, and its answer in the collector) over the
 // question the person wrote, cut to the bound of the tool's own question so that a long
 // pasted one is searched as the model's would be and not failed, and it spends a call of
 // the run's budget like any other. made says whether a call was made, and so whether it
