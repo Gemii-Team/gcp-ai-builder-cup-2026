@@ -1187,3 +1187,61 @@ func TestAsk_AnswerLangOverridesTheLanguageOfTheQuestion(t *testing.T) {
 		}
 	}
 }
+
+// The not-found answer is a completed answer too, and it is written in the language the caller asks for: a Thai person whose
+// agent searched with an English question is told in Thai that nothing was found, on both ways to find nothing.
+func TestAsk_AnswerLangDecidesTheLanguageOfTheNotFoundAnswer(t *testing.T) {
+	f := newFixture(t)
+	f.doc(f.private, "hr.pdf", "Salary bands for Q4: senior engineers earn 90,000 baht.")
+	bob := userActor(f.ws, f.bob)
+
+	// Nothing to read: bob cannot read the only chunk, and the model is not asked.
+	ans, err := f.svc.Ask(t.Context(), bob, AskInput{Question: "What is the salary band of a senior engineer?", AnswerLang: "th"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	requireNotFound(t, ans, "th", notFoundTH, f.public)
+	if n := len(f.llm.GenerateCalls()); n != 0 {
+		t.Errorf("the model was asked %d times about a question with no chunk to read", n)
+	}
+
+	// Chunks to read, and an answer that cites none of them.
+	f.topics(topic{"pallets", 0})
+	f.docChunk(f.doc(f.public, "ops.pdf", "The warehouse holds 4,000 pallets."), 1)
+	f.reply(answerResult("It holds 4,000 pallets."))
+	ans, err = f.svc.Ask(t.Context(), userActor(f.ws, f.alice), AskInput{Question: "How many pallets fit in the warehouse?", AnswerLang: "th"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	requireNotFound(t, ans, "th", notFoundTH, f.public, f.private)
+
+	// Without it the language is the question's.
+	f.reply(answerResult("It holds 4,000 pallets."))
+	ans, err = f.svc.Ask(t.Context(), userActor(f.ws, f.alice), AskInput{Question: "How many pallets fit in the warehouse?"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	requireNotFound(t, ans, "en", notFoundEN, f.public, f.private)
+}
+
+// A language the answer can be asked in has its directive and its not-found text: a language added to one table and not the
+// other would answer without a directive, or not find in words.
+func TestAnswerLanguages_DirectiveAndNotFoundCoverTheSameLanguages(t *testing.T) {
+	var directives, texts []string
+	for lang := range languageDirective {
+		directives = append(directives, lang)
+	}
+	for lang := range notFound {
+		texts = append(texts, lang)
+	}
+	slices.Sort(directives)
+	slices.Sort(texts)
+	if !slices.Equal(directives, texts) {
+		t.Errorf("languageDirective has %v and notFound has %v, want the same languages", directives, texts)
+	}
+	for _, lang := range []string{"en", "th"} {
+		if _, ok := languageDirective[lang]; !ok {
+			t.Errorf("languageDirective lacks %q, a language DetectLang returns", lang)
+		}
+	}
+}
