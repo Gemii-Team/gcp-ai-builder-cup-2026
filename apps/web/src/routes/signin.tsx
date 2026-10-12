@@ -13,7 +13,7 @@ function text(value: unknown): string | undefined {
 
 /**
  * What the server and the guards put in the query of `/signin`: `return_to` (where to go after), `error` (a code of the
- * OAuth callback) with `email` (the address a `domain_not_allowed` rejected) and `signedout=1` (after sign-out).
+ * OAuth callback) with `email` (the address a `domain_not_allowed` or `not_invited` rejected) and `signedout=1` (after sign-out).
  */
 function parseSignInSearch(search: Record<string, unknown>) {
   return {

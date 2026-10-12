@@ -26,6 +26,8 @@ export const th: I18nTable = {
   signInErrorDomainNotAllowed: 'ใช้บัญชี <en>Google Workspace</en> ของบริษัทคุณ',
   signInErrorAccessDenied: 'การลงชื่อเข้าใช้ด้วย <en>Google</en> ถูกยกเลิก ลองอีกครั้ง',
   signInErrorExchangeFailed: 'ลงชื่อเข้าใช้ด้วย <en>Google</en> ไม่สำเร็จ ลองอีกครั้ง',
+  signInNotInvited: 'ยังไม่ได้รับเชิญเข้าร่วมพื้นที่ทำงานนี้ ขอให้สมาชิกในพื้นที่ทำงานเพิ่มคุณ',
+  signInErrorNotInvited: 'บัญชีนี้ยังไม่ได้รับเชิญเข้าร่วมพื้นที่ทำงานนี้ ขอให้สมาชิกในพื้นที่ทำงานเพิ่มคุณ',
   languageLabel: 'ภาษา',
 
   // Shell: rail, tab bar and account

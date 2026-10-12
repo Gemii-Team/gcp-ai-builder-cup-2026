@@ -166,7 +166,7 @@ describe('error codes', () => {
     expect([...keys]).toHaveLength(ERROR_CODES.length);
   });
 
-  it('names the rejected address only for domain_not_allowed, and the workspace only when there is one', () => {
+  it('names the rejected address only for domain_not_allowed and not_invited, and the workspace only when there is one', () => {
     expect(signInErrorNotice('domain_not_allowed', { email: 'pim@gmail.com', workspaceName: 'Siam Riverside Trading' })).toEqual({
       key: 'signInNotInWorkspace',
       email: 'pim@gmail.com',
@@ -176,6 +176,11 @@ describe('error codes', () => {
       email: 'pim@gmail.com',
     });
     expect(signInErrorNotice('domain_not_allowed', { workspaceName: 'Siam Riverside Trading' })).toEqual({ key: 'signInErrorDomainNotAllowed' });
+    expect(signInErrorNotice('not_invited', { email: 'pim@gmail.com', workspaceName: 'Siam Riverside Trading' })).toEqual({
+      key: 'signInNotInvited',
+      email: 'pim@gmail.com',
+    });
+    expect(signInErrorNotice('not_invited', { workspaceName: 'Siam Riverside Trading' })).toEqual({ key: 'signInErrorNotInvited' });
     expect(signInErrorNotice('access_denied', { email: 'pim@gmail.com', workspaceName: 'Siam Riverside Trading' })).toEqual({ key: 'signInErrorAccessDenied' });
   });
 
@@ -188,6 +193,7 @@ describe('error codes', () => {
     ['domain_not_allowed', 'Use your company Google Workspace account.'],
     ['access_denied', 'Google sign-in was cancelled. Try again.'],
     ['exchange_failed', "Couldn't finish signing in with Google. Try again."],
+    ['not_invited', 'This account has not been invited to this workspace. Ask someone who is in it to add you.'],
     ['server_error', "Couldn't finish signing in with Google. Try again."],
   ])('shows ?error=%s above the button, as an alert', async (code, message) => {
     openSignIn(`?error=${code}`);
@@ -228,6 +234,33 @@ describe('error codes', () => {
     openSignIn('?error=domain_not_allowed&email=pim%40gmail.com');
 
     expect(await screen.findByRole('alert')).toHaveTextContent("pim@gmail.com isn't part of this Google Workspace. Sign in with your work account.");
+  });
+
+  it('SignIn_NotInvitedNamesTheAddressInMonoAndSaysWhoCanAddThem', async () => {
+    openSignIn('?error=not_invited&email=pim%40gmail.com');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('pim@gmail.com has not been invited to this workspace. Ask someone who is in it to add you.');
+    expect(within(alert).getByText('pim@gmail.com')).toHaveClass('font-mono');
+    expect(within(alert).getByText('pim@gmail.com')).toHaveAttribute('lang', 'en');
+  });
+
+  it('says not_invited in Thai, whole, with the address as the only Latin run', async () => {
+    useUiStore.getState().setLang('th');
+    openSignIn('?error=not_invited&email=pim%40gmail.com');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('pim@gmail.com ยังไม่ได้รับเชิญเข้าร่วมพื้นที่ทำงานนี้ ขอให้สมาชิกในพื้นที่ทำงานเพิ่มคุณ');
+    expect(within(alert).getByText('pim@gmail.com')).toHaveAttribute('lang', 'en');
+    expect(within(alert).getByText('pim@gmail.com')).toHaveClass('font-mono');
+  });
+
+  it('does not leave not_invited without a sentence when the server named no address', async () => {
+    openSignIn('?error=not_invited');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This account has not been invited to this workspace. Ask someone who is in it to add you.');
+    expect(within(alert).queryByText(/@/)).toBeNull();
   });
 });
 

@@ -30,6 +30,8 @@ export const en = {
   signInErrorDomainNotAllowed: 'Use your company Google Workspace account.',
   signInErrorAccessDenied: 'Google sign-in was cancelled. Try again.',
   signInErrorExchangeFailed: "Couldn't finish signing in with Google. Try again.",
+  signInNotInvited: 'has not been invited to this workspace. Ask someone who is in it to add you.',
+  signInErrorNotInvited: 'This account has not been invited to this workspace. Ask someone who is in it to add you.',
   languageLabel: 'Language',
 
   // Shell: rail, tab bar and account
