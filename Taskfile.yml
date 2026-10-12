@@ -63,3 +63,8 @@ tasks:
     desc: Rebuild the knowledge embeddings in the running cluster (after changing KIWI_EMBED_MODEL)
     cmds:
       - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi reindex {{.CLI_ARGS}}
+
+  smoke:
+    desc: "Run the five flows in headless Chromium against the k3d stack from a clean state (recorded LLM, mock sign-in); KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM instead; flags after -- go to Playwright"
+    cmds:
+      - bash scripts/smoke/run.sh {{.CLI_ARGS}}

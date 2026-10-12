@@ -36,3 +36,7 @@ dist/
 coverage/
 # turbo writes one when run; never commit it
 /AGENTS.md
+
+# Playwright output of the smoke suite
+/e2e/test-results/
+/e2e/playwright-report/
