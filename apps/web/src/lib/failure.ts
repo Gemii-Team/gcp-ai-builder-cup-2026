@@ -3,8 +3,9 @@ import { webReason } from './serverReasons';
 
 /**
  * The reasons the server gives for a file it will not take: the `<reason>` of `docs: upload rejected (<reason>): <detail>`
- * (the Connect error `CompleteUpload` answers with) and the `failure_reason` of a failed file (`file_status_changed`,
- * `GetFile`). The same words, so a rejected upload and a failed file slip say the same thing for the same reason.
+ * (the Connect error that both `CreateUpload` and `CompleteUpload` answer with) and the `failure_reason` of a failed
+ * file (`file_status_changed`, `GetFile`). The same words, so a rejected upload and a failed file slip say the same
+ * thing for the same reason.
  */
 export const REJECTION_REASONS = ['empty', 'too_large', 'unsupported_type', 'unsupported_audio', 'size_mismatch'] as const;
 
