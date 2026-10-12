@@ -103,11 +103,13 @@ type ToolDeps struct {
 	// Trigger is the message that started the run; nil for a run of the Ask panel,
 	// which has none. A draft the run proposes cites it as its source.
 	Trigger *Trigger
-	// Channel is the only channel the run searches: the one the run was asked in, which
+	// Channel is the only channel the run looks at: the one the run was asked in, which
 	// is the channel of the @mention that started it, or the one an Ask-panel request
 	// named. A reply is read by the audience of the channel it is posted in, so a run
-	// never carries another channel's content into it. nil, an Ask-panel run with no
-	// channel, searches every channel of the person, which only they read.
+	// never carries another channel's content into it: the search is scoped to it, and
+	// summarize_channel, list_tasks and create_task_draft refuse any other channel.
+	// nil, an Ask-panel run with no channel, looks at every channel of the person, which
+	// only they read.
 	Channel *uuid.UUID
 	// Prior is what earlier attempts of the same run already did. The zero value is a
 	// run that has done nothing.
@@ -496,6 +498,15 @@ func idArg(raw, what string) (uuid.UUID, error) {
 	return id, nil
 }
 
+// inScope refuses a channel the model named that is not the one the run was asked in. The
+// error is fixed: it names no id and no other channel, and it is what the model reads.
+func (tb *toolbox) inScope(channel uuid.UUID) error {
+	if tb.Channel != nil && channel != *tb.Channel {
+		return refuse(errs.ErrForbidden, "in this conversation you can only look at the channel it was asked in")
+	}
+	return nil
+}
+
 // ---- search_knowledge -------------------------------------------------------
 
 type searchKnowledgeArgs struct {
@@ -621,6 +632,9 @@ func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (c
 	if err != nil {
 		return createTaskDraftResult{}, err
 	}
+	if err := tb.inScope(channel); err != nil {
+		return createTaskDraftResult{}, err
+	}
 	title := strings.TrimSpace(in.Title)
 	if err := tooLong("title", title, maxTaskTitleRunes); err != nil {
 		return createTaskDraftResult{}, err
@@ -727,6 +741,9 @@ func (tb *toolbox) listTasks(ctx agent.Context, in listTasksArgs) (listTasksResu
 	}
 	channel, err := idArg(in.ChannelID, "channel_id")
 	if err != nil {
+		return listTasksResult{}, err
+	}
+	if err := tb.inScope(channel); err != nil {
 		return listTasksResult{}, err
 	}
 	found, err := tb.Tasks.ListTasks(ctx, a, tasks.ListTasksQuery{ChannelID: &channel})
@@ -838,6 +855,9 @@ func (tb *toolbox) summarizeChannel(ctx agent.Context, in summarizeChannelArgs) 
 	}
 	channel, err := idArg(in.ChannelID, "channel_id")
 	if err != nil {
+		return summarizeChannelResult{}, err
+	}
+	if err := tb.inScope(channel); err != nil {
 		return summarizeChannelResult{}, err
 	}
 	n := in.LastN
