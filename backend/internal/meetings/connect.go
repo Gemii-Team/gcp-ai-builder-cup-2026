@@ -36,11 +36,11 @@ func (s *connectServer) StartMeeting(ctx context.Context, req *connect.Request[m
 	if err != nil {
 		return nil, err
 	}
-	m, err := s.svc.StartMeeting(ctx, s.actor(ctx), channelID)
+	res, err := s.svc.StartMeeting(ctx, s.actor(ctx), channelID)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&meetingsv1.StartMeetingResponse{Meeting: m}), nil
+	return connect.NewResponse(res), nil
 }
 
 func (s *connectServer) CreateFromRecording(ctx context.Context, req *connect.Request[meetingsv1.CreateFromRecordingRequest]) (*connect.Response[meetingsv1.CreateFromRecordingResponse], error) {

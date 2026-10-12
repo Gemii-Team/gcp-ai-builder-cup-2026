@@ -518,13 +518,17 @@ func within(got, want time.Time) bool { return got.Sub(want).Abs() <= time.Secon
 func TestStartMeeting_CreatesSpaceAndPostsLink(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("public", f.alice, f.bob)
-	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI, Code: "abc-defg-hij"}})
+	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI, Code: "abc-defg-hij", TranscriptionAutomatic: true}})
 
-	got, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	res, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
 	if err != nil {
 		t.Fatalf("StartMeeting: %v", err)
 	}
 
+	got := res.GetMeeting()
+	if !res.GetTranscriptionAutomatic() {
+		t.Error("the response says the host must turn transcription on; the space has it switched on")
+	}
 	if got.GetStatus() != meetingsv1.MeetingStatus_MEETING_STATUS_PENDING || got.GetRef() != "MTG-1001" ||
 		got.GetMeetUri() != meetURI || got.GetChannelId() != ch.String() || got.GetTitle() != "Meeting 2026-10-11" {
 		t.Fatalf("meeting = %v, want a pending MTG-1001 for the channel with the Meet link", got)
@@ -601,6 +605,70 @@ func TestStartMeeting_ConsentRequiredPropagates(t *testing.T) {
 	if topics := f.topics(); len(topics) != 0 {
 		t.Errorf("outbox topics = %v, want none", topics)
 	}
+}
+
+func TestStartMeeting_FallbackSpace_ResponseSaysTranscriptionIsManual(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	// The Meet client made the space without the setting: the account cannot have it.
+	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI, Code: "abc-defg-hij", TranscriptionAutomatic: false}})
+
+	res, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	if err != nil {
+		t.Fatalf("StartMeeting: %v", err)
+	}
+
+	if res.GetTranscriptionAutomatic() {
+		t.Error("the response says Meet starts the transcript by itself; the space has no such setting")
+	}
+	if res.GetMeeting().GetMeetUri() != meetURI || res.GetMeeting().GetRef() != "MTG-1001" {
+		t.Errorf("meeting = %v, want the meeting with the Meet link: the fallback space is a normal meeting", res.GetMeeting())
+	}
+	msgs := f.messages(ch)
+	if len(msgs) != 1 || !strings.Contains(msgs[0].GetBody(), meetURI) {
+		t.Errorf("messages = %v, want the one unchanged link message", msgs)
+	}
+}
+
+func TestStartMeeting_GoogleFailure_IsTypedNotInternal(t *testing.T) {
+	for _, tc := range []struct{ reason, cause string }{
+		{google.ReasonMeetAccess, google.CauseAccessDenied},
+		{google.ReasonMeetUnavailable, google.CauseAPIDisabled},
+		{google.ReasonMeetUnavailable, google.CauseRateLimited},
+		{google.ReasonMeetUnavailable, google.CauseUnavailable},
+		{google.ReasonMeetUnavailable, google.CauseRefused},
+	} {
+		t.Run(tc.cause, func(t *testing.T) {
+			f := newFixture(t)
+			ch := f.channel("public", f.alice)
+			// The client's own shape: the *google.MeetError beside the full error of the log.
+			cause := errors.New("google: spaces.create: raw text of Google's answer")
+			want := &google.MeetError{Reason: tc.reason, Cause: tc.cause, Status: 403}
+			f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Err: errors.Join(cause, want)})
+
+			res, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+
+			var got *google.MeetError
+			if !errors.As(err, &got) || got != want {
+				t.Fatalf("StartMeeting = %v, %v; want the *google.MeetError itself, so the API shell can tell the person why", res, err)
+			}
+			if n := f.count(`SELECT count(*) FROM meetings.meetings`); n != 0 {
+				t.Errorf("%d meetings were created without a Meet space", n)
+			}
+			if msgs := f.messages(ch); len(msgs) != 0 {
+				t.Errorf("%d messages were posted without a Meet space", len(msgs))
+			}
+			if topics := f.topics(); len(topics) != 0 {
+				t.Errorf("outbox topics = %v, want none", topics)
+			}
+		})
+	}
+}
+
+// startedMeeting is the meeting of a StartMeeting answer, for the tests that only
+// need it.
+func startedMeeting(res *meetingsv1.StartMeetingResponse, err error) (*meetingsv1.Meeting, error) {
+	return res.GetMeeting(), err
 }
 
 func TestCreateFromRecording_CreatesPendingMeetingAndAnnouncesTranscription(t *testing.T) {
@@ -2036,7 +2104,7 @@ func TestPipeline_StartToReady_ThroughRelayAndMemoryBus(t *testing.T) {
 	f.now = past
 	ch := f.channel("public", f.alice)
 	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
-	started, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	started, err := startedMeeting(f.svc.StartMeeting(t.Context(), f.user(f.alice), ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2428,7 +2496,7 @@ func TestMeetingDates_AreBangkokTime(t *testing.T) {
 	f.now = time.Date(2026, 10, 10, 18, 30, 0, 0, time.UTC)
 	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
 
-	started, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	started, err := startedMeeting(f.svc.StartMeeting(t.Context(), f.user(f.alice), ch))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2491,7 +2559,7 @@ func TestStartMeeting_LinkPostFailure_RollsBackTheMeeting(t *testing.T) {
 	// The REF number rolled back too: the next meeting is the first one.
 	f.chatHook = nil
 	f.g.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{Name: space, MeetingURI: meetURI}})
-	got, err := f.svc.StartMeeting(t.Context(), f.user(f.alice), ch)
+	got, err := startedMeeting(f.svc.StartMeeting(t.Context(), f.user(f.alice), ch))
 	if err != nil {
 		t.Fatal(err)
 	}

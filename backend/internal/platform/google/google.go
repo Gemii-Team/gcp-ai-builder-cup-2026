@@ -10,10 +10,14 @@ import (
 )
 
 // Client reads and creates Meet resources as one user. Every method returns a
-// *ConsentRequiredError when that user has not granted Meet access (or revoked it).
+// *ConsentRequiredError when that user has not granted Meet access (or revoked it),
+// and a *MeetError (found with errors.As) for any other failure of Meet that a person
+// can be told about: see MeetError.
 type Client interface {
 	// CreateMeetSpace creates a meeting space for userID, with transcript
-	// auto-generation switched on when enableTranscription is true.
+	// auto-generation switched on when enableTranscription is true. When Meet refuses
+	// that setting for this user (a personal Google account has no auto-transcription)
+	// the space is created without it, once, and Space.TranscriptionAutomatic is false.
 	CreateMeetSpace(ctx context.Context, userID uuid.UUID, enableTranscription bool) (Space, error)
 	// ListConferences returns every conference record of the space, each with its
 	// transcripts, so the caller can poll for the end of a meeting and the state of
@@ -25,11 +29,14 @@ type Client interface {
 }
 
 // Space is a Meet meeting space: Name is its resource name ("spaces/..."), MeetingURI
-// the link people join through and Code the short meeting code.
+// the link people join through and Code the short meeting code. TranscriptionAutomatic
+// is true when Meet starts the transcript by itself and false when the space has no
+// such setting, so the host has to turn transcription on in Meet.
 type Space struct {
-	Name       string
-	MeetingURI string
-	Code       string
+	Name                   string
+	MeetingURI             string
+	Code                   string
+	TranscriptionAutomatic bool
 }
 
 // Conference is one run of a space, from its first participant joining to the last

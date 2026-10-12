@@ -29,9 +29,13 @@ import (
 // it checks for the actor on the meeting's channel.
 type Service interface {
 	// StartMeeting creates a Meet space and a meeting in the channel; it needs
-	// authz.ActMeetingStart. A *google.ConsentRequiredError passes through when the
-	// actor has not granted Meet access.
-	StartMeeting(ctx context.Context, a authz.Actor, channelID uuid.UUID) (*meetingsv1.Meeting, error)
+	// authz.ActMeetingStart. The response says whether Meet will start the transcript
+	// by itself: a Google account that cannot have that setting gets the space
+	// without it, and its host has to turn transcription on. A
+	// *google.ConsentRequiredError passes through when the actor has not granted Meet
+	// access, and a *google.MeetError when Meet fails for any other reason a person
+	// can be told about.
+	StartMeeting(ctx context.Context, a authz.Actor, channelID uuid.UUID) (*meetingsv1.StartMeetingResponse, error)
 	// CreateFromRecording creates a meeting named title from an uploaded recording
 	// instead of a Meet transcript; it needs authz.ActMeetingStart.
 	CreateFromRecording(ctx context.Context, a authz.Actor, channelID, fileID uuid.UUID, title string) (*meetingsv1.Meeting, error)

@@ -91,9 +91,9 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
       <div className="chan">
         <main className="main">
           <ChannelHeader channel={channel} memberCount={members.data?.length} onStartMeeting={() => void meeting.start()} starting={meeting.starting} />
-          {meeting.failed && (
-            <p className="notice head-notice" role="alert">
-              <T k="startMeetingFailed" />
+          {meeting.notice && (
+            <p className={meeting.notice.role === 'alert' ? 'notice head-notice' : 'head-notice head-notice-wait'} role={meeting.notice.role}>
+              <T k={meeting.notice.key} />
             </p>
           )}
           <Stream

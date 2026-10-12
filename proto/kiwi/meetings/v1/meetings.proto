@@ -73,6 +73,9 @@ message StartMeetingRequest {
 
 message StartMeetingResponse {
   Meeting meeting = 1;
+  // True when Meet will start the transcript by itself; false when the Google account
+  // cannot have auto-transcription and the host must turn it on in Meet.
+  bool transcription_automatic = 2;
 }
 
 message CreateFromRecordingRequest {

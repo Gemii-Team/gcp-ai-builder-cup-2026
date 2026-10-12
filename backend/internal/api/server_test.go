@@ -627,6 +627,114 @@ func TestErrorInterceptor_MapsDomainErrorsAndHidesInternals(t *testing.T) {
 	})
 }
 
+// A failure of Meet reaches the person as a typed answer with a fixed text and an
+// ErrorInfo they can act on, never as an opaque internal error, and never with
+// Google's own message; the operator reads that message in the log.
+func TestErrorInterceptor_MeetFailure_IsTypedAndSafePerCause(t *testing.T) {
+	// googleText stands for what the full error of the client carries: the project,
+	// the account, the request. Each case has a marker of its own to find in the log.
+	googleText := func(marker string) error {
+		return fmt.Errorf("google: spaces.create: googleapi: Error 403: not allowed for ana@example.org in projects/123456 [%s]", marker)
+	}
+	// meet is the shape the client returns: the full error and the *MeetError beside it.
+	meet := func(reason, cause, marker string) error {
+		return fmt.Errorf("meetings: start: %w", errors.Join(googleText(marker), &google.MeetError{Reason: reason, Cause: cause, Status: 403}))
+	}
+
+	cases := []struct {
+		name      string
+		err       error
+		code      connect.Code
+		message   string
+		reason    string // the ErrorInfo reason; empty for an answer without a detail
+		cause     string
+		logLevel  string
+		logMarker string
+	}{
+		{"access denied", meet(google.ReasonMeetAccess, google.CauseAccessDenied, "access-denied"), connect.CodeFailedPrecondition,
+			"meet access refused", MeetAccessReason, google.CauseAccessDenied, "WARN", "access-denied"},
+		{"api disabled", meet(google.ReasonMeetUnavailable, google.CauseAPIDisabled, "api-disabled"), connect.CodeFailedPrecondition,
+			"meet unavailable", MeetUnavailableReason, google.CauseAPIDisabled, "ERROR", "api-disabled"},
+		{"rate limited", meet(google.ReasonMeetUnavailable, google.CauseRateLimited, "rate-limited"), connect.CodeResourceExhausted,
+			"meet unavailable", MeetUnavailableReason, google.CauseRateLimited, "WARN", "rate-limited"},
+		{"unavailable", meet(google.ReasonMeetUnavailable, google.CauseUnavailable, "unavailable"), connect.CodeUnavailable,
+			"meet unavailable", MeetUnavailableReason, google.CauseUnavailable, "ERROR", "unavailable"},
+		{"refused", meet(google.ReasonMeetUnavailable, google.CauseRefused, "refused"), connect.CodeFailedPrecondition,
+			"meet unavailable", MeetUnavailableReason, google.CauseRefused, "ERROR", "refused"},
+		// A reason or cause the mapper does not know is not a promise it can keep.
+		{"unknown cause", meet(google.ReasonMeetUnavailable, "something_new", "unknown-cause"), connect.CodeInternal,
+			"internal error", "", "", "ERROR", "unknown-cause"},
+		{"unknown reason", meet("something_new", google.CauseRefused, "unknown-reason"), connect.CodeInternal,
+			"internal error", "", "", "ERROR", "unknown-reason"},
+		// The same Google text without the typed error is an ordinary internal error.
+		{"untyped google error", fmt.Errorf("meetings: start: %w", googleText("untyped")), connect.CodeInternal,
+			"internal error", "", "", "ERROR", "untyped"},
+	}
+	probes := map[string]probeCase{}
+	for _, tc := range cases {
+		probes[tc.name] = func(context.Context) (string, error) { return "", tc.err }
+	}
+	f := newFixture(t, probes)
+	c := f.probeClient(f.signIn(f.alice))
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := probe(c, tc.name)
+			ce := errorWith(t, err, tc.code)
+			if ce.Message() != tc.message {
+				t.Errorf("message = %q, want the fixed %q", ce.Message(), tc.message)
+			}
+			for _, leak := range []string{"ana@example.org", "projects/123456", "googleapi", "[" + tc.logMarker + "]"} {
+				if strings.Contains(ce.Message(), leak) {
+					t.Errorf("message %q carries %q of Google's answer", ce.Message(), leak)
+				}
+			}
+
+			if tc.reason == "" {
+				if len(ce.Details()) != 0 {
+					t.Errorf("details = %v, want none", ce.Details())
+				}
+			} else {
+				if len(ce.Details()) != 1 {
+					t.Fatalf("details = %d, want 1", len(ce.Details()))
+				}
+				v, err := ce.Details()[0].Value()
+				if err != nil {
+					t.Fatalf("detail: %v", err)
+				}
+				info, ok := v.(*errdetails.ErrorInfo)
+				if !ok {
+					t.Fatalf("detail is %T, want *errdetails.ErrorInfo", v)
+				}
+				if info.GetReason() != tc.reason || info.GetDomain() != ErrorDomain || info.GetMetadata()[MeetCauseKey] != tc.cause || len(info.GetMetadata()) != 1 {
+					t.Errorf("detail = %v, want reason %s, domain %s and only %s=%s", info, tc.reason, ErrorDomain, MeetCauseKey, tc.cause)
+				}
+			}
+
+			// The operator finds what the person was not told, at the level of the fault.
+			if logs := f.logs.String(); !logHas(logs, "level="+tc.logLevel, "["+tc.logMarker+"]", probePath+"Probe") {
+				t.Errorf("no %s record names the procedure and carries [%s]:\n%s", tc.logLevel, tc.logMarker, logs)
+			}
+		})
+	}
+
+	t.Run("nothing of Google's answer reaches the wire", func(t *testing.T) {
+		sid := f.signIn(f.alice)
+		r := f.rpc(sid, probePath+"Probe", `"api disabled"`, nil)
+		if r.status != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 (FailedPrecondition; body %q)", r.status, r.body)
+		}
+		for _, leak := range []string{"ana@example.org", "projects/123456", "googleapi", "[api-disabled]"} {
+			if strings.Contains(r.body, leak) {
+				t.Errorf("body %q carries %q", r.body, leak)
+			}
+		}
+		if we := decodeError(t, r); we.Code != "failed_precondition" || we.Message != "meet unavailable" {
+			t.Errorf("body = %+v, want failed_precondition and the fixed text", we)
+		}
+	})
+}
+
 func TestAuthInterceptor_RejectsMissingOrExpiredSession(t *testing.T) {
 	var ran atomic.Int32
 	f := newFixture(t, map[string]probeCase{

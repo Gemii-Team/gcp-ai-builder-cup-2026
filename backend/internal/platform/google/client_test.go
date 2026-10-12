@@ -370,7 +370,7 @@ func TestCreateMeetSpace_TranscriptionConfigOnlyWhenEnabled(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateMeetSpace: %v", err)
 			}
-			want := google.Space{Name: "spaces/abc123", MeetingURI: "https://meet.google.com/abc-mnop-xyz", Code: "abc-mnop-xyz"}
+			want := google.Space{Name: "spaces/abc123", MeetingURI: "https://meet.google.com/abc-mnop-xyz", Code: "abc-mnop-xyz", TranscriptionAutomatic: tc.enable}
 			if got != want {
 				t.Errorf("space = %+v, want %+v", got, want)
 			}

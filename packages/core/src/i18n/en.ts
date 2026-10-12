@@ -62,6 +62,13 @@ export const en = {
   membersCount: { one: '{count} member', other: '{count} members' },
   startMeeting: 'Start meeting',
   startMeetingFailed: "Couldn't start the meeting. Try again.",
+  startMeetingManualTranscription:
+    'Meeting started. Transcription is not automatic for your Google account: turn it on in Meet (Activities, then Transcripts) so a summary can follow. You can also upload a recording.',
+  startMeetingMeetAccess: "Google refused K.I.W.I.'s access to Meet for your account. Check the permission in your Google account, then try again.",
+  startMeetingApiDisabled: "Meet isn't enabled on this K.I.W.I. server. Ask whoever runs it to turn it on.",
+  startMeetingRateLimited: 'Google is limiting Meet requests right now. Wait a minute, then try again.',
+  startMeetingMeetUnavailable: "Meet isn't answering right now. Try again in a moment.",
+  startMeetingRefused: 'Google refused to create the meeting. Try again, and tell whoever runs K.I.W.I. if it keeps happening.',
   channelUnavailable: "This channel isn't available to you.",
   goToChannels: 'Go to your channels',
   messagesIn: 'Messages in #{channel}',

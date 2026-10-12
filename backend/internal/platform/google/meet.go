@@ -47,10 +47,17 @@ func (c *client) createMeetSpace(ctx context.Context, userID uuid.UUID, enableTr
 		req.Config = autoTranscription()
 	}
 	created, err := svc.Spaces.Create(req).Context(ctx).Do()
+	if err != nil && enableTranscription && autoTranscriptionRefused(err) {
+		// Meet does not let this account have auto-transcription (a personal Google
+		// account). The meeting is still worth having: make the space without the
+		// setting, once, and say so in the result.
+		enableTranscription = false
+		created, err = svc.Spaces.Create(&meet.Space{}).Context(ctx).Do()
+	}
 	if err != nil {
 		return Space{}, fmt.Errorf("spaces.create: %w", err)
 	}
-	return Space{Name: created.Name, MeetingURI: created.MeetingUri, Code: created.MeetingCode}, nil
+	return Space{Name: created.Name, MeetingURI: created.MeetingUri, Code: created.MeetingCode, TranscriptionAutomatic: enableTranscription}, nil
 }
 
 // ListConferences implements Client.

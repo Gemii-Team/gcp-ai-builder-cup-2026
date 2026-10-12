@@ -28,6 +28,17 @@ const (
 	ConsentURLKey         = "url"
 )
 
+// What a client reads off the error detail of a failed Meet call: an
+// errdetails.ErrorInfo with one of these reasons and ErrorDomain, and the cause (a
+// google.Cause* value) under MeetCauseKey in its metadata. Meet access means the
+// person's grant is refused; Meet unavailable means Meet cannot do the call, for the
+// cause named.
+const (
+	MeetAccessReason      = "MEET_ACCESS"
+	MeetUnavailableReason = "MEET_UNAVAILABLE"
+	MeetCauseKey          = "cause"
+)
+
 // internalMessage is the only text a client ever reads of an unmapped error.
 const internalMessage = "internal error"
 
@@ -106,7 +117,9 @@ var sentinelCodes = []sentinelCode{
 //
 // A Connect error a handler built itself keeps its code and text, except Internal
 // and Unknown: those are what an unmapped cause becomes, so building one from a
-// cause must not publish the cause.
+// cause must not publish the cause. A *google.ConsentRequiredError and a
+// *google.MeetError have answers of their own (see consentError and meetError); the
+// log of the second carries Google's own message, which the answer never does.
 func (m *errorMapper) mapError(ctx context.Context, procedure string, err error) error {
 	var coded *connect.Error
 	if errors.As(err, &coded) {
@@ -119,6 +132,14 @@ func (m *errorMapper) mapError(ctx context.Context, procedure string, err error)
 	var consent *google.ConsentRequiredError
 	if errors.As(err, &consent) {
 		if ce := consentError(consent); ce != nil {
+			return ce
+		}
+		return m.hide(ctx, procedure, err)
+	}
+
+	var meet *google.MeetError
+	if errors.As(err, &meet) {
+		if ce := m.meetError(ctx, procedure, meet, err); ce != nil {
 			return ce
 		}
 		return m.hide(ctx, procedure, err)
@@ -172,6 +193,52 @@ func consentError(c *google.ConsentRequiredError) *connect.Error {
 		return nil
 	}
 	ce := connect.NewError(connect.CodeFailedPrecondition, errors.New("consent required"))
+	ce.AddDetail(detail)
+	return ce
+}
+
+// meetCauses is how each failure cause of Meet is answered: the Connect code, and the
+// level the operator is told at (ERROR for what only an operator or Google can fix,
+// WARN for what the person or a pause can).
+var meetCauses = map[string]struct {
+	code  connect.Code
+	level slog.Level
+}{
+	google.CauseAccessDenied: {connect.CodeFailedPrecondition, slog.LevelWarn},
+	google.CauseAPIDisabled:  {connect.CodeFailedPrecondition, slog.LevelError},
+	google.CauseRateLimited:  {connect.CodeResourceExhausted, slog.LevelWarn},
+	google.CauseUnavailable:  {connect.CodeUnavailable, slog.LevelError},
+	google.CauseRefused:      {connect.CodeFailedPrecondition, slog.LevelError},
+}
+
+// meetError answers a failure of Meet with the fixed text of its reason and an
+// ErrorInfo detail naming the cause; Google's own message stays in err, which goes to
+// the log. It returns nil for a reason or cause it does not know, or if the detail
+// cannot be built, which the caller treats as an internal error.
+func (m *errorMapper) meetError(ctx context.Context, procedure string, me *google.MeetError, err error) *connect.Error {
+	var reason, message string
+	switch me.Reason {
+	case google.ReasonMeetAccess:
+		reason, message = MeetAccessReason, "meet access refused"
+	case google.ReasonMeetUnavailable:
+		reason, message = MeetUnavailableReason, "meet unavailable"
+	default:
+		return nil
+	}
+	answer, ok := meetCauses[me.Cause]
+	if !ok {
+		return nil
+	}
+	detail, derr := connect.NewErrorDetail(&errdetails.ErrorInfo{
+		Reason:   reason,
+		Domain:   ErrorDomain,
+		Metadata: map[string]string{MeetCauseKey: me.Cause},
+	})
+	if derr != nil {
+		return nil
+	}
+	m.log.Log(ctx, answer.level, "api: rpc failed at Meet", "procedure", procedure, "code", answer.code.String(), "reason", me.Reason, "cause", me.Cause, "err", err)
+	ce := connect.NewError(answer.code, errors.New(message))
 	ce.AddDetail(detail)
 	return ce
 }

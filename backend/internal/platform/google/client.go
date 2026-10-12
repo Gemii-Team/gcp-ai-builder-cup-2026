@@ -83,11 +83,16 @@ func (c *client) service(ctx context.Context, userID uuid.UUID) (*meet.Service, 
 
 // wrap prefixes err with the package name. A *ConsentRequiredError anywhere in the
 // chain (from the TokenFunc, or from a token source asked for a token mid-request)
-// is returned itself so callers see it unchanged.
+// is returned itself so callers see it unchanged. A failure of Meet comes back with
+// its *MeetError beside it (see classify); the rest stays a plain error.
 func wrap(err error) error {
 	var cr *ConsentRequiredError
 	if errors.As(err, &cr) {
 		return cr
 	}
-	return fmt.Errorf("google: %w", err)
+	err = fmt.Errorf("google: %w", err)
+	if me := classify(err); me != nil {
+		return &meetFailure{err: err, meet: me}
+	}
+	return err
 }

@@ -459,10 +459,13 @@ func (x *StartMeetingRequest) GetChannelId() string {
 }
 
 type StartMeetingResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Meeting       *Meeting               `protobuf:"bytes,1,opt,name=meeting,proto3" json:"meeting,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Meeting *Meeting               `protobuf:"bytes,1,opt,name=meeting,proto3" json:"meeting,omitempty"`
+	// True when Meet will start the transcript by itself; false when the Google account
+	// cannot have auto-transcription and the host must turn it on in Meet.
+	TranscriptionAutomatic bool `protobuf:"varint,2,opt,name=transcription_automatic,json=transcriptionAutomatic,proto3" json:"transcription_automatic,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *StartMeetingResponse) Reset() {
@@ -500,6 +503,13 @@ func (x *StartMeetingResponse) GetMeeting() *Meeting {
 		return x.Meeting
 	}
 	return nil
+}
+
+func (x *StartMeetingResponse) GetTranscriptionAutomatic() bool {
+	if x != nil {
+		return x.TranscriptionAutomatic
+	}
+	return false
 }
 
 type CreateFromRecordingRequest struct {
@@ -921,9 +931,10 @@ const file_kiwi_meetings_v1_meetings_proto_rawDesc = "" +
 	"\aentries\x18\x04 \x03(\v2\x17.kiwi.meetings.v1.EntryR\aentries\"4\n" +
 	"\x13StartMeetingRequest\x12\x1d\n" +
 	"\n" +
-	"channel_id\x18\x01 \x01(\tR\tchannelId\"K\n" +
+	"channel_id\x18\x01 \x01(\tR\tchannelId\"\x84\x01\n" +
 	"\x14StartMeetingResponse\x123\n" +
-	"\ameeting\x18\x01 \x01(\v2\x19.kiwi.meetings.v1.MeetingR\ameeting\"j\n" +
+	"\ameeting\x18\x01 \x01(\v2\x19.kiwi.meetings.v1.MeetingR\ameeting\x127\n" +
+	"\x17transcription_automatic\x18\x02 \x01(\bR\x16transcriptionAutomatic\"j\n" +
 	"\x1aCreateFromRecordingRequest\x12\x1d\n" +
 	"\n" +
 	"channel_id\x18\x01 \x01(\tR\tchannelId\x12\x17\n" +

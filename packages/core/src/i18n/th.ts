@@ -58,6 +58,13 @@ export const th: I18nTable = {
   membersCount: { one: '{count} สมาชิก', other: '{count} สมาชิก' },
   startMeeting: 'เริ่มประชุม',
   startMeetingFailed: 'เริ่มการประชุมไม่ได้ ลองอีกครั้ง',
+  startMeetingManualTranscription:
+    'เริ่มการประชุมแล้ว บัญชี <en>Google</en> ของคุณไม่รองรับการถอดเสียงอัตโนมัติ ให้เปิดการถอดเสียงใน <en>Meet</en> (กิจกรรม แล้วเลือกการถอดเสียง) เพื่อให้มีสรุปการประชุมตามมา หรืออัปโหลดไฟล์บันทึกเสียงแทนก็ได้',
+  startMeetingMeetAccess: '<en>Google</en> ไม่อนุญาตให้ <en>K.I.W.I.</en> ใช้ <en>Meet</en> กับบัญชีของคุณ ตรวจสอบสิทธิ์ในบัญชี <en>Google</en> ของคุณ แล้วลองอีกครั้ง',
+  startMeetingApiDisabled: 'เซิร์ฟเวอร์ <en>K.I.W.I.</en> นี้ยังไม่ได้เปิดใช้ <en>Meet</en> ให้แจ้งผู้ดูแลระบบให้เปิดใช้',
+  startMeetingRateLimited: '<en>Google</en> กำลังจำกัดจำนวนคำขอ <en>Meet</en> รอสักครู่แล้วลองอีกครั้ง',
+  startMeetingMeetUnavailable: '<en>Meet</en> ยังไม่ตอบสนองในขณะนี้ ลองอีกครั้งในอีกสักครู่',
+  startMeetingRefused: '<en>Google</en> ปฏิเสธการสร้างการประชุม ลองอีกครั้ง และแจ้งผู้ดูแลระบบหากยังเกิดซ้ำ',
   channelUnavailable: 'คุณเข้าถึงช่องสนทนานี้ไม่ได้',
   goToChannels: 'ไปที่ช่องสนทนาของคุณ',
   messagesIn: 'ข้อความใน #{channel}',

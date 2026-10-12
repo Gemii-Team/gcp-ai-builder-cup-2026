@@ -27,6 +27,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -44,6 +45,7 @@ import (
 	realtimev1 "kiwi/gen/kiwi/realtime/v1"
 	tasksv1 "kiwi/gen/kiwi/tasks/v1"
 	"kiwi/gen/kiwi/tasks/v1/tasksv1connect"
+	"kiwi/internal/api"
 	"kiwi/internal/identity"
 	"kiwi/internal/platform/authz"
 	"kiwi/internal/platform/bus"
@@ -1548,6 +1550,96 @@ func TestApp_PollsMeetOnItsInterval(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// The composed server answers a StartMeeting that Meet refuses with the typed answer
+// of its cause, never as unknown or as the opaque internal error, with a text that
+// carries nothing of Google's own message.
+func TestApp_StartMeeting_GoogleFailureIsMappedPerCause(t *testing.T) {
+	r := newRig(t)
+	r.start()
+	alice := r.signIn(fakeoidc.AliceEmail)
+	channel := alice.newChannel("meet")
+	raw := errors.New("google: spaces.create: googleapi: Error 403: not allowed for ana@example.org in projects/123456")
+
+	for _, tc := range []struct {
+		name    string
+		err     error
+		code    connect.Code
+		message string
+		reason  string
+		cause   string
+	}{
+		{"access denied", errors.Join(raw, &google.MeetError{Reason: google.ReasonMeetAccess, Cause: google.CauseAccessDenied, Status: 401}),
+			connect.CodeFailedPrecondition, "meet access refused", api.MeetAccessReason, google.CauseAccessDenied},
+		{"api disabled", errors.Join(raw, &google.MeetError{Reason: google.ReasonMeetUnavailable, Cause: google.CauseAPIDisabled, Status: 403}),
+			connect.CodeFailedPrecondition, "meet unavailable", api.MeetUnavailableReason, google.CauseAPIDisabled},
+		{"rate limited", errors.Join(raw, &google.MeetError{Reason: google.ReasonMeetUnavailable, Cause: google.CauseRateLimited, Status: 429}),
+			connect.CodeResourceExhausted, "meet unavailable", api.MeetUnavailableReason, google.CauseRateLimited},
+		{"unavailable", errors.Join(raw, &google.MeetError{Reason: google.ReasonMeetUnavailable, Cause: google.CauseUnavailable, Status: 503}),
+			connect.CodeUnavailable, "meet unavailable", api.MeetUnavailableReason, google.CauseUnavailable},
+		{"refused", errors.Join(raw, &google.MeetError{Reason: google.ReasonMeetUnavailable, Cause: google.CauseRefused, Status: 400}),
+			connect.CodeFailedPrecondition, "meet unavailable", api.MeetUnavailableReason, google.CauseRefused},
+		{"consent required", &google.ConsentRequiredError{URL: "/api/auth/meet-consent"},
+			connect.CodeFailedPrecondition, "consent required", api.ConsentRequiredReason, ""},
+		{"untyped", raw, connect.CodeInternal, "internal error", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.google.QueueCreateMeetSpace(fakegoogle.SpaceReply{Err: tc.err})
+
+			_, err := alice.meetings().StartMeeting(t.Context(), connect.NewRequest(&meetingsv1.StartMeetingRequest{ChannelId: channel}))
+
+			var ce *connect.Error
+			if !errors.As(err, &ce) {
+				t.Fatalf("err = %v, want a Connect error", err)
+			}
+			if ce.Code() != tc.code || ce.Message() != tc.message {
+				t.Fatalf("answer = %s %q, want %s %q", ce.Code(), ce.Message(), tc.code, tc.message)
+			}
+			if strings.Contains(err.Error(), "ana@example.org") || strings.Contains(err.Error(), "projects/123456") {
+				t.Errorf("the answer %q carries Google's message", err)
+			}
+			if tc.reason == "" {
+				if len(ce.Details()) != 0 {
+					t.Errorf("details = %v, want none", ce.Details())
+				}
+				return
+			}
+			if len(ce.Details()) != 1 {
+				t.Fatalf("details = %d, want 1", len(ce.Details()))
+			}
+			v, err := ce.Details()[0].Value()
+			if err != nil {
+				t.Fatalf("detail: %v", err)
+			}
+			info, ok := v.(*errdetails.ErrorInfo)
+			if !ok || info.GetReason() != tc.reason || info.GetMetadata()[api.MeetCauseKey] != tc.cause {
+				t.Errorf("detail = %v, want reason %s and cause %q", v, tc.reason, tc.cause)
+			}
+		})
+	}
+}
+
+// A space made without auto-transcription still starts the meeting, and the answer
+// says the host has to turn the transcript on.
+func TestApp_StartMeeting_FallbackSpaceSaysTranscriptionIsManual(t *testing.T) {
+	r := newRig(t)
+	r.start()
+	alice := r.signIn(fakeoidc.AliceEmail)
+	channel := alice.newChannel("meet")
+
+	for _, automatic := range []bool{true, false} {
+		r.google.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{
+			Name: fmt.Sprintf("spaces/auto-%t", automatic), MeetingURI: "https://meet.example/abc-defg-hij", TranscriptionAutomatic: automatic}})
+
+		res, err := alice.meetings().StartMeeting(t.Context(), connect.NewRequest(&meetingsv1.StartMeetingRequest{ChannelId: channel}))
+		if err != nil {
+			t.Fatalf("StartMeeting (automatic=%t): %v", automatic, err)
+		}
+		if res.Msg.GetTranscriptionAutomatic() != automatic || res.Msg.GetMeeting().GetMeetUri() != "https://meet.example/abc-defg-hij" {
+			t.Errorf("response = %v, want transcription_automatic=%t and the Meet link", res.Msg, automatic)
+		}
+	}
 }
 
 func TestNew_UnreachableOIDCIssuerNamesTheVariable(t *testing.T) {

@@ -199,8 +199,10 @@ func systemActor(row store.MeetingsMeeting) authz.Actor {
 // StartMeeting implements Service. The Meet space is created first, with the
 // owner's own Google grant; the meeting and the message that carries its link are
 // then committed together. There is nothing to subscribe to: the poll finds the
-// meeting's transcript by asking Meet about its space.
-func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uuid.UUID) (*meetingsv1.Meeting, error) {
+// meeting's transcript by asking Meet about its space. A space that came back without
+// auto-transcription is as good a meeting: the response tells the host to turn the
+// transcript on, and a meeting that never gets one ends as no_transcript.
+func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uuid.UUID) (*meetingsv1.StartMeetingResponse, error) {
 	if err := requireActor(a); err != nil {
 		return nil, err
 	}
@@ -209,7 +211,8 @@ func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uui
 	}
 	space, err := s.g.CreateMeetSpace(ctx, a.EffectiveUserID(), true)
 	if err != nil {
-		// A *google.ConsentRequiredError reaches the caller as it is.
+		// A *google.ConsentRequiredError or *google.MeetError reaches the caller as it is:
+		// the API shell tells the person why, and the log keeps the full error.
 		return nil, err
 	}
 
@@ -241,7 +244,7 @@ func (s *service) StartMeeting(ctx context.Context, a authz.Actor, channelID uui
 	if err != nil {
 		return nil, err
 	}
-	return meetingProto(row, nil), nil
+	return &meetingsv1.StartMeetingResponse{Meeting: meetingProto(row, nil), TranscriptionAutomatic: space.TranscriptionAutomatic}, nil
 }
 
 // CreateFromRecording implements Service. The file must be an uploaded recording of this

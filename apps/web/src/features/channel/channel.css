@@ -350,6 +350,11 @@
   padding: 8px var(--pad) 0;
 }
 
+/* The host has something to do before a summary can follow: amber, the colour of what waits on a person, never the failure red. */
+.head-notice-wait {
+  color: var(--color-draft-ink);
+}
+
 /* From 1024px the action floats at the row's right and the text keeps clear of it. */
 @media (min-width: 1024px) {
   .msg-h[data-action] {

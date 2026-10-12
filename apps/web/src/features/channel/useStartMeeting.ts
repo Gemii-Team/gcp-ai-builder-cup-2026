@@ -1,37 +1,57 @@
 import { Code } from '@connectrpc/connect';
+import type { I18nKey } from '@kiwi/core';
 import { useRouterState } from '@tanstack/react-router';
 import { useCallback, useState } from 'react';
 import { useApi } from '../../api/client';
-import { hasCode } from '../../api/errors';
+import { hasCode, meetFailure } from '../../api/errors';
 import { hardNavigate } from '../../navigation';
 
+/** What a start-meeting request leaves for the person to read: an `alert` when it failed, a `status` when it worked but asks something of the host. */
+export type StartNotice = { role: 'alert' | 'status'; key: I18nKey };
+
+/** What each cause of a failed Meet call says; a cause that is not here, or a failure the API did not type, gets the generic message. */
+const MEET_FAILURE_KEY: Record<string, I18nKey> = {
+  access_denied: 'startMeetingMeetAccess',
+  api_disabled: 'startMeetingApiDisabled',
+  rate_limited: 'startMeetingRateLimited',
+  unavailable: 'startMeetingMeetUnavailable',
+  refused: 'startMeetingRefused',
+};
+
 /**
- * Starts a Meet meeting for the channel as the signed-in person. A request the server answers with `FailedPrecondition`
- * means Google has not been granted yet: the page leaves for the consent flow, which returns to this route. A started
- * meeting opens its Meet link in a new tab; any other failure is reported, never silently dropped.
+ * Starts a Meet meeting for the channel as the signed-in person. A `FailedPrecondition` the API does not name a Meet failure
+ * for means Google has not been granted yet: the page leaves for the consent flow, which returns to this route. A started
+ * meeting opens its Meet link in a new tab, and says so when Meet will not transcribe it by itself (the host has to turn
+ * that on). Any other failure says why when the API told why, and is otherwise reported generically, never silently dropped.
  */
 export function useStartMeeting(channelId: string) {
   const api = useApi();
   const here = useRouterState({ select: (state) => state.location.href });
-  const [state, setState] = useState<'idle' | 'starting' | 'failed'>('idle');
+  const [starting, setStarting] = useState(false);
+  const [notice, setNotice] = useState<StartNotice | null>(null);
 
   const start = useCallback(async () => {
-    setState('starting');
+    setStarting(true);
+    setNotice(null);
     try {
-      const { meeting } = await api.meetings.startMeeting({ channelId });
-      setState('idle');
+      const { meeting, transcriptionAutomatic } = await api.meetings.startMeeting({ channelId });
+      setStarting(false);
+      if (!transcriptionAutomatic) {
+        setNotice({ role: 'status', key: 'startMeetingManualTranscription' });
+      }
       if (meeting !== undefined && meeting.meetUri !== '') {
         hardNavigate.open(meeting.meetUri);
       }
     } catch (error) {
-      if (hasCode(error, Code.FailedPrecondition)) {
-        setState('idle');
+      setStarting(false);
+      const failure = meetFailure(error);
+      if (failure === undefined && hasCode(error, Code.FailedPrecondition)) {
         hardNavigate.to(`/api/auth/meet-consent?return_to=${encodeURIComponent(here)}`);
       } else {
-        setState('failed');
+        setNotice({ role: 'alert', key: (failure && MEET_FAILURE_KEY[failure.cause]) ?? 'startMeetingFailed' });
       }
     }
   }, [api, channelId, here]);
 
-  return { start, starting: state === 'starting', failed: state === 'failed' };
+  return { start, starting, notice };
 }
