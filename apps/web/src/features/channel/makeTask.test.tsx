@@ -248,7 +248,7 @@ describe('Start meeting', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('opens the Meet link of the meeting it started', async () => {
+  it('opens the Meet link of the meeting it started, as the signed-in account', async () => {
     const api = createStubApi();
     const { user } = openChannel({}, api);
     vi.spyOn(hardNavigate, 'open').mockImplementation(() => undefined);
@@ -257,7 +257,7 @@ describe('Start meeting', () => {
     await user.click(await screen.findByRole('button', { name: 'Start meeting' }));
 
     await waitFor(() => {
-      expect(hardNavigate.open).toHaveBeenCalledWith('https://meet.google.com/abc-defg-hij');
+      expect(hardNavigate.open).toHaveBeenCalledWith('https://meet.google.com/abc-defg-hij?authuser=pim%40siamriverside.co.th');
     });
   });
 

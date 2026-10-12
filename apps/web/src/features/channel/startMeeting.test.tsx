@@ -1,8 +1,8 @@
 import { create } from '@bufbuild/protobuf';
 import { BinaryWriter, WireType } from '@bufbuild/protobuf/wire';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { StartMeetingResponseSchema } from '@kiwi/api-client';
-import { screen, waitFor } from '@testing-library/react';
+import { GetMeResponseSchema, StartMeetingResponseSchema } from '@kiwi/api-client';
+import { cleanup, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hardNavigate } from '../../navigation';
 import { useUiStore } from '../../state/ui';
@@ -39,6 +39,8 @@ function meetError(code: Code, message: string, reason: string, cause: string): 
 }
 
 const started = (transcriptionAutomatic: boolean) => create(StartMeetingResponseSchema, { meeting: meeting({ meetUri: MEET }), transcriptionAutomatic });
+/** The host's own tab: Meet is asked to open it as the signed-in account (`pim@siamriverside.co.th` in the fixtures). */
+const MEET_AS_PIM = `${MEET}?authuser=pim%40siamriverside.co.th`;
 const startButton = () => screen.findByRole('button', { name: 'Start meeting' });
 
 /** The notice region that holds `text`: a status for a meeting that started, an alert for one that did not. */
@@ -65,7 +67,7 @@ describe('Start meeting: transcription notice', () => {
 
     const notice = await noticeWith(MANUAL, 'status');
     expect(notice).toHaveTextContent(MANUAL);
-    expect(hardNavigate.open).toHaveBeenCalledWith(MEET);
+    expect(hardNavigate.open).toHaveBeenCalledWith(MEET_AS_PIM);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -78,7 +80,7 @@ describe('Start meeting: transcription notice', () => {
     await user.click(await startButton());
 
     await waitFor(() => {
-      expect(hardNavigate.open).toHaveBeenCalledWith(MEET);
+      expect(hardNavigate.open).toHaveBeenCalledWith(MEET_AS_PIM);
     });
     expect(screen.queryByText(MANUAL_START)).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -113,6 +115,65 @@ describe('Start meeting: transcription notice', () => {
     expect(notice).not.toHaveTextContent('Transcription is not automatic');
     const latin = Array.from(notice.querySelectorAll('[lang="en"]')).map((run) => run.textContent);
     expect(latin).toEqual(expect.arrayContaining(['Google', 'Meet']));
+  });
+});
+
+describe('Start meeting: the Meet link opens in the account that created the space', () => {
+  const startAs = async (meetUri: string, world: Parameters<typeof openChannel>[0] = {}) => {
+    const api = createStubApi();
+    const { user } = openChannel(world, api);
+    vi.spyOn(hardNavigate, 'open').mockImplementation(() => undefined);
+    api.meetings.startMeeting.mockResolvedValue(create(StartMeetingResponseSchema, { meeting: meeting({ meetUri }), transcriptionAutomatic: true }));
+    await user.click(await startButton());
+    await waitFor(() => {
+      expect(hardNavigate.open).toHaveBeenCalledTimes(1);
+    });
+    return vi.mocked(hardNavigate.open).mock.calls[0][0];
+  };
+  const asUser = (email: string) => ({ me: create(GetMeResponseSchema, { user: { id: 'user-pim', email, name: 'Pim' }, workspace: { id: 'workspace-1', name: 'Siam Riverside Trading' } }) });
+
+  it('StartMeeting_PlainMeetLink_GetsAuthuserOfTheSignedInEmail', async () => {
+    expect(await startAs(MEET)).toBe(MEET_AS_PIM);
+  });
+
+  it('puts the email in url-encoded: a + and an @ cannot be read as a space or as a separator', async () => {
+    expect(await startAs(MEET, asUser('pim+launch@siamriverside.co.th'))).toBe(`${MEET}?authuser=pim%2Blaunch%40siamriverside.co.th`);
+  });
+
+  it('appends with & when the link already has a query, and keeps its fragment', async () => {
+    expect(await startAs(`${MEET}?pli=1`)).toBe(`${MEET}?pli=1&authuser=pim%40siamriverside.co.th`);
+    cleanup();
+    vi.restoreAllMocks();
+    expect(await startAs(`${MEET}?pli=1#top`)).toBe(`${MEET}?pli=1&authuser=pim%40siamriverside.co.th#top`);
+  });
+
+  it('never duplicates an authuser the link already has', async () => {
+    expect(await startAs(`${MEET}?authuser=2`)).toBe(`${MEET}?authuser=2`);
+  });
+
+  it('leaves a link that is not https on meet.google.com exactly as it is', async () => {
+    for (const uri of [
+      'https://meet.example/abc-defg-hij',
+      'https://notmeet.google.com/abc-defg-hij',
+      'https://meet.google.com.evil.example/abc-defg-hij',
+      'https://evil.example/meet.google.com',
+      'https://user@meet.google.com/abc-defg-hij',
+      'https://meet.google.com:8443/abc-defg-hij',
+      'http://meet.google.com/abc-defg-hij',
+      'meet.google.com/abc-defg-hij',
+    ]) {
+      expect(await startAs(uri), uri).toBe(uri);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('opens the link unchanged, and does not wait, when the signed-in user is not loaded yet', async () => {
+    expect(await startAs(MEET, { meNeverLoads: true })).toBe(MEET);
+  });
+
+  it('opens the link unchanged when the signed-in user has no email', async () => {
+    expect(await startAs(MEET, asUser(''))).toBe(MEET);
   });
 });
 

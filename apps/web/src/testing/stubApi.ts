@@ -9,6 +9,7 @@ import {
   ListTasksResponseSchema,
   ListUsersResponseSchema,
   type Channel,
+  type GetMeResponse,
   type Member,
   type Message,
   type Task,
@@ -57,11 +58,15 @@ export type World = {
   /** The latest page, in the order the server sends it: newest first. */
   messages?: Message[];
   tasks?: Task[];
+  /** The signed-in user's answer to `GetMe`, when a test needs another (the email, say). */
+  me?: GetMeResponse;
+  /** `GetMe` never answers: the signed-in user is not loaded yet. */
+  meNeverLoads?: boolean;
 };
 
 /** Answers the reads every channel screen starts with. A test overrides single calls afterwards. */
 export function seedApi(api: StubApi, world: World = {}): StubApi {
-  api.identity.getMe.mockResolvedValue(create(GetMeResponseSchema, me()));
+  api.identity.getMe.mockImplementation(() => (world.meNeverLoads === true ? new Promise<never>(() => undefined) : Promise.resolve(world.me ?? create(GetMeResponseSchema, me()))));
   api.identity.listUsers.mockResolvedValue(create(ListUsersResponseSchema, { users: world.users ?? USERS }));
   api.chat.listChannels.mockResolvedValue(create(ListChannelsResponseSchema, { channels: world.channels ?? [] }));
   api.chat.listMembers.mockResolvedValue(create(ListMembersResponseSchema, { members: world.members ?? MEMBERS }));
