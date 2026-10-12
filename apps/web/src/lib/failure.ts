@@ -36,7 +36,7 @@ export function failureReasonKey(code: string): I18nKey {
     case 'empty':
       return 'reasonEmpty';
     case 'unreadable':
-    case 'no_text':
+    case 'no_text_layer':
       return 'reasonUnreadable';
     case 'no_speech':
       return 'reasonNoSpeech';

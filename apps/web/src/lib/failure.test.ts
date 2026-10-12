@@ -40,11 +40,11 @@ describe('rejectionReasonOf', () => {
 
 describe('failureReasonKey', () => {
   it('has its own sentence for each of the five rejection reasons and for each other reason a job gives', () => {
-    const codes = [...REJECTION_REASONS, 'unreadable', 'no_text', 'no_speech', 'transcript_too_long', 'model_unavailable', 'not_reached', 'timed_out'];
+    const codes = [...REJECTION_REASONS, 'unreadable', 'no_text_layer', 'no_speech', 'transcript_too_long', 'model_unavailable', 'not_reached', 'timed_out'];
     const keys = codes.map(failureReasonKey);
 
     expect(keys).not.toContain('reasonUnknown');
-    // `unreadable` and `no_text` share one sentence; every other code has a sentence of its own.
+    // `unreadable` and `no_text_layer` (a scan: the server's code, files.failure_reason) share one sentence; every other code has its own.
     expect(new Set(keys).size).toBe(codes.length - 1);
   });
 
