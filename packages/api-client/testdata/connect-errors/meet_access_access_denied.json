@@ -1,0 +1,21 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "failed_precondition",
+    "message": "meet access refused",
+    "details": [
+      {
+        "type": "google.rpc.ErrorInfo",
+        "value": "CgtNRUVUX0FDQ0VTUxIEa2l3aRoWCgVjYXVzZRINYWNjZXNzX2RlbmllZA",
+        "debug": {
+          "reason": "MEET_ACCESS",
+          "domain": "kiwi",
+          "metadata": {
+            "cause": "access_denied"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -9,7 +9,10 @@ import { hardNavigate } from '../../navigation';
 /** What a start-meeting request leaves for the person to read: an `alert` when it failed, a `status` when it worked but asks something of the host. */
 export type StartNotice = { role: 'alert' | 'status'; key: I18nKey };
 
-/** What each cause of a failed Meet call says; a cause that is not here, or a failure the API did not type, gets the generic message. */
+/**
+ * What each cause of a failed Meet call says; a cause that is not here, or a failure the API did not type, gets the generic
+ * message. The cause comes from the server, so it is looked up with `Object.hasOwn`: it can never name an inherited property.
+ */
 const MEET_FAILURE_KEY: Record<string, I18nKey> = {
   access_denied: 'startMeetingMeetAccess',
   api_disabled: 'startMeetingApiDisabled',
@@ -77,7 +80,7 @@ export function useStartMeeting(channelId: string) {
       if (failure === undefined && hasCode(error, Code.FailedPrecondition)) {
         hardNavigate.to(`/api/auth/meet-consent?return_to=${encodeURIComponent(here)}`);
       } else {
-        setNotice({ role: 'alert', key: (failure && MEET_FAILURE_KEY[failure.cause]) ?? 'startMeetingFailed' });
+        setNotice({ role: 'alert', key: failure && Object.hasOwn(MEET_FAILURE_KEY, failure.cause) ? MEET_FAILURE_KEY[failure.cause] : 'startMeetingFailed' });
       }
     }
   }, [api, channelId, here]);

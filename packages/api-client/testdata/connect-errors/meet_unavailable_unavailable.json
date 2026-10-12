@@ -1,0 +1,21 @@
+{
+  "httpStatus": 503,
+  "contentType": "application/json",
+  "body": {
+    "code": "unavailable",
+    "message": "meet unavailable",
+    "details": [
+      {
+        "type": "google.rpc.ErrorInfo",
+        "value": "ChBNRUVUX1VOQVZBSUxBQkxFEgRraXdpGhQKBWNhdXNlEgt1bmF2YWlsYWJsZQ",
+        "debug": {
+          "reason": "MEET_UNAVAILABLE",
+          "domain": "kiwi",
+          "metadata": {
+            "cause": "unavailable"
+          }
+        }
+      }
+    ]
+  }
+}

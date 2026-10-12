@@ -1,0 +1,21 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "failed_precondition",
+    "message": "meet unavailable",
+    "details": [
+      {
+        "type": "google.rpc.ErrorInfo",
+        "value": "ChBNRUVUX1VOQVZBSUxBQkxFEgRraXdpGhAKBWNhdXNlEgdyZWZ1c2Vk",
+        "debug": {
+          "reason": "MEET_UNAVAILABLE",
+          "domain": "kiwi",
+          "metadata": {
+            "cause": "refused"
+          }
+        }
+      }
+    ]
+  }
+}

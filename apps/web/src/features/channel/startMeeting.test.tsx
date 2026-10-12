@@ -198,6 +198,19 @@ describe('Start meeting: failures of Meet', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't start the meeting. Try again.");
   });
 
+  // The cause is whatever the server sent: a name that exists on every object must not be taken for a message.
+  for (const cause of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+    it(`StartMeeting_CauseNamedLikeAnInheritedProperty_${cause}_GetsTheGenericMessage`, async () => {
+      const api = createStubApi();
+      const { user } = openChannel({}, api);
+      api.meetings.startMeeting.mockRejectedValue(meetError(Code.Unavailable, 'meet unavailable', 'MEET_UNAVAILABLE', cause));
+
+      await user.click(await startButton());
+
+      expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't start the meeting. Try again.");
+    });
+  }
+
   it('still sends the person to the consent flow when the API asks for consent', async () => {
     const api = createStubApi();
     const { user } = openChannel({}, api);

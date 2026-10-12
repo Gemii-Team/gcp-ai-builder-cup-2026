@@ -1,0 +1,8 @@
+{
+  "httpStatus": 404,
+  "contentType": "application/json",
+  "body": {
+    "code": "not_found",
+    "message": "not found"
+  }
+}
