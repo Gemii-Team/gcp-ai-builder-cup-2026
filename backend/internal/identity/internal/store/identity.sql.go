@@ -303,9 +303,12 @@ type InsertWorkspaceIfAbsentParams struct {
 	GoogleDomain *string
 }
 
-// google_domain is NULL for the one workspace without a domain, whose id is fixed. A
-// conflict is that id or the domain (unique without regard to case): the workspace is
-// there already.
+// google_domain is NULL for the one workspace without a domain, whose id is fixed. The
+// conflict is untargeted on purpose: that workspace is found by its fixed id (the
+// primary key) and the others by lower(google_domain) (a partial unique index), and
+// one ON CONFLICT clause cannot name both. The price is that DO NOTHING swallows ANY
+// unique violation of the row, so callers must read the workspace back afterwards and
+// not assume that this statement inserted it.
 func (q *Queries) InsertWorkspaceIfAbsent(ctx context.Context, arg InsertWorkspaceIfAbsentParams) error {
 	_, err := q.db.Exec(ctx, insertWorkspaceIfAbsent, arg.ID, arg.Name, arg.GoogleDomain)
 	return err

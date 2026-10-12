@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 
 	"kiwi/db/migrations"
 	"kiwi/internal/migrate"
@@ -765,6 +767,77 @@ func TestMigration_WorkspaceWithoutDomain_AllowedAndDomainsUniqueCaseInsensitive
 	other := uuid.New()
 	if pgErr := execErrIn(t, env.OwnerURL, &other, insert, other, "other", "other.example"); pgErr != nil {
 		t.Errorf("a workspace for another domain: %v", pgErr)
+	}
+}
+
+// gooseProvider opens a goose provider over the embedded migrations as the role behind
+// url (kiwi_owner), for the tests that go down a version, which migrate.Up cannot.
+func gooseProvider(t *testing.T, url string) *goose.Provider {
+	t.Helper()
+	cfg, err := pgx.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB := stdlib.OpenDB(*cfg)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestMigration0011_Down_FailsLoudlyWhileAWorkspaceHasNoDomain pins the comment of
+// 0011's Down: with a workspace without a domain it stops and leaves the schema as it
+// was (goose runs it in a transaction); once none is left it restores the old shape,
+// and Up brings 0011 back.
+func TestMigration0011_Down_FailsLoudlyWhileAWorkspaceHasNoDomain(t *testing.T) {
+	env := dbtest.Start(t)
+	conn := connect(t, env.OwnerURL)
+	p := gooseProvider(t, env.OwnerURL)
+	const before = 10 // the version before 0011
+
+	nullable := func() string {
+		return scalar[string](t, conn, `
+			SELECT is_nullable FROM information_schema.columns
+			WHERE table_schema = 'identity' AND table_name = 'workspaces' AND column_name = 'google_domain'`)
+	}
+	version := func() int {
+		return scalar[int](t, conn, `SELECT coalesce(max(version_id), 0) FROM goose_db_version WHERE is_applied`)
+	}
+
+	ws := uuid.New()
+	seedIn(t, env, ws, func(tx pgx.Tx) {
+		if _, err := tx.Exec(t.Context(), `INSERT INTO identity.workspaces (id, name, google_domain) VALUES ($1, 'no domain', NULL)`, ws); err != nil {
+			t.Fatalf("workspace without a domain: %v", err)
+		}
+	})
+	if _, err := p.DownTo(t.Context(), before); err == nil || !strings.Contains(err.Error(), "google_domain") {
+		t.Fatalf("Down with a workspace without a domain = %v, want an error naming google_domain", err)
+	}
+	if got := version(); got != before+1 || nullable() != "YES" {
+		t.Fatalf("after the failed Down: version %d, google_domain nullable %s; want 11 and YES, the schema untouched", got, nullable())
+	}
+
+	seedIn(t, env, ws, func(tx pgx.Tx) {
+		if _, err := tx.Exec(t.Context(), `DELETE FROM identity.workspaces WHERE id = $1`, ws); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := p.DownTo(t.Context(), before); err != nil {
+		t.Fatalf("Down without one: %v", err)
+	}
+	if got := version(); got != before || nullable() != "NO" {
+		t.Fatalf("after Down: version %d, google_domain nullable %s; want 10 and NO", got, nullable())
+	}
+	if n := scalar[int](t, conn, `SELECT count(*) FROM pg_constraint WHERE conname = 'workspaces_google_domain_key' AND contype = 'u'`); n != 1 {
+		t.Errorf("the case-sensitive unique constraint is back %d times, want once", n)
+	}
+	if _, err := p.Up(t.Context()); err != nil {
+		t.Fatalf("Up again: %v", err)
+	}
+	if got := version(); got != before+1 || nullable() != "YES" {
+		t.Errorf("after Up again: version %d, google_domain nullable %s; want 11 and YES", got, nullable())
 	}
 }
 

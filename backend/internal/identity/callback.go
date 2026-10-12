@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"kiwi/internal/identity/internal/store"
 	"kiwi/internal/platform/db"
@@ -35,13 +36,21 @@ const (
 
 // Why a sign-in was turned away. It goes to the log, never to the browser.
 const (
-	reasonUnverified      = "unverified"
-	reasonUninvited       = "uninvited"
-	reasonAmbiguous       = "ambiguous"
-	reasonBoundToOtherSub = "bound_to_other_subject"
-	reasonUnknownDomain   = "unknown_domain"
-	reasonOtherWorkspace  = "sub_in_other_workspace"
+	reasonUnverified        = "unverified"
+	reasonUninvited         = "uninvited"
+	reasonAmbiguous         = "ambiguous"
+	reasonBoundToOtherSub   = "bound_to_other_subject"
+	reasonSubBoundElsewhere = "sub_bound_elsewhere"
+	reasonUnknownDomain     = "unknown_domain"
+	reasonOtherWorkspace    = "sub_in_other_workspace"
 )
+
+// uniqueViolation is the SQLSTATE of a unique constraint violation.
+const uniqueViolation = "23505"
+
+// googleSubConstraint is the unique constraint of identity.users.google_sub
+// (0002_identity.sql names it by Postgres's rule for `google_sub text NOT NULL UNIQUE`).
+const googleSubConstraint = "users_google_sub_key"
 
 // seedSubPrefix starts the google_sub of a placeholder user: "seed:" + email.
 const seedSubPrefix = "seed:"
@@ -153,12 +162,24 @@ func resolveUser(ctx context.Context, d *db.DB, c oidc.Claims) (store.IdentityUs
 //   - the one row is used only when its google_sub is the placeholder
 //     "seed:" + email (it is adopted: the token's sub, name and avatar are set, in the
 //     user's own workspace) or already the token's sub; a row bound to another sub
-//     belongs to another Google account.
+//     belongs to another Google account, and so does a placeholder whose adoption
+//     would bind a sub that is already the user of another row (CodeNotInvited too).
 //
 // It never creates a workspace or a user, and the System query it runs is a read. When
 // another sign-in adopts the placeholder between the read and the update, the update
 // matches nothing and this one is turned away. The address is the lowercased one
 // everywhere.
+//
+// What this rule trusts, on purpose:
+//   - It applies to the rows of EVERY workspace, including one that has a
+//     google_domain (the mock's bob, who has no hd although his workspace has a domain,
+//     signs in through it); it is not restricted to the workspace without a domain.
+//   - Until the first sign-in binds a placeholder, any Google account that proves that
+//     exact address (a verified email, no hd) can claim it. The invitation is the
+//     address, not a person.
+//   - A placeholder never expires.
+//   - The seed refuses an address that already has a row in another workspace, so the
+//     ambiguous case is made only by writing rows by hand.
 func resolveInvitedUser(ctx context.Context, d *db.DB, c oidc.Claims) (store.IdentityUser, error) {
 	if !c.EmailVerified {
 		return store.IdentityUser{}, rejected(CodeNotInvited, reasonUnverified)
@@ -201,6 +222,14 @@ func resolveInvitedUser(ctx context.Context, d *db.DB, c oidc.Claims) (store.Ide
 		// The row changed after it was read: another account took the placeholder, or
 		// the user is gone.
 		return store.IdentityUser{}, rejected(CodeNotInvited, reasonBoundToOtherSub)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == googleSubConstraint {
+		// The token's subject is already the user of another row (the same Google
+		// account seeded under two addresses, or one whose primary address changed):
+		// binding it to this placeholder too is refused by the database. The
+		// transaction rolled back, so nothing was written.
+		return store.IdentityUser{}, rejected(CodeNotInvited, reasonSubBoundElsewhere)
 	}
 	if err != nil {
 		return store.IdentityUser{}, fmt.Errorf("adopt user: %w", err)
@@ -266,11 +295,16 @@ func EnsureSeedWorkspace(ctx context.Context, d *db.DB, domain string, emails []
 	err = d.System(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
 		if domain == "" {
-			workspaceID = noDomainWorkspaceID
-			err := q.InsertWorkspaceIfAbsent(ctx, store.InsertWorkspaceIfAbsentParams{ID: workspaceID, Name: noDomainWorkspaceName})
+			err := q.InsertWorkspaceIfAbsent(ctx, store.InsertWorkspaceIfAbsentParams{ID: noDomainWorkspaceID, Name: noDomainWorkspaceName})
 			if err != nil {
 				return fmt.Errorf("create workspace: %w", err)
 			}
+			// The insert is untargeted and swallows any unique violation: read it back.
+			ws, err := q.GetWorkspace(ctx, noDomainWorkspaceID)
+			if err != nil {
+				return fmt.Errorf("find workspace: %w", err)
+			}
+			workspaceID = ws.ID
 		} else {
 			wsID, err := uuid.NewV7()
 			if err != nil {

@@ -4,8 +4,13 @@
 -- hd claim (personal addresses) has one workspace without a domain, which
 -- identity.EnsureSeedWorkspace creates; its members sign in by invitation.
 -- Domains stay unique, now whatever their letter case, because sign-in compares
--- lower(hd) with lower(google_domain). Expand-only: every reader and writer of the
--- column from before keeps working.
+-- lower(hd) with lower(google_domain).
+--
+-- Expand-only for the binary that ships with it, which is the only one that may run
+-- against this schema: a binary from before 0011 breaks on it (its
+-- ON CONFLICT (google_domain) names a constraint that no longer exists, and a reader
+-- of the column cannot scan a NULL into a string). Roll the migration and the binary
+-- out together, as the migrate Job and the kiwi Deployment are.
 
 ALTER TABLE identity.workspaces ALTER COLUMN google_domain DROP NOT NULL;
 ALTER TABLE identity.workspaces DROP CONSTRAINT workspaces_google_domain_key;

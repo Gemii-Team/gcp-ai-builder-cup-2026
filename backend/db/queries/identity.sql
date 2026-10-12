@@ -23,9 +23,12 @@ WHERE id = $1;
 SELECT id FROM identity.workspaces ORDER BY id;
 
 -- name: InsertWorkspaceIfAbsent :exec
--- google_domain is NULL for the one workspace without a domain, whose id is fixed. A
--- conflict is that id or the domain (unique without regard to case): the workspace is
--- there already.
+-- google_domain is NULL for the one workspace without a domain, whose id is fixed. The
+-- conflict is untargeted on purpose: that workspace is found by its fixed id (the
+-- primary key) and the others by lower(google_domain) (a partial unique index), and
+-- one ON CONFLICT clause cannot name both. The price is that DO NOTHING swallows ANY
+-- unique violation of the row, so callers must read the workspace back afterwards and
+-- not assume that this statement inserted it.
 INSERT INTO identity.workspaces (id, name, google_domain)
 VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING;

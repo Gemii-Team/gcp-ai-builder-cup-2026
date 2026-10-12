@@ -65,8 +65,21 @@ func TestSeed_TakesNoArgumentsAndKnowsItsFlags(t *testing.T) {
 	os.Stdout = stdout
 	_ = w.Close()
 	usage, _ := io.ReadAll(r)
-	if code != 0 || !strings.Contains(string(usage), "-members") || !strings.Contains(string(usage), "alice@demo.example,bob@demo.example") {
+	help := string(usage)
+	if code != 0 || !strings.Contains(help, "-members") || !strings.Contains(help, "alice@demo.example,bob@demo.example") || !strings.Contains(help, `(default "demo.example")`) {
 		t.Errorf("seed -h: exit code = %d and usage %q, want 0 and the flags with their defaults", code, usage)
+	}
+	// The domain-less shape and what the invitation means are in the help, flag by flag.
+	for _, want := range []string{
+		"the one workspace without a domain",
+		"also one with a domain",
+		"any Google account that proves that exact address can claim it",
+		"placeholders never expire",
+		"already belongs to another workspace is refused",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("seed -h does not say %q:\n%s", want, help)
+		}
 	}
 }
 
@@ -341,7 +354,7 @@ func TestSeed_DomainFlagRules(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || strings.TrimSpace(got) != tc.want {
+		if err != nil || got != tc.want {
 			t.Errorf("%s: domain %q, %v; want %q", tc.name, got, err, tc.want)
 		}
 	}

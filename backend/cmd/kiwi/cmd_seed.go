@@ -37,12 +37,13 @@ const (
 // in because they were invited. --domain "" alone is refused: the default members are
 // the mock's users, who must not be invited into that workspace.
 func seedDomain(domain string, given map[string]bool) (string, error) {
+	domain = strings.TrimSpace(domain)
 	switch {
 	case !given["domain"] && given["members"]:
 		return "", nil
 	case !given["domain"]:
 		return defaultDomain, nil
-	case strings.TrimSpace(domain) == "" && !given["members"]:
+	case domain == "" && !given["members"]:
 		return "", errors.New(`--domain "" seeds the workspace without a domain and needs --members: the people to invite`)
 	}
 	return domain, nil
@@ -58,8 +59,11 @@ func runSeed(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
 	var usage bytes.Buffer
 	fs.SetOutput(&usage)
-	domain := fs.String("domain", defaultDomain, "the workspace's Google domain (the hd of the people who sign in); with only --members, or an empty value, the one workspace without a domain instead, for Google accounts that carry no hd")
-	members := fs.String("members", defaultMembers, "comma-separated member emails; the first owns the channels and is the only member of #hr-private. Without a domain they are the people invited to sign in")
+	domain := fs.String("domain", defaultDomain, "the workspace's Google domain (the hd of the people who sign in). With only --members, or an empty value with --members, the one workspace without a domain is seeded instead, for Google accounts that carry no hd")
+	members := fs.String("members", defaultMembers, "comma-separated member emails; the first owns the channels and is the only member of #hr-private. "+
+		"Each is invited: an account without hd signs in as its address's placeholder user, in any workspace (also one with a domain), "+
+		"and until that first sign-in binds it any Google account that proves that exact address can claim it; placeholders never expire. "+
+		"An address that already belongs to another workspace is refused")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, werr := io.WriteString(os.Stdout, usage.String())
