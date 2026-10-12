@@ -89,7 +89,7 @@ func hostsOf(origins ...string) []string {
 	for _, o := range origins {
 		u, _ := url.Parse(o) // checked by origin
 		for _, h := range []string{u.Host, u.Hostname()} {
-			if len(h) >= 3 && !slices.Contains(hosts, h) {
+			if len(h) >= minScrubbed && !slices.Contains(hosts, h) {
 				hosts = append(hosts, h)
 			}
 		}
@@ -118,17 +118,21 @@ func (c *client) EmbeddingModel() string { return c.embedModel }
 // environment and send it to this host. ADK rejects the settings only Gemini
 // understands, so none can leak through it. Callers must give a MaxOutputTokens of at
 // least about 1100, or a ThinkingConfig with ThinkingBudget 0: with thinking on, a
-// smaller limit is spent on reasoning and ADK reports an answer without text.
+// smaller limit is spent on reasoning and ADK reports an answer without text. What its
+// errors say is scrubbed like the adapter's own (see adkTransport).
 func (c *client) ADKModel(tier llm.Tier) (model.LLM, error) {
 	id, err := c.modelFor(tier)
 	if err != nil {
 		return nil, err
 	}
+	to, _ := url.Parse(c.base) // checked by origin
+	hc := *c.hc
+	hc.Transport = &adkTransport{base: cmp.Or(c.hc.Transport, http.DefaultTransport), to: to, scrub: c.scrub}
 	return openaimodel.NewModel(context.Background(), id, &openaimodel.ClientConfig{
 		APIKey:     c.key,
-		BaseURL:    c.base + "/v1/",
+		BaseURL:    adkBase + "/v1/",
 		API:        openaimodel.APIChatCompletions,
-		HTTPClient: c.hc,
+		HTTPClient: &hc,
 	})
 }
 
@@ -192,12 +196,58 @@ type requestError struct {
 func (e *requestError) Error() string { return "openai: request failed: " + e.msg }
 func (e *requestError) Unwrap() error { return e.err }
 
-// scrub replaces the hosts of the endpoints in s.
+// scrub replaces the key and the hosts of the endpoints in s. A key shorter than
+// minScrubbed is left alone: it would mangle every text it is found in.
 func (c *client) scrub(s string) string {
+	if len(c.key) >= minScrubbed {
+		s = strings.ReplaceAll(s, c.key, "<key>")
+	}
 	for _, h := range c.hosts {
 		s = strings.ReplaceAll(s, h, "<host>")
 	}
 	return s
+}
+
+// minScrubbed is the shortest key or host that scrub replaces.
+const minScrubbed = 3
+
+// adkBase is the origin the ADK's SDK is told it calls. The SDK writes the URL of a
+// request into the errors it returns (net/http around a transport's error, the SDK
+// around a failing status), after any transport has had its say, so the real origin
+// would reach the log of a failed run. The SDK is given an origin that names no host,
+// and adkTransport sends its requests to the real one.
+const adkBase = "http://llm.invalid"
+
+// adkTransport is the transport of the HTTP client of the ADK model: it moves a request
+// the SDK addressed to adkBase to the origin the adapter is configured with, and scrubs
+// what comes back the way the adapter scrubs its own errors: a failed round trip, and
+// the body of a failing status, which a gateway may fill with its upstream's address or
+// the key it was given.
+type adkTransport struct {
+	base  http.RoundTripper
+	to    *url.URL // the real origin, with the path it is served under, without a trailing slash
+	scrub func(string) string
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t *adkTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	out := req.Clone(req.Context())
+	out.URL.Scheme, out.URL.Host = t.to.Scheme, t.to.Host
+	out.URL.Path, out.URL.RawPath = t.to.Path+req.URL.Path, ""
+	out.Host = t.to.Host
+	resp, err := t.base.RoundTrip(out)
+	if err != nil {
+		return nil, &requestError{msg: t.scrub(err.Error()), err: err}
+	}
+	if resp.StatusCode >= 300 {
+		answer := resp.Body
+		defer func() { _ = answer.Close() }()
+		b, _ := io.ReadAll(io.LimitReader(answer, maxErrorBody))
+		resp.Body = io.NopCloser(strings.NewReader(t.scrub(string(b))))
+		resp.ContentLength = -1
+		resp.Header.Del("Content-Length")
+	}
+	return resp, nil
 }
 
 // postJSON sends in and decodes the JSON answer into out.

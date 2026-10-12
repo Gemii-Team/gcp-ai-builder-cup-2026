@@ -462,6 +462,14 @@ var secretFields = []string{
 	"LLMBaseURL", "LLMAPIKey", "EmbedBaseURL", "OAuthClientSecret", "TokenEncKey",
 }
 
+// publicFields is the other half of the policy: what a log line may show. Every field of
+// Config is in exactly one of the two lists, so a field added later cannot be shown in the
+// clear by default: the test below fails until someone has decided which list it is in.
+var publicFields = []string{
+	"Env", "Roles", "PublicURL", "BusProvider", "LLMProvider", "LLMModelFlash", "LLMModelPro", "EmbedModel", "ASRModel",
+	"OIDCIssuer", "OIDCInternalURL", "OAuthClientID", "WorkspaceName", "WorkspaceDomain",
+}
+
 func TestConfig_RedactsSecretsEverywhereItIsFormatted(t *testing.T) {
 	cfg := Config{
 		Env:               "local",
@@ -476,7 +484,7 @@ func TestConfig_RedactsSecretsEverywhereItIsFormatted(t *testing.T) {
 		BlobSigningKey:    []byte("0123456789abcdef0123456789abcdef"),
 		LLMProvider:       "openai",
 		LLMBaseURL:        "https://llm-secret-host.example",
-		LLMAPIKey:         "sk-secret-key",
+		LLMAPIKey:         "llm-credential-value",
 		LLMModelFlash:     "flash-model",
 		LLMModelPro:       "pro-model",
 		EmbedBaseURL:      "http://embed-secret-host:11434",
@@ -493,7 +501,7 @@ func TestConfig_RedactsSecretsEverywhereItIsFormatted(t *testing.T) {
 	secrets := []string{
 		"app-secret-pw", "system-secret-pw", "owner-secret-pw", "valkey-secret-pw", "db-host-1", "valkey-host",
 		"secret-blob-dir", "0123456789abcdef", base64.StdEncoding.EncodeToString(cfg.BlobSigningKey),
-		"llm-secret-host", "sk-secret-key", "embed-secret-host", "client-secret-value",
+		"llm-secret-host", "llm-credential-value", "embed-secret-host", "client-secret-value",
 		"abcdefghijklmnopqrstuvwxyz012345", base64.StdEncoding.EncodeToString(cfg.TokenEncKey),
 	}
 	visible := []string{
@@ -552,6 +560,31 @@ func TestConfig_EverySecretFieldIsTaggedAndNoOtherIs(t *testing.T) {
 		f := typ.Field(i)
 		if f.Tag.Get("secret") == "true" && !slices.Contains(secretFields, f.Name) {
 			t.Errorf("%s is tagged secret but is not in the policy of this test: add it or drop the tag", f.Name)
+		}
+	}
+}
+
+// The classification is fail-closed: a field of Config that is in neither list, or in both,
+// fails here, so a credential added without a decision is a red build and not a line in a log.
+func TestConfig_EveryFieldIsClassifiedSecretOrPublicInExactlyOneList(t *testing.T) {
+	typ := reflect.TypeFor[Config]()
+	fields := make([]string, 0, typ.NumField())
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		fields = append(fields, name)
+		secret, public := slices.Contains(secretFields, name), slices.Contains(publicFields, name)
+		switch {
+		case !secret && !public:
+			t.Errorf("Config.%s is in neither secretFields nor publicFields: decide whether a log line may show it, then list it (and tag it secret:\"true\" if not)", name)
+		case secret && public:
+			t.Errorf("Config.%s is in both secretFields and publicFields: it is one or the other", name)
+		}
+	}
+	for _, list := range [][]string{secretFields, publicFields} {
+		for _, name := range list {
+			if !slices.Contains(fields, name) {
+				t.Errorf("%s is listed but Config has no such field: drop it", name)
+			}
 		}
 	}
 }

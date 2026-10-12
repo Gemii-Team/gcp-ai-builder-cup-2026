@@ -927,6 +927,42 @@ func TestErrorsNameNeitherHostNorKey(t *testing.T) {
 	}
 }
 
+// A model call of the agents runs through the ADK, whose SDK puts the URL it called into
+// the errors it returns and a gateway's own words into the ones it reads: those reach the
+// log of a failed run, so they carry neither the host nor the key either.
+func TestADKModel_ErrorsNameNeitherHostNorKey(t *testing.T) {
+	boom := errors.New("connection refused")
+	dialFails := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial tcp %s: %w", r.URL.Host, boom)
+	})
+	// A gateway that says which upstream it could not reach, and repeats the key it was given.
+	gatewayFails := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{"error":{"message":"Incorrect API key ` + testKey + ` for ` + r.URL.Host + `"}}`
+		return httpResponse(statusReply(401, body), r), nil
+	})
+	for what, rt := range map[string]http.RoundTripper{"a failed dial": dialFails, "a gateway error": gatewayFails} {
+		t.Run(what, func(t *testing.T) {
+			m, err := newClient(t, rt).ADKModel(llm.TierFlash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, _ := adkRequests()
+			var got error
+			for _, err := range m.GenerateContent(t.Context(), first, false) {
+				got = errors.Join(got, err)
+			}
+			if got == nil {
+				t.Fatal("GenerateContent reported no error")
+			}
+			for _, secret := range []string{llmHost, testKey, "Bearer"} {
+				if strings.Contains(got.Error(), secret) {
+					t.Errorf("error %q contains %q", got, secret)
+				}
+			}
+		})
+	}
+}
+
 func TestContextCancellationIsReported(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

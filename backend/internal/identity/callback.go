@@ -179,7 +179,10 @@ func resolveUser(ctx context.Context, d *db.DB, c oidc.Claims) (store.IdentityUs
 //     address, not a person.
 //   - A placeholder never expires.
 //   - The seed refuses an address that already has a row in another workspace, so the
-//     ambiguous case is made only by writing rows by hand.
+//     seed never makes the ambiguous case. A sign-in with an hd does: it adds the address
+//     to the workspace of its domain even when another workspace has invited it already.
+//     From then on a sign-in without hd for that address is ambiguous and fails closed
+//     (CodeNotInvited); it never picks one of the workspaces.
 func resolveInvitedUser(ctx context.Context, d *db.DB, c oidc.Claims) (store.IdentityUser, error) {
 	if !c.EmailVerified {
 		return store.IdentityUser{}, rejected(CodeNotInvited, reasonUnverified)

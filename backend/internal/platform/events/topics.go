@@ -10,8 +10,10 @@ import (
 	eventsv1 "kiwi/gen/kiwi/events/v1"
 )
 
-// Topic names, one per event message. They are also the consumer names of the
-// jobs that subscribe to them (see the delta plan's consumer-to-topic map).
+// Topic names, one per event message. A topic is not the name of its consumer: a consumer
+// is named for what it does (doc.analyze consumes doc.uploaded, agent.run consumes
+// agent.invoke) and may take several topics (embed.index takes embed.index and
+// chat.message.created). Each domain's Jobs names its consumers and the topics they take.
 const (
 	// TopicChatMessageCreated carries eventsv1.ChatMessageCreated.
 	TopicChatMessageCreated = "chat.message.created"

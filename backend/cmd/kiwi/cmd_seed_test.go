@@ -76,6 +76,7 @@ func TestSeed_TakesNoArgumentsAndKnowsItsFlags(t *testing.T) {
 		"any Google account that proves that exact address can claim it",
 		"placeholders never expire",
 		"already belongs to another workspace is refused",
+		"run once; use the same --members each time",
 		"nok@kiwi-demo.invalid and pim@kiwi-demo.invalid are added in front of them",
 		"which no Google account can have",
 		"the members given are plain members of the public channels, who cannot read #hr-private",
