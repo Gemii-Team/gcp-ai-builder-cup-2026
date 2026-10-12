@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import { useApi } from '../../api/client';
 import { createExcerptLoader } from '../../api/excerpts';
-import { useChannels, useChannelTasks, useMe, useMembers, useUsers } from '../../api/hooks';
+import { useChannels, useChannelTasks, useMe, useMembers, useRecordings, useUsers } from '../../api/hooks';
 import type { ChannelView, ChatMessage } from '../../api/types';
 import { T, useI18n } from '../../i18n';
 import { useUiStore } from '../../state/ui';
@@ -15,7 +15,7 @@ import { ChannelHeader } from './ChannelHeader';
 import { Composer, type MentionTarget } from './Composer';
 import { MadeTasks, MakeTask } from './MakeTask';
 import { MessageAction } from './MessageAction';
-import { MessageFiles } from './MessageFiles';
+import { MessageFiles, RecordingStatus } from './MessageFiles';
 import { MessageRow } from './MessageRow';
 import { Stream } from './Stream';
 import { useChannelMessages } from './useChannelMessages';
@@ -48,6 +48,7 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
   const users = useUsers();
   const members = useMembers(channel.id);
   const tasks = useChannelTasks(channel.id);
+  const recordings = useRecordings(channel.id);
   const stream = useChannelMessages(channel.id);
   const upload = useUpload(channel.id);
   const make = useMakeTask();
@@ -159,6 +160,10 @@ function ChannelContent({ channel }: { channel: ChannelView }) {
                 />
               );
             }}
+            tail={recordings.map((recording) => (
+              <RecordingStatus key={recording.fileId} recording={recording} authorName={names.get(me.data?.user.id ?? '') ?? ''} />
+            ))}
+            tailCount={recordings.length}
           />
           <DraftsBar
             ref={bar}

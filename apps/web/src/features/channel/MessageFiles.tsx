@@ -1,12 +1,13 @@
-import { FailedSlip, Icon, PendingSlip } from '@kiwi/ui';
-import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FailedSlip, FileChip, formatClock, Icon, LangRuns, PendingSlip } from '@kiwi/ui';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useApi } from '../../api/client';
 import { useFile } from '../../api/hooks';
 import { keys, meetingQuery } from '../../api/queries';
-import type { ChatMessage, FileRefView, FileView, MeetingView } from '../../api/types';
+import type { ChatMessage, FileRefView, FileView, MeetingView, RecordingUpload } from '../../api/types';
 import { T, useI18n } from '../../i18n';
-import { failureReasonKey, isRecording } from '../../lib/failure';
+import { failureReasonKey } from '../../lib/failure';
+import { initialOf } from '../../lib/text';
 import { Sentence } from './Sentence';
 
 type SlipProps = { file: FileRefView; message: ChatMessage };
@@ -75,39 +76,59 @@ function FileSlip({ file, message }: SlipProps) {
   );
 }
 
-/** A recording this session uploaded, under its message: the meeting it became is being summarized, or could not be. */
-function RecordingSlip({ file, message }: SlipProps) {
+/** The status slips of the files a message carries, derived from the file cache that realtime events keep current. */
+export function MessageFiles({ message }: { message: ChatMessage }) {
+  return message.files.map((file) => <FileSlip key={file.fileId} file={file} message={message} />);
+}
+
+/**
+ * A recording this session uploaded, as a row of its own: the file's chip, then the meeting it became while that is being
+ * summarized (a calm wait) or could not be (failed, with Retry). The server posts no message for a recording, so there is
+ * nothing of the stream to hang it under; once the summary is posted as its own message the row is gone.
+ */
+export function RecordingStatus({ recording, authorName }: { recording: RecordingUpload; authorName: string }) {
   const api = useApi();
   const queryClient = useQueryClient();
   const { plain } = useI18n();
-  const meetingId = useQuery({ queryKey: keys.recording(file.fileId), queryFn: skipToken, staleTime: Infinity }).data as string | undefined;
-  const meeting = useQuery({ ...meetingQuery(api, meetingId ?? ''), enabled: meetingId !== undefined }).data;
+  const meeting = useQuery(meetingQuery(api, recording.meetingId)).data;
 
   if (meeting === undefined || meeting.status === 'ready') {
     return null;
   }
-  if (meeting.status === 'failed' || meeting.status === 'no_transcript') {
-    return (
+  const slip =
+    meeting.status === 'failed' || meeting.status === 'no_transcript' ? (
       <Failure
         reason={<Sentence k="meetingSummaryFailed" slot="title" text={meeting.title} reason={failureReasonKey(meeting.failureReason)} />}
-        failedAt={meeting.settledAt ?? message.createdAt}
+        failedAt={meeting.settledAt ?? recording.at}
         retry={async () => {
           await api.meetings.retrySummary({ meetingId: meeting.id });
           queryClient.setQueryData<MeetingView>(keys.meeting(meeting.id), (current) => current && { ...current, status: 'ingesting', failureReason: '' });
         }}
       />
+    ) : (
+      <div className="msg-b">
+        <PendingSlip label={plain('summarizingRecording')} />
+      </div>
     );
-  }
   return (
-    <div className="msg-b">
-      <PendingSlip label={plain('summarizingRecording')} />
-    </div>
-  );
-}
-
-/** The status slips of the files a message carries, derived from the file and meeting caches that realtime events keep current. */
-export function MessageFiles({ message }: { message: ChatMessage }) {
-  return message.files.map((file) =>
-    isRecording(file.mime) ? <RecordingSlip key={file.fileId} file={file} message={message} /> : <FileSlip key={file.fileId} file={file} message={message} />,
+    <article className="msg" data-recording-id={recording.fileId}>
+      <div className="msg-h" data-human data-has-chip>
+        <span className="av" aria-hidden="true">
+          {initialOf(authorName)}
+        </span>
+        <p className="txt">
+          <b className="who">
+            <LangRuns text={authorName} />
+          </b>
+        </p>
+        <span className="msg-chip">
+          <FileChip name={recording.name} size={recording.size} />
+        </span>
+        <time className="msg-time" dateTime={recording.at}>
+          {formatClock(recording.at)}
+        </time>
+      </div>
+      {slip}
+    </article>
   );
 }

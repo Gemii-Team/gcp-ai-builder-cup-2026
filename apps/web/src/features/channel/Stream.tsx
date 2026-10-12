@@ -19,6 +19,10 @@ type StreamProps = {
   onLoadEarlier: () => void;
   /** One message as a row: the screen wires the row's author, actions and slips. */
   renderRow: (message: ChatMessage) => ReactNode;
+  /** What follows the last message and is not one: the status rows of this session's recordings. */
+  tail?: ReactNode;
+  /** How many rows `tail` holds, so a reader at the foot is kept there when one is added. */
+  tailCount?: number;
 };
 
 /**
@@ -26,7 +30,7 @@ type StreamProps = {
  * messages are added above, and a new message keeps them at the foot only if they were already there (their own always does).
  * Days are divided by a label and a hairline; `Load earlier` adds the page before the oldest message held.
  */
-export function Stream({ channel, messages, failed, onReload, hasEarlier, loadingEarlier, earlierFailed, onLoadEarlier, renderRow }: StreamProps) {
+export function Stream({ channel, messages, failed, onReload, hasEarlier, loadingEarlier, earlierFailed, onLoadEarlier, renderRow, tail, tailCount = 0 }: StreamProps) {
   const { plain, lang } = useI18n();
   const reduced = usePrefersReducedMotion();
   const scroller = useRef<HTMLDivElement>(null);
@@ -50,7 +54,7 @@ export function Stream({ channel, messages, failed, onReload, hasEarlier, loadin
       atFoot.current = true;
     }
     seen.current = { first, last: last?.id, height: element.scrollHeight };
-  }, [first, last?.id, last?.delivery, reduced]);
+  }, [first, last?.id, last?.delivery, tailCount, reduced]);
 
   const now = new Date();
   let previousDay = '';
@@ -103,6 +107,7 @@ export function Stream({ channel, messages, failed, onReload, hasEarlier, loadin
             </Fragment>
           );
         })}
+        {tail}
       </div>
     </div>
   );

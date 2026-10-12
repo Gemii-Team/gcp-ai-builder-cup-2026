@@ -21,8 +21,8 @@ export const keys = {
   channelTasks: (channelId: string) => ['tasks', { channelId }] as const,
   meeting: (id: string) => ['meeting', id] as const,
   file: (id: string) => ['file', id] as const,
-  /** The meeting a recording this session uploaded became: the id the file's pending and failed slips follow. */
-  recording: (fileId: string) => ['recording', fileId] as const,
+  /** The recordings this session uploaded into a channel (`RecordingUpload[]`): what their pending and failed rows follow. */
+  recordings: (channelId: string) => ['recordings', channelId] as const,
 };
 
 /** The latest page, and every page `Load earlier` adds. */
@@ -210,6 +210,7 @@ export function removeChannel(queryClient: QueryClient, channelId: string): void
   queryClient.removeQueries({ queryKey: keys.messages(channelId) });
   queryClient.removeQueries({ queryKey: keys.members(channelId) });
   queryClient.removeQueries({ queryKey: keys.channelTasks(channelId) });
+  queryClient.removeQueries({ queryKey: keys.recordings(channelId) });
 }
 
 /** Drops a task that no longer exists (a draft someone discarded) from the workspace list and its channel's list. */

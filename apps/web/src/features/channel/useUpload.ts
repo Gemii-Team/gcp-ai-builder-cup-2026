@@ -7,7 +7,7 @@ import { useApi } from '../../api/client';
 import { hasCode } from '../../api/errors';
 import { mapFile, mapMeeting } from '../../api/mappers';
 import { keys } from '../../api/queries';
-import type { MeetingView } from '../../api/types';
+import type { MeetingView, RecordingUpload } from '../../api/types';
 import { baseName, failureReasonKey, isRecording, isRejectionReason, rejectionReasonOf } from '../../lib/failure';
 import { mimeOf } from '../../lib/mime';
 
@@ -94,7 +94,10 @@ export function useUpload(channelId: string) {
             throw new Error('CreateFromRecording answered without a meeting.');
           }
           queryClient.setQueryData<MeetingView>(keys.meeting(meeting.id), mapMeeting(meeting));
-          queryClient.setQueryData(keys.recording(completed.id), meeting.id);
+          queryClient.setQueryData<RecordingUpload[]>(keys.recordings(channelId), (uploads = []) => [
+            ...uploads,
+            { fileId: completed.id, name: file.name, size: file.size, meetingId: meeting.id, at: new Date().toISOString() },
+          ]);
         }
         setState({ status: 'idle' });
       } catch (error) {

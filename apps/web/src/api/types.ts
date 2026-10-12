@@ -102,6 +102,19 @@ export type TaskView = {
   createdById: string;
 };
 
+/**
+ * A recording this session uploaded into a channel, and the meeting it became. The server posts no message for a recording
+ * (the summary is posted when the meeting is done), so this is what the wait for it, and its failure, follow.
+ */
+export type RecordingUpload = {
+  fileId: string;
+  name: string;
+  size: number;
+  meetingId: string;
+  /** When it was uploaded, ISO 8601. */
+  at: string;
+};
+
 export type FileView = {
   id: string;
   channelId: string;

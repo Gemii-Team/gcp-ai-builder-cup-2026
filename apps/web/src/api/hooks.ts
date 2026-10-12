@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { skipToken, useQuery } from '@tanstack/react-query';
 import { useApi } from './client';
-import { channelsQuery, channelTasksQuery, fileQuery, meetingQuery, membersQuery, meQuery, tasksQuery, usersQuery } from './queries';
+import { channelsQuery, channelTasksQuery, fileQuery, keys, meetingQuery, membersQuery, meQuery, tasksQuery, usersQuery } from './queries';
+import type { RecordingUpload } from './types';
 
 /** The signed-in user and workspace: the one `GetMe` query. */
 export function useMe() {
@@ -34,4 +35,9 @@ export function useFile(id: string) {
 
 export function useMeeting(id: string) {
   return useQuery(meetingQuery(useApi(), id));
+}
+
+/** The recordings this session uploaded into a channel (none after a reload: only the uploading session follows its recording). */
+export function useRecordings(channelId: string): RecordingUpload[] {
+  return useQuery<RecordingUpload[]>({ queryKey: keys.recordings(channelId), queryFn: skipToken, staleTime: Infinity }).data ?? [];
 }

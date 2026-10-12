@@ -16,6 +16,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUiStore } from '../../state/ui';
 import { keys } from '../../api/queries';
+import type { RecordingUpload } from '../../api/types';
 import { file, frame, meeting, message } from '../../testing/fixtures';
 import { LOG, openChannel } from '../../testing/openChannel';
 import { createStubApi, type StubApi } from '../../testing/stubApi';
@@ -195,7 +196,9 @@ describe('the slips of a message with files', () => {
     expect(within(log).getByText('warehouse-slots.csv')).toBeInTheDocument();
   });
 
-  it('follows a recording uploaded in this session: pending while it is summarized, failed with Retry when the meeting is', async () => {
+  // The server posts NO message for a recording (an accepted recording stays an uploaded file for the meetings domain, and
+  // the summary slip is posted when the meeting is done), so the wait and the failure are told by a row of their own.
+  it('follows a recording uploaded in this session: pending while it is summarized, failed with Retry when the meeting is, gone when it is done', async () => {
     const api = createStubApi();
     const { client, user } = openChannel({ messages: [message({ seq: 5, body: 'five' })] }, api);
     const log = await screen.findByRole('log', LOG);
@@ -207,16 +210,10 @@ describe('the slips of a message with files', () => {
       create(CreateFromRecordingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.PENDING }) }),
     );
     await user.upload(picker(), new File(['RIFF'], 'standup.wav', { type: 'audio/wav' }));
-    await waitFor(() => {
-      expect(api.meetings.createFromRecording).toHaveBeenCalled();
-    });
 
-    // The server posts the attachment message; the recording's slip is the meeting's, not the file's.
-    await act(async () => {
-      client.emit(frame({ case: 'messageCreated', value: message({ seq: 6, body: '', files: [{ fileId: 'file-9', name: 'standup.wav', mime: 'audio/wav', size: 4n }] }) }));
-      await Promise.resolve();
-    });
+    // No message was posted: the row, with the file's chip, comes from the upload itself.
     expect(await within(log).findByText('Summarizing the recording…')).toBeInTheDocument();
+    expect(within(log).getByText('standup.wav')).toBeInTheDocument();
     expect(api.files.getFile).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -234,6 +231,32 @@ describe('the slips of a message with files', () => {
     await user.click(within(log).getByRole('button', { name: 'Retry' }));
     expect(api.meetings.retrySummary).toHaveBeenCalledWith({ meetingId: 'meeting-9' });
     expect(await within(log).findByText('Summarizing the recording…')).toBeInTheDocument();
+
+    // The summary is its own message, with its REF; the row of the wait goes away.
+    api.meetings.getMeeting.mockResolvedValue(create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.READY }) }));
+    await act(async () => {
+      client.emit(
+        frame({ case: 'meetingSummaryReady', value: create(MeetingSummaryReadySchema, { meetingId: 'meeting-9', channelId: 'ch-q4', status: MeetingStatus.READY }) }),
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(within(log).queryByText('Summarizing the recording…')).not.toBeInTheDocument();
+    });
+    expect(within(log).queryByText('standup.wav')).not.toBeInTheDocument();
+  });
+
+  it('shows nothing for a recording of an earlier session: only the uploading session follows its recording', async () => {
+    const api = createStubApi();
+    api.meetings.getMeeting.mockResolvedValue(
+      create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.FAILED, failureReason: 'no_speech' }) }),
+    );
+    openChannel({ messages: [message({ seq: 5, body: 'five' })] }, api);
+    const log = await screen.findByRole('log', LOG);
+    await within(log).findByText('five');
+    expect(within(log).queryByText(/Couldn't summarize standup/)).not.toBeInTheDocument();
+    expect(within(log).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(api.meetings.getMeeting).not.toHaveBeenCalled();
   });
 });
 
@@ -279,16 +302,15 @@ describe('Retry when the service is unhealthy', () => {
 
   it('says so, keeps the meeting slip failed and lets Retry be pressed again, when RetrySummary fails', async () => {
     const api = createStubApi();
-    const { user, queryClient } = openChannel(
-      { messages: [message({ seq: 6, body: '', files: [{ fileId: 'file-9', name: 'standup.wav', mime: 'audio/wav', size: 4n }] })] },
-      api,
-    );
+    const { user, queryClient } = openChannel({ messages: [message({ seq: 6, body: 'six' })] }, api);
     api.meetings.getMeeting.mockResolvedValue(
       create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.FAILED, failureReason: 'no_speech' }) }),
     );
     const log = await screen.findByRole('log', LOG);
-    await within(log).findByText('standup.wav');
-    queryClient.setQueryData(keys.recording('file-9'), 'meeting-9');
+    await within(log).findByText('six');
+    act(() => {
+      queryClient.setQueryData<RecordingUpload[]>(keys.recordings('ch-q4'), [{ fileId: 'file-9', name: 'standup.wav', size: 4, meetingId: 'meeting-9', at: '2026-10-12T06:00:00Z' }]);
+    });
     const retry = await within(log).findByRole('button', { name: 'Retry' });
     api.meetings.retrySummary.mockRejectedValue(new ConnectError('down', Code.Unavailable));
 
