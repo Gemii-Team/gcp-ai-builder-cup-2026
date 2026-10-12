@@ -484,6 +484,12 @@ check "postgres: a startupProbe gives initdb and the bootstrap at least 120 s be
 
 check "k3d registry listens on loopback only" grep -qE '^ +host: 127\.0\.0\.1$' deploy/local/k3d.yaml
 
+# The app port carries the passwordless mock chooser and a Secret holding the real LLM key:
+# it must not be reachable from the network. k3d's Simple config hands the port string to
+# the docker nat parser, which reads [HOST_IP:]HOST_PORT:CONTAINER_PORT.
+check "k3d app port is published on loopback only (127.0.0.1:8080:80)" grep -qE '^ +- port: 127\.0\.0\.1:8080:80$' deploy/local/k3d.yaml
+check "k3d publishes no port without a loopback address" bash -c "! grep -E '^ +- port: ' deploy/local/k3d.yaml | grep -vE '^ +- port: 127\\.0\\.0\\.1:'"
+
 # --- the Tiltfile --------------------------------------------------------------
 # These read the Tiltfile as text, in the layout it keeps: every k8s_resource( and
 # custom_build( call opens at column 0 and closes with ")" at column 0, the
@@ -953,18 +959,30 @@ verdict=ok
 grep -qx 'export KIWI_DB_PASSWORD=chosen-by-hand' "$d/.env" || verdict=bad
 expect "gen-env: an 'export NAME=value' line counts as set and is left alone" "$verdict" "rc=$rc" "$(cat "$d/out")"
 
-# k3d-up.sh: the cpuset hook decision (k3d, docker and kubectl are stubs) -------------
+# k3d-up.sh: the cpuset hook decision and the warning about an old, public cluster (k3d, docker
+# and kubectl are stubs) --------------------------------------------------------------------
 K3D_STUB="$WORK/k3dstub"
 mkdir -p "$K3D_STUB"
 cat >"$K3D_STUB/k3d" <<'EOF'
 #!/usr/bin/env bash
 printf 'k3d %s\n' "$*" >>"$K3D_LOG"
-if [ "$1 $2" = "cluster get" ]; then exit 1; fi
+if [ "$1 $2" = "cluster get" ]; then [ "${STUB_CLUSTER_EXISTS:-0}" = 1 ] && exit 0; exit 1; fi
 EOF
 cat >"$K3D_STUB/docker" <<'EOF'
 #!/usr/bin/env bash
-# `docker info` reports rootless in its security options only when STUB_ROOTLESS=1.
-[ "${STUB_ROOTLESS:-0}" = 1 ] && echo "  rootless"
+case "$1" in
+  info)
+    # Rootless in its security options only when STUB_ROOTLESS=1; STUB_INFO_BULK=1 follows with
+    # more output than a pipe holds, as the real `docker info` has.
+    [ "${STUB_ROOTLESS:-0}" = 1 ] && echo "  rootless"
+    [ "${STUB_INFO_BULK:-0}" = 1 ] && { head -c 400000 /dev/zero | tr '\0' x; echo; }
+    ;;
+  inspect)
+    # The load balancer's bindings of its port 80, one HOST_IP|HOST_PORT per line; "!" = no such container.
+    [ "${STUB_LB_BINDINGS:-}" != '!' ] || exit 1
+    printf '%b' "${STUB_LB_BINDINGS:-}"
+    ;;
+esac
 exit 0
 EOF
 cat >"$K3D_STUB/kubectl" <<'EOF'
@@ -973,16 +991,21 @@ printf 'kubectl %s\n' "$*" >>"$K3D_LOG"
 EOF
 chmod +x "$K3D_STUB/k3d" "$K3D_STUB/docker" "$K3D_STUB/kubectl"
 
-# k3d_up mode rootless controllers: sets RC, OUT and K3D_LOG_FILE.
+# k3d_up mode rootless controllers: sets RC, OUT and K3D_LOG_FILE. The cluster does not exist
+# unless LB_BINDINGS is set: then it does, and its load balancer reports those bindings of
+# port 80 (HOST_IP|HOST_PORT lines; an empty HOST_IP is every interface; "!" = not inspectable).
+# INFO_BULK=1 makes `docker info` long.
 k3d_up() {
-  local mode=$1 rootless=$2 controllers=$3
+  local mode=$1 rootless=$2 controllers=$3 stubs=()
   CASE=$((CASE + 1))
   local d="$WORK/k3dup$CASE"
   mkdir -p "$d"
   printf '%s\n' "$controllers" >"$d/controllers"
   K3D_LOG_FILE="$d/log"
   : >"$K3D_LOG_FILE"
-  env -i PATH="$K3D_STUB:$PATH" HOME="$WORK" K3D_LOG="$K3D_LOG_FILE" STUB_ROOTLESS="$rootless" \
+  [ "${LB_BINDINGS+set}" != set ] || stubs=(STUB_CLUSTER_EXISTS=1 "STUB_LB_BINDINGS=$LB_BINDINGS")
+  [ "${INFO_BULK:-0}" != 1 ] || stubs+=(STUB_INFO_BULK=1)
+  env -i PATH="$K3D_STUB:$PATH" HOME="$WORK" K3D_LOG="$K3D_LOG_FILE" STUB_ROOTLESS="$rootless" ${stubs[@]+"${stubs[@]}"} \
     KIWI_K3D_USER_CONTROLLERS="$d/controllers" ${mode:+KIWI_K3D_CPUSET_HOOK="$mode"} \
     bash scripts/local/k3d-up.sh >"$d/out" 2>&1
   RC=$?
@@ -1020,6 +1043,48 @@ k3d_up maybe 1 "cpu io memory pids"
 verdict=ok
 [ "$RC" -eq 2 ] && contains "$OUT" KIWI_K3D_CPUSET_HOOK && ! grep -q 'cluster create' "$K3D_LOG_FILE" || verdict=bad
 expect "k3d-up: an unknown KIWI_K3D_CPUSET_HOOK value is refused before anything is created" "$verdict" "rc=$RC" "$OUT"
+
+# A `docker info` longer than a pipe holds must not hide the rootless line (grep -q exits at the
+# match, and under pipefail the writer's SIGPIPE used to fail the whole test).
+INFO_BULK=1 k3d_up "" 1 "cpu io memory pids"
+unset INFO_BULK
+verdict=ok
+[ "$RC" -eq 0 ] && hook_applied && contains "$OUT" "cpuset hook: on" || verdict=bad
+expect "k3d-up auto: a long docker info still reports rootless" "$verdict" "rc=$RC" "$OUT" "$(cat "$K3D_LOG_FILE")"
+
+# An existing cluster keeps the port binding it was created with; k3d-up says when that is public.
+warned() { contains "$OUT" "WARNING" && contains "$OUT" "8080" && contains "$OUT" "task local:down" && contains "$OUT" "task local:up"; }
+started() { grep -qxF 'k3d cluster start kiwi' "$K3D_LOG_FILE" && ! grep -q 'cluster create' "$K3D_LOG_FILE"; }
+
+LB_BINDINGS='|8080\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && warned && contains "$OUT" "all interfaces:8080" || verdict=bad
+expect "k3d-up: an existing cluster that publishes 8080 on every interface (empty host IP) is started and warned about" "$verdict" "rc=$RC" "$OUT" "$(cat "$K3D_LOG_FILE")"
+
+LB_BINDINGS='0.0.0.0|8080\n::|8080\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && warned && contains "$OUT" "0.0.0.0:8080" || verdict=bad
+expect "k3d-up: 0.0.0.0 and :: bindings are warned about" "$verdict" "rc=$RC" "$OUT"
+
+LB_BINDINGS='127.0.0.1|8080\n|8080\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && warned || verdict=bad
+expect "k3d-up: one loopback binding does not excuse another that is public" "$verdict" "rc=$RC" "$OUT"
+
+LB_BINDINGS='127.0.0.1|8080\n::1|8080\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && ! contains "$OUT" "WARNING" || verdict=bad
+expect "k3d-up: an existing cluster published on loopback only is started without a warning" "$verdict" "rc=$RC" "$OUT"
+
+LB_BINDINGS='!' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && ! contains "$OUT" "WARNING" || verdict=bad
+expect "k3d-up: a load balancer that cannot be inspected is no reason to fail or to warn" "$verdict" "rc=$RC" "$OUT"
+
+k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && grep -q 'cluster create --config deploy/local/k3d.yaml' "$K3D_LOG_FILE" && ! contains "$OUT" "WARNING" || verdict=bad
+expect "k3d-up: a cluster that does not exist yet is created from the config, with no warning" "$verdict" "rc=$RC" "$OUT" "$(cat "$K3D_LOG_FILE")"
 
 if [ "$failures" -ne 0 ]; then
   printf '\nrender.test.sh: %d check(s) failed\n' "$failures"

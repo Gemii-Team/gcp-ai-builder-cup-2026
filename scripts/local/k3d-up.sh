@@ -20,10 +20,32 @@ user_controllers() {
 }
 
 rootless_without_cpuset() {
-  docker info 2>/dev/null | grep -qi rootless || return 1
-  local file
+  # Captured first: `docker info | grep -q` exits at the match, and the writer's SIGPIPE
+  # (141, a fail under pipefail) would then read as "not rootless".
+  local info file
+  info="$(docker info 2>/dev/null)" || return 1
+  grep -qi rootless <<<"$info" || return 1
   file="$(user_controllers)"
   [ -r "$file" ] && ! grep -qw cpuset "$file"
+}
+
+# warn_if_app_port_is_public: the app port (80 of the load balancer, 8080 on the host) is
+# published on loopback by deploy/local/k3d.yaml, but a cluster keeps the binding it was
+# created with. An empty host IP is every interface. Read-only and advisory: a load
+# balancer that cannot be inspected is not an error.
+warn_if_app_port_is_public() {
+  local bindings ip port public=()
+  bindings="$(docker inspect --format '{{range (index .HostConfig.PortBindings "80/tcp")}}{{.HostIp}}|{{.HostPort}}{{"\n"}}{{end}}' "k3d-$CLUSTER-serverlb" 2>/dev/null)" || return 0
+  while IFS='|' read -r ip port; do
+    [ -n "$port" ] || continue
+    case "$ip" in
+      127.0.0.1 | ::1) ;;
+      *) public+=("${ip:-all interfaces}:$port") ;;
+    esac
+  done <<<"$bindings"
+  [ "${#public[@]}" -gt 0 ] || return 0
+  echo "k3d-up: WARNING: the existing cluster publishes the app on ${public[*]}, so any host that can reach this machine can sign in and spend the model quota." >&2
+  echo "k3d-up: WARNING: deploy/local/k3d.yaml now binds 127.0.0.1 only; the old binding stays until the cluster is recreated: task local:down, then task local:up (this deletes the cluster and its data)." >&2
 }
 
 case "$mode" in
@@ -35,6 +57,7 @@ case "$mode" in
 esac
 
 if k3d cluster get "$CLUSTER" >/dev/null 2>&1; then
+  warn_if_app_port_is_public
   k3d cluster start "$CLUSTER"
 else
   hook=off
