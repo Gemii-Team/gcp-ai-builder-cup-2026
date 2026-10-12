@@ -29,7 +29,7 @@ tasks:
       - pnpm -r lint
 
   check:scripts:
-    desc: "Run the guard suites of the manifests and scripts: rendered overlays and Tiltfile, README, forbidden paths, gitleaks rules and the smoke runner. Offline: no cluster, no Docker (programs the scripts call are stubbed); needs kustomize, kubeconform, gitleaks and task on PATH"
+    desc: "Run the guard suites of the manifests and scripts: rendered overlays and Tiltfile, README, forbidden paths, gitleaks rules and the smoke runner. Needs no cluster and no Docker (the programs the scripts call are stubbed) but network access (kubeconform downloads the Kubernetes schemas); needs kustomize, kubeconform, gitleaks and task on PATH, and caddy to validate the Caddyfile (skipped, loudly, without it)"
     cmds:
       - bash scripts/local/render.test.sh
       - bash scripts/hygiene/check-paths.test.sh

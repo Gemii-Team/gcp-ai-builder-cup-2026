@@ -204,6 +204,30 @@ else
   report "no reference to a document that is not pushed" ok
 fi
 
+# --- statements the repository can check ---------------------------------------
+# kubeconform downloads the Kubernetes schemas (from raw.githubusercontent.com), so the guard
+# suites need no cluster and no Docker, but they are not offline.
+desc=$(awk '/^  check:scripts:$/ { b = 1; next } /^  [^ ]/ { b = 0 } b && /desc:/' "$TASKFILE")
+mention=$(grep -F 'task check:scripts` runs' "$README")
+if [ -z "$desc" ] || [ -z "$mention" ]; then
+  report "task check:scripts is described by the Taskfile and the README" no "the Taskfile desc or the README bullet is missing"
+elif printf '%s\n%s\n' "$desc" "$mention" | grep -qiE '(^|[^a-z])offline([^a-z]|$)'; then
+  report "task check:scripts is not called offline (kubeconform needs the network)" no "the Taskfile desc or the README bullet says offline"
+elif ! printf '%s\n' "$desc" | grep -qi 'network' || ! printf '%s\n' "$mention" | grep -qi 'network'; then
+  report "task check:scripts says it needs network access" no "the Taskfile desc or the README bullet does not mention the network"
+else
+  report "task check:scripts says it needs no cluster and no Docker but network access" ok
+fi
+
+# Only some steps of the smoke scripts are timed with timeout; tilt and the kubectl waits
+# bring their own --timeout. No sentence claims that every step is.
+hits=$(grep -nE 'bound(ed|s)? every step' "$README" | lines_of)
+if [ -n "$hits" ]; then
+  report "the README does not claim every step of the smoke scripts is bounded by timeout" no "on line(s) $hits"
+else
+  report "the README does not claim every step of the smoke scripts is bounded by timeout" ok
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "readme.test.sh: $failures of $checks check(s) failed"
   exit 1
