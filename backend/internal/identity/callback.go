@@ -391,6 +391,27 @@ func ListWorkspaceIDs(ctx context.Context, d *db.DB) ([]uuid.UUID, error) {
 	return ids, nil
 }
 
+// NoDomainWorkspaceEmails returns the email of every user of the one workspace without
+// a domain, by name and then email, and nothing when the workspace has no users or does
+// not exist yet. It is for the seed, which must look at what an earlier seed made before
+// it adds to it. The workspace has a fixed id, so this is a read inside it as kiwi_app:
+// row-level security shows nothing of another workspace.
+func NoDomainWorkspaceEmails(ctx context.Context, d *db.DB) ([]string, error) {
+	var rows []store.IdentityUser
+	err := d.InWorkspace(ctx, noDomainWorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {
+		rows, err = store.New(tx).ListUsers(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("identity: list the users of the workspace without a domain: %w", err)
+	}
+	emails := make([]string, len(rows))
+	for i, u := range rows {
+		emails[i] = u.Email
+	}
+	return emails, nil
+}
+
 func normalizeEmail(s string) string  { return strings.ToLower(strings.TrimSpace(s)) }
 func normalizeDomain(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 

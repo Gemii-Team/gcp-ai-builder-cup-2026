@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"golang.org/x/oauth2"
 	"google.golang.org/api/googleapi"
 )
 
@@ -66,8 +67,12 @@ func (f *meetFailure) Unwrap() []error { return []error{f.err, f.meet} }
 // classify sorts err into a MeetError, or returns nil when err is not a failure of
 // Meet: a cancelled request, a response nobody can read, anything of the application's
 // own. Only what came back from the HTTP call counts: an answer from Meet (a
-// *googleapi.Error) or no answer at all (the http.Client wraps every transport error,
-// timeouts included, in a *url.Error).
+// *googleapi.Error), an answer from Google's token endpoint refusing the OAuth client
+// (a *oauth2.RetrieveError, which the http.Client also wraps in a *url.Error because
+// the request failed before it left: invalid_client and unauthorized_client mean the
+// operator's credentials are wrong or disabled, so it is told as a refusal, the one that
+// asks the person to tell whoever runs K.I.W.I.) or no answer at all (every transport
+// error, timeouts included, in a *url.Error). The refusal has no Meet status.
 func classify(err error) *MeetError {
 	if errors.Is(err, context.Canceled) {
 		return nil
@@ -75,6 +80,10 @@ func classify(err error) *MeetError {
 	var api *googleapi.Error
 	if errors.As(err, &api) {
 		return classifyStatus(api)
+	}
+	var token *oauth2.RetrieveError
+	if errors.As(err, &token) {
+		return &MeetError{Reason: ReasonMeetUnavailable, Cause: CauseRefused}
 	}
 	var transport *url.Error
 	if errors.As(err, &transport) {

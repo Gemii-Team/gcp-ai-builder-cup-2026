@@ -755,3 +755,88 @@ func TestSeed_WithADomain_AddsNoDemoPeople(t *testing.T) {
 		t.Errorf("%d demo people in a workspace with a domain, want none", n)
 	}
 }
+
+// seedOldShape makes the workspace without a domain the way the seed did before the
+// demo people: the one member given alone, owning every channel and writing every
+// message. It uses the seeder itself, so the rows are the ones that seed wrote.
+func (h *harness) seedOldShape(email string) uuid.UUID {
+	h.t.Helper()
+	ws, ids, err := identity.EnsureSeedWorkspace(h.t.Context(), h.db, "", []string{email})
+	if err != nil {
+		h.t.Fatalf("EnsureSeedWorkspace: %v", err)
+	}
+	c, err := loadCorpus()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	s := newSeeder(h.deps, ws, ids, []string{email})
+	for _, spec := range c.channels {
+		id, err := s.ensureChannel(h.t.Context(), spec)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		if _, err := s.postMessages(h.t.Context(), id, spec); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	return ws
+}
+
+// Reseeding a workspace made in the old shape in place would post every message again
+// under the demo people (the dedupe key is the author) and make #hr-private a second
+// time, since the demo people cannot see the real user's copy. The seed refuses, says
+// what to do, and writes nothing.
+func TestSeed_WithoutADomain_RefusesToReseedTheOldShapeInPlace(t *testing.T) {
+	const realUser = "owner@gmail.example"
+	h := newHarness(t)
+	ws := h.seedOldShape(realUser)
+	before := h.counts(ws)
+	if before["chat.messages"] == 0 || before["identity.users"] != 1 {
+		t.Fatalf("the old shape was not made: %v", before)
+	}
+	generated, embedded := len(h.llm.GenerateCalls()), len(h.llm.EmbedCalls())
+
+	for name, members := range map[string][]string{
+		"the real user alone":           {realUser},
+		"the real user and a colleague": {realUser, "colleague@gmail.example"},
+	} {
+		err := h.run(Options{MemberEmails: members, IndexInline: true})
+
+		if err == nil || !strings.Contains(err.Error(), "reset the workspace's data first") {
+			t.Errorf("%s: Run = %v, want a refusal that says to reset the workspace's data first", name, err)
+		}
+		if after := h.counts(ws); !mapsEqual(before, after) {
+			t.Errorf("%s: the refused run wrote rows:\n before %v\n after  %v", name, before, after)
+		}
+	}
+	if n := len(h.llm.GenerateCalls()) - generated; n != 0 {
+		t.Errorf("the refused runs called the model %d times, want 0", n)
+	}
+	if n := len(h.llm.EmbedCalls()) - embedded; n != 0 {
+		t.Errorf("the refused runs embedded %d batches, want 0", n)
+	}
+}
+
+// The refusal is only for the old shape. A workspace that has the two demo people is
+// the new shape: seeding it again, with the same members or one more, goes ahead and
+// changes nothing of what is there (TestSeed_WithoutADomain_PutsTwoDemoPeopleBeforeTheMembersGiven
+// checks the row counts of the second run; this one checks it is not refused).
+func TestSeed_WithoutADomain_TheNewShapeIsNotRefused(t *testing.T) {
+	const first, second = "owner@gmail.example", "later@gmail.example"
+	h := newHarness(t)
+	h.mustRun(Options{MemberEmails: []string{first}, IndexInline: true})
+
+	h.mustRun(Options{MemberEmails: []string{first}, IndexInline: true})
+	h.mustRun(Options{MemberEmails: []string{first, second}, IndexInline: true})
+
+	ws, _, err := identity.EnsureSeedWorkspace(t.Context(), h.db, "", slices.Concat(DemoPeople, []string{first, second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(ws, `SELECT count(*) FROM identity.users`); n != 4 {
+		t.Errorf("%d users, want the 2 demo people and the 2 members", n)
+	}
+	if n := h.count(ws, `SELECT count(*) FROM chat.channels WHERE name = 'hr-private'`); n != 1 {
+		t.Errorf("%d #hr-private channels, want 1", n)
+	}
+}

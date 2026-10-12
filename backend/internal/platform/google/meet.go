@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,6 +54,9 @@ func (c *client) createMeetSpace(ctx context.Context, userID uuid.UUID, enableTr
 		// setting, once, and say so in the result.
 		enableTranscription = false
 		created, err = svc.Spaces.Create(&meet.Space{}).Context(ctx).Do()
+		if err == nil {
+			slog.InfoContext(ctx, "meet: auto-transcription unavailable for this account, space created without it", "user_id", userID)
+		}
 	}
 	if err != nil {
 		return Space{}, fmt.Errorf("spaces.create: %w", err)

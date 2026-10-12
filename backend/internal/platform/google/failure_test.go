@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -144,6 +145,80 @@ func TestCreateMeetSpace_FeatureUnavailable_FallbackThatFailsReturnsItsOwnTypedE
 	}
 }
 
+// fallbackLog returns the records CreateMeetSpace logs, one JSON object each, through
+// the default logger, which is what the package logs with.
+func fallbackLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	logs := new(bytes.Buffer)
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return logs
+}
+
+const fallbackLogMessage = "meet: auto-transcription unavailable for this account, space created without it"
+
+// The operator sees that an account does not get auto-transcription: one INFO record
+// when the fallback fires and works, with the user's id and nothing of the answer or the
+// token; none when the call went through the first time or when the fallback failed too
+// (that one is the API's error log).
+func TestCreateMeetSpace_Fallback_LogsOneInfoRecordWithTheUserOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		retry    func(w http.ResponseWriter)
+		withFlag bool
+		want     int
+	}{
+		{"the fallback works", func(w http.ResponseWriter) { okSpace(t, w) }, true, 1},
+		{"the fallback fails too", func(w http.ResponseWriter) {
+			writeErrorBody(w, http.StatusServiceUnavailable, errorJSON(503, "UNAVAILABLE", "", "", nil))
+		}, true, 0},
+		{"the account has the feature", nil, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := fallbackLog(t)
+			m := newMeetStub(t)
+			user := uuid.New()
+			m.mux.HandleFunc("POST /v2/spaces", func(w http.ResponseWriter, r *http.Request) {
+				body := new(bytes.Buffer)
+				_, _ = body.ReadFrom(r.Body)
+				switch {
+				case tc.withFlag && carriesConfig(t, body.Bytes()):
+					writeErrorBody(w, http.StatusForbidden, featureUnavailableBody)
+				case tc.retry != nil:
+					tc.retry(w)
+				default:
+					okSpace(t, w)
+				}
+			})
+
+			_, _ = newClient(t, m, tokenFor(t, user)).CreateMeetSpace(t.Context(), user, true)
+
+			var records []map[string]any
+			for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+				var r map[string]any
+				if json.Unmarshal([]byte(line), &r) == nil && r["msg"] == fallbackLogMessage {
+					records = append(records, r)
+				}
+			}
+			if len(records) != tc.want {
+				t.Fatalf("%d records of %q, want %d: %s", len(records), fallbackLogMessage, tc.want, logs)
+			}
+			if tc.want == 0 {
+				return
+			}
+			if records[0]["level"] != "INFO" || records[0]["user_id"] != user.String() {
+				t.Errorf("record = %v, want INFO with user_id %s", records[0], user)
+			}
+			for _, leak := range []string{"tok-", "Bearer", "SECRET", "updateAutoTranscriptionGeneration"} {
+				if strings.Contains(logs.String(), leak) {
+					t.Errorf("the log carries %q: only the user's id belongs in it: %s", leak, logs)
+				}
+			}
+		})
+	}
+}
+
 // Only Meet's refusal of the auto-transcription feature triggers the retry. Anything
 // else, including a 403 for another reason or for another feature, fails the call
 // after one request: creating a space without the setting would hide a real problem.
@@ -269,6 +344,32 @@ func TestMeetError_NetworkAndTimeoutErrorsAreUnavailable(t *testing.T) {
 			_, err := failingClient(t, user, cause).CreateMeetSpace(t.Context(), user, false)
 
 			expectMeetError(t, err, google.ReasonMeetUnavailable, google.CauseUnavailable, 0)
+		})
+	}
+}
+
+// A token endpoint that refuses the OAuth client (invalid_client, unauthorized_client:
+// the operator's credentials are wrong or disabled) fails the request before it reaches
+// Meet. The http.Client wraps that error in a *url.Error, as it does a network failure,
+// but Google did answer: it is a refusal, not "Meet isn't answering".
+func TestMeetError_TokenEndpointRefusal_IsRefusedNotUnavailable(t *testing.T) {
+	user := uuid.New()
+	for _, code := range []string{"invalid_client", "unauthorized_client", "invalid_request"} {
+		t.Run(code, func(t *testing.T) {
+			m := newMeetStub(t)
+			refusal := &oauth2.RetrieveError{Response: &http.Response{StatusCode: 401}, ErrorCode: code, ErrorDescription: googleText}
+			tokens := func(context.Context, uuid.UUID, string) (oauth2.TokenSource, error) { return revoked{refusal}, nil }
+
+			_, err := newClient(t, m, tokens).CreateMeetSpace(t.Context(), user, false)
+
+			expectMeetError(t, err, google.ReasonMeetUnavailable, google.CauseRefused, 0)
+			var got *oauth2.RetrieveError
+			if !errors.As(err, &got) || got.ErrorCode != code || !strings.Contains(err.Error(), googleText) {
+				t.Errorf("err = %v, want the token endpoint's own error kept whole in the chain for the operator's log", err)
+			}
+			if n := m.total(); n != 0 {
+				t.Errorf("Meet saw %d requests, want none: the token was never issued", n)
+			}
 		})
 	}
 }

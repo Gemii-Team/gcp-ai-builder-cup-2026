@@ -8,7 +8,9 @@
 // finds what an earlier one made by the natural key of each thing: a channel by its
 // name, a message by a client_msg_id derived from the workspace, channel and position
 // (UUIDv5), the document by its file name in its channel, and the meeting by an id
-// derived the same way. A run that stopped half way is finished by the next one.
+// derived the same way. A run that stopped half way is finished by the next one. The one
+// exception is a workspace without a domain that an earlier seed made before DemoPeople
+// existed (the real user alone): that is refused, writing nothing, and has to be reset.
 //
 // The workspace is that of a Google domain (its members sign in with hd) or, with no
 // domain, the one workspace without a domain: its members are personal Google accounts
@@ -83,7 +85,8 @@ type Deps struct {
 // the drafts that have an owner). The workspace without a domain gets DemoPeople in
 // front of them, so with it the demo people own the channels and write the
 // conversation, and the members given are plain members of the public channels who do
-// and own nothing.
+// and own nothing. A workspace without a domain that has users but not both demo people
+// is in the old shape and is refused (see refuseOldShape).
 // Each is a placeholder user until that email signs in. With
 // IndexInline Run analyses the document and indexes everything itself, and the workspace
 // can be searched when it returns; without it Run leaves both to the doc.analyze and
@@ -118,6 +121,26 @@ func (o Options) clean() (domain string, emails []string, err error) {
 	return domain, emails, nil
 }
 
+// refuseOldShape stops a seed of the workspace without a domain from running in place on
+// one an earlier seed made before the demo people existed: the real user alone, owning
+// every channel and writing every message. The seed would post every message again, as
+// the demo people (a message is found by its author), and make #hr-private a second
+// time, because the demo people cannot see the first one. It reads before anything is
+// written. A workspace that has both demo people is in the new shape, and one that has
+// no users is fresh; both go ahead.
+func refuseOldShape(ctx context.Context, d *db.DB) error {
+	existing, err := identity.NoDomainWorkspaceEmails(ctx, d)
+	if err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	if len(existing) == 0 || !slices.ContainsFunc(DemoPeople, func(demo string) bool { return !slices.Contains(existing, demo) }) {
+		return nil
+	}
+	return fmt.Errorf("seed: the workspace without a domain already has %d user(s) but not the demo people %s: "+
+		"it was seeded before they existed, and seeding it in place would post every message again and create #hr-private twice; "+
+		"reset the workspace's data first, then seed again (nothing was written)", len(existing), strings.Join(DemoPeople, " and "))
+}
+
 // Run seeds the workspace of o.Domain, or the one without a domain. See Options and the
 // package comment.
 func Run(ctx context.Context, d Deps, o Options) error {
@@ -127,6 +150,11 @@ func Run(ctx context.Context, d Deps, o Options) error {
 	domain, emails, err := o.clean()
 	if err != nil {
 		return err
+	}
+	if domain == "" {
+		if err := refuseOldShape(ctx, d.DB); err != nil {
+			return err
+		}
 	}
 	c, err := loadCorpus()
 	if err != nil {

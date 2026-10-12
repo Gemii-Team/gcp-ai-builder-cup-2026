@@ -1129,6 +1129,28 @@ func TestListWorkspaceIDs_FailsWithoutASystemPool(t *testing.T) {
 	}
 }
 
+func TestNoDomainWorkspaceEmails_ListsOnlyTheUsersOfTheWorkspaceWithoutADomain(t *testing.T) {
+	f := newFixture(t)
+	if got, err := NoDomainWorkspaceEmails(t.Context(), f.db); err != nil || len(got) != 0 {
+		t.Fatalf("before the workspace exists: %v, %v; want nothing", got, err)
+	}
+	if _, _, err := EnsureSeedWorkspace(t.Context(), f.db, "acme.test", []string{"alice@acme.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NoDomainWorkspaceEmails(t.Context(), f.db); err != nil || len(got) != 0 {
+		t.Fatalf("with only a workspace of a domain: %v, %v; want nothing of it", got, err)
+	}
+	if _, _, err := EnsureSeedWorkspace(t.Context(), f.db, "", []string{"Zed@Gmail.example", "amy@gmail.example"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NoDomainWorkspaceEmails(t.Context(), f.db)
+
+	if want := []string{"amy@gmail.example", "zed@gmail.example"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("NoDomainWorkspaceEmails = %v, %v; want %v, lowercased, of that workspace only", got, err, want)
+	}
+}
+
 func TestEnsureSeedWorkspace_NoDomain_LowercasesValidatesAndIsIdempotent(t *testing.T) {
 	f := newFixture(t)
 	emails := []string{" Mixed.Case@Gmail.com ", "second@gmail.com", "MIXED.CASE@gmail.com"} // the third repeats the first
