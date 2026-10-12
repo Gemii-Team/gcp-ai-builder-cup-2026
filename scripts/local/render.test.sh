@@ -1168,6 +1168,62 @@ verdict=ok
 [ "$RC" -eq 0 ] && grep -q 'cluster create --config deploy/local/k3d.yaml' "$K3D_LOG_FILE" && ! contains "$OUT" "WARNING" || verdict=bad
 expect "k3d-up: a cluster that does not exist yet is created from the config, with no warning" "$verdict" "rc=$RC" "$OUT" "$(cat "$K3D_LOG_FILE")"
 
+# --- the guard suites are wired ----------------------------------------------------------------
+# A suite that nothing runs guards nothing. Every scripts/**/*.test.sh is part of `task
+# check:scripts` and of a CI job (the hygiene suites in the hygiene workflow, the others in ci.yml),
+# and the generated-code drift check has its own task and job.
+# suites_wired [Taskfile [ci.yml [hygiene.yml]]]
+suites_wired() {
+  local taskfile=${1:-Taskfile.yml} ci=${2:-.github/workflows/ci.yml} hygiene=${3:-.github/workflows/hygiene.yml}
+  local rc=0 suite block workflow
+  block=$(awk '/^  check:scripts:$/ { b = 1; next } /^  [^ ]/ { b = 0 } b' "$taskfile")
+  [ -n "$block" ] || { echo "$taskfile has no task check:scripts"; return 1; }
+  for suite in $(find scripts -name '*.test.sh' | sort); do
+    printf '%s\n' "$block" | grep -qxF "      - bash $suite" || { echo "task check:scripts does not run $suite"; rc=1; }
+    case $suite in scripts/hygiene/*) workflow=$hygiene ;; *) workflow=$ci ;; esac
+    grep -qE "(run: |^ +)bash $suite\$" "$workflow" || { echo "$workflow does not run $suite"; rc=1; }
+  done
+  grep -qxF "      - bash scripts/check-gen-drift.sh" <(awk '/^  gen:check:$/ { b = 1; next } /^  [^ ]/ { b = 0 } b' "$taskfile") || { echo "task gen:check does not run scripts/check-gen-drift.sh"; rc=1; }
+  grep -qE "run: bash scripts/check-gen-drift\.sh\$" "$ci" || { echo "$ci does not run scripts/check-gen-drift.sh"; rc=1; }
+  return "$rc"
+}
+check "every guard suite runs from task check:scripts and from CI; the drift check from task gen:check and CI" suites_wired
+
+# The CI jobs build their tools with `go install` at an exact release; it must be a release of the
+# minor that mise.toml pins, so that CI and a developer's mise run the same tools.
+ci_tools_match_mise() { # [mise.toml [ci.yml]]
+  local mise=${1:-mise.toml} ci=${2:-.github/workflows/ci.yml} rc=0 pair tool var pin want
+  for pair in kustomize:KUSTOMIZE_VERSION kubeconform:KUBECONFORM_VERSION task:TASK_VERSION buf:BUF_VERSION sqlc:SQLC_VERSION; do
+    tool=${pair%%:*}
+    var=${pair##*:}
+    pin=$(awk -F'"' -v t="$tool" '$1 ~ "^" t " *= *$" { print $2; exit }' "$mise")
+    want=$(awk -v v="$var:" '$1 == v { print $2; exit }' "$ci")
+    [ -n "$pin" ] || { echo "$mise pins no $tool"; rc=1; continue; }
+    [ -n "$want" ] || { echo "$ci sets no $var"; rc=1; continue; }
+    case $want in v"$pin".*) ;; *) echo "$var=$want is not a release of $tool $pin (mise.toml)"; rc=1 ;; esac
+  done
+  return "$rc"
+}
+check "the tool versions CI installs are releases of the minors mise.toml pins" ci_tools_match_mise
+
+# Prove the two guards: each fails when what it guards is taken out.
+mkdir -p "$WORK/wired"
+sed '/scripts\/hygiene\/gitleaks.test.sh/d' .github/workflows/hygiene.yml >"$WORK/wired/hygiene.yml"
+if suites_wired Taskfile.yml .github/workflows/ci.yml "$WORK/wired/hygiene.yml" >"$WORK/wired/out" 2>&1; then
+  bad "suites_wired accepts a hygiene workflow that no longer runs gitleaks.test.sh"
+elif grep -q 'hygiene.yml does not run scripts/hygiene/gitleaks.test.sh' "$WORK/wired/out"; then ok "suites_wired refuses a hygiene workflow that no longer runs gitleaks.test.sh"
+else bad "suites_wired refused the hygiene workflow for another reason" "$(head -n 3 "$WORK/wired/out")"; fi
+sed '/- bash scripts\/smoke\/run.test.sh/d' Taskfile.yml >"$WORK/wired/Taskfile.yml"
+if suites_wired "$WORK/wired/Taskfile.yml" >"$WORK/wired/out" 2>&1; then
+  bad "suites_wired accepts a Taskfile whose check:scripts lacks run.test.sh"
+elif grep -q 'task check:scripts does not run scripts/smoke/run.test.sh' "$WORK/wired/out"; then ok "suites_wired refuses a Taskfile whose check:scripts lacks run.test.sh"
+else bad "suites_wired refused the Taskfile for another reason" "$(head -n 3 "$WORK/wired/out")"; fi
+sed 's/^  KUSTOMIZE_VERSION: v5\.8\.0$/  KUSTOMIZE_VERSION: v5.7.1/' .github/workflows/ci.yml >"$WORK/wired/ci.yml"
+if ci_tools_match_mise mise.toml "$WORK/wired/ci.yml" >"$WORK/wired/out" 2>&1; then
+  bad "ci_tools_match_mise accepts kustomize v5.7.1 against mise.toml 5.8"
+elif grep -q 'KUSTOMIZE_VERSION=v5.7.1 is not a release of kustomize 5.8' "$WORK/wired/out"; then ok "ci_tools_match_mise refuses kustomize v5.7.1 against mise.toml 5.8"
+else bad "ci_tools_match_mise refused ci.yml for another reason" "$(head -n 3 "$WORK/wired/out")"; fi
+
 if [ "$failures" -ne 0 ]; then
   printf '\nrender.test.sh: %d check(s) failed\n' "$failures"
   exit 1

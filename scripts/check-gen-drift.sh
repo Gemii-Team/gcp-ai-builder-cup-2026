@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Fails when committed generated code differs from what `task gen` produces:
 # the protobuf output and the sqlc store of every domain. Compares the working
-# tree with the index, so stage generated files (or run it on a clean checkout,
-# as CI does). Untracked generated files also count as drift.
+# tree with the index, so stage generated files first (`task gen:check` runs it
+# locally; the gen-drift job of .github/workflows/ci.yml runs it on a clean
+# checkout, where nothing is unstaged). Untracked generated files also count as drift.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

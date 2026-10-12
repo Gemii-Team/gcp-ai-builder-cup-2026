@@ -134,6 +134,8 @@ fi
 # --- the private values of .env ---------------------------------------------
 if [ ! -f "$ENV_FILE" ]; then
   echo "SKIP the private endpoint hostname and secret value checks: $ENV_FILE is absent (they run where a .env exists)"
+  # In GitHub Actions the skip also shows as a warning on the run.
+  [ "${GITHUB_ACTIONS:-}" != true ] || echo "::warning::readme.test.sh skipped the checks against the private .env values: there is no .env in CI"
 else
   : >"$WORK/hosts"
   : >"$WORK/secrets"

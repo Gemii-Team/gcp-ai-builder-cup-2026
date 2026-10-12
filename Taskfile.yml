@@ -28,6 +28,15 @@ tasks:
       - cd backend && golangci-lint run
       - pnpm -r lint
 
+  check:scripts:
+    desc: "Run the guard suites of the manifests and scripts: rendered overlays and Tiltfile, README, forbidden paths, gitleaks rules and the smoke runner. Offline: no cluster, no Docker (programs the scripts call are stubbed); needs kustomize, kubeconform, gitleaks and task on PATH"
+    cmds:
+      - bash scripts/local/render.test.sh
+      - bash scripts/hygiene/check-paths.test.sh
+      - bash scripts/hygiene/gitleaks.test.sh
+      - bash scripts/hygiene/readme.test.sh
+      - bash scripts/smoke/run.test.sh
+
   gen:
     desc: Generate code from proto/ (buf generate) and the domain stores from backend/db (sqlc generate)
     preconditions:
@@ -38,6 +47,11 @@ tasks:
       # sqlc cannot skip a domain whose query file does not exist yet, so the
       # script hands it a config with only the domains that have one.
       - bash scripts/gen-sqlc.sh
+
+  gen:check:
+    desc: "Fail when the committed generated code differs from what task gen produces (runs task gen, so stage generated files first; needs buf, sqlc and the JavaScript dependencies)"
+    cmds:
+      - bash scripts/check-gen-drift.sh
 
   local:up:
     desc: Create the k3d cluster, load .env into Secret kiwi-env and start Tilt (OVERLAY=mockauth signs in through the mock provider; OVERLAY=local through Google)

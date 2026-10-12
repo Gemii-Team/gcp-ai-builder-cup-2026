@@ -63,6 +63,14 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/bin" gitleaks
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # The suites behind the guards above: a guard nobody tests can rot unnoticed. The README
+      # suite skips, loudly, the checks that need the git-ignored .env (it does not exist here).
+      - name: Test the hygiene guards
+        run: |
+          bash scripts/hygiene/check-paths.test.sh
+          bash scripts/hygiene/gitleaks.test.sh
+          bash scripts/hygiene/readme.test.sh
+
       - name: Scan the pushed commits for secrets
         env:
           RANGE: ${{ steps.range.outputs.range }}
@@ -70,7 +78,7 @@ jobs:
 
       - name: Fail if a private path is tracked
         run: |
-          tracked=$(git ls-files docs .impeccable DESIGN.md PRODUCT.md)
+          tracked=$(git ls-files docs .impeccable .superpowers DESIGN.md PRODUCT.md)
           if [ -n "$tracked" ]; then
             echo "::error::private paths are tracked by git"
             echo "$tracked"
