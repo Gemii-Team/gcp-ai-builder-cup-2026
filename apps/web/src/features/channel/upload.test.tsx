@@ -4,6 +4,7 @@ import {
   GetMeetingResponseSchema,
   CompleteUploadResponseSchema,
   CreateFromRecordingResponseSchema,
+  type CreateFromRecordingResponse,
   CreateUploadResponseSchema,
   FileStatus,
   FileStatusChangedSchema,
@@ -244,6 +245,43 @@ describe('the slips of a message with files', () => {
       expect(within(log).queryByText('Summarizing the recording…')).not.toBeInTheDocument();
     });
     expect(within(log).queryByText('standup.wav')).not.toBeInTheDocument();
+  });
+
+  it('shows the failure of a recording whose meeting failed before CreateFromRecording had answered', async () => {
+    const api = createStubApi();
+    const { client, user, queryClient } = openChannel({ messages: [message({ seq: 5, body: 'five' })] }, api);
+    // As in the app (createQueryClient): what was fetched or written a moment ago is fresh, so it is not asked for again.
+    queryClient.setDefaultOptions({ queries: { retry: false, gcTime: Infinity, staleTime: 30_000 } });
+    const log = await screen.findByRole('log', LOG);
+    await within(log).findByText('five');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(null, { status: 200 }))));
+    api.files.createUpload.mockResolvedValue(created({ 'Content-Type': 'audio/wav' }));
+    api.files.completeUpload.mockResolvedValue(completed({ name: 'standup.wav', mime: 'audio/wav', status: FileStatus.UPLOADED }));
+    const creating = Promise.withResolvers<CreateFromRecordingResponse>();
+    api.meetings.createFromRecording.mockReturnValue(creating.promise);
+    api.meetings.getMeeting.mockResolvedValue(
+      create(GetMeetingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.FAILED, failureReason: 'no_speech' }) }),
+    );
+    await user.upload(picker(), new File(['RIFF'], 'standup.wav', { type: 'audio/wav' }));
+    await waitFor(() => {
+      expect(api.meetings.createFromRecording).toHaveBeenCalled();
+    });
+
+    // A recording with no speech fails at once: the event reaches the page before the answer to the call that made the
+    // meeting, which still says it is pending. The event is for a meeting the page does not know yet, and the answer must
+    // not leave the row waiting for ever.
+    await act(async () => {
+      client.emit(
+        frame({
+          case: 'meetingSummaryReady',
+          value: create(MeetingSummaryReadySchema, { meetingId: 'meeting-9', channelId: 'ch-q4', status: MeetingStatus.FAILED, failureReason: 'no_speech' }),
+        }),
+      );
+      await Promise.resolve();
+    });
+    creating.resolve(create(CreateFromRecordingResponseSchema, { meeting: meeting({ id: 'meeting-9', title: 'standup', status: MeetingStatus.PENDING }) }));
+
+    expect(await within(log).findByText("Couldn't summarize standup: no speech was found in the recording.")).toBeInTheDocument();
   });
 
   it('shows nothing for a recording of an earlier session: only the uploading session follows its recording', async () => {

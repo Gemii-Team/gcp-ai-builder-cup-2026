@@ -98,6 +98,10 @@ export function useUpload(channelId: string) {
             ...uploads,
             { fileId: completed.id, name: file.name, size: file.size, meetingId: meeting.id, at: new Date().toISOString() },
           ]);
+          // The answer is the meeting as it was when the call returned. A recording with no speech fails at once, and the event
+          // that says so can reach the page first, when the page does not know the meeting yet and so ignores it: the meeting
+          // is read again, so the row never waits on a meeting that has already failed.
+          void queryClient.invalidateQueries({ queryKey: keys.meeting(meeting.id) });
         }
         setState({ status: 'idle' });
       } catch (error) {
