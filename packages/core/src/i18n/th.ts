@@ -92,6 +92,7 @@ export const th: I18nTable = {
   reasonSizeMismatch: 'ขนาดไฟล์เปลี่ยนไประหว่างอัปโหลด ลองอีกครั้ง',
   reasonEmpty: 'ไฟล์ว่างเปล่า',
   reasonUnreadable: 'อ่านข้อความจากไฟล์ไม่ได้',
+  reasonUnsupportedByProvider: 'บริการ <en>AI</en> อ่านไฟล์ชนิดนี้ไม่ได้',
   reasonNoSpeech: 'ไม่พบเสียงพูดในการบันทึก',
   reasonTranscriptTooLong: 'บทถอดเสียงยาวเกินไป',
   reasonModelUnavailable: 'บริการ <en>AI</en> ใช้งานไม่ได้ในขณะนี้ ลองอีกครั้ง',

@@ -96,6 +96,7 @@ export const en = {
   reasonSizeMismatch: "the file's size changed while it was uploading. Try again.",
   reasonEmpty: 'the file is empty.',
   reasonUnreadable: 'no text could be read from it.',
+  reasonUnsupportedByProvider: "the AI service can't read this kind of file.",
   reasonNoSpeech: 'no speech was found in the recording.',
   reasonTranscriptTooLong: 'the transcript is too long.',
   reasonModelUnavailable: 'the AI service was unavailable. Try again.',

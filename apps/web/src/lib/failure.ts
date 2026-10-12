@@ -35,6 +35,8 @@ export function failureReasonKey(code: string): I18nKey {
       return 'reasonSizeMismatch';
     case 'empty':
       return 'reasonEmpty';
+    case 'unsupported_by_provider':
+      return 'reasonUnsupportedByProvider';
     case 'unreadable':
     case 'no_text_layer':
       return 'reasonUnreadable';
