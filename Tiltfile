@@ -3,14 +3,18 @@
 #   tilt up -- --overlay mockauth
 # mockauth, the default, signs in through the mock provider (backend/tools/mockoidc).
 # `--overlay local` signs in with Google and needs the real KIWI_OAUTH_* of the
-# kiwi-local client in .env.
+# kiwi-local client in .env. `--overlay smoke` is mockauth with the model replaced by
+# recorded fixtures (backend/tools/llmreplay): kiwi sends its LLM and embedding calls
+# to the replay server and no paid model session is used.
+# `tilt ci -- --overlay <name>` brings the same stack up without the UI and leaves it
+# deployed; running it again with another overlay switches the cluster over.
 #
 # Start order, on the first start only: postgres -> migrate -> kiwi,
-# ollama -> ollama-pull -> kiwi, valkey -> kiwi and, under mockauth,
-# mockoidc -> kiwi. resource_deps make a resource wait until its dependencies
-# are ready (a Job is ready once it has completed); they do not order later
-# updates: after a code change kiwi and migrate are rebuilt and redeployed in
-# parallel.
+# ollama -> ollama-pull -> kiwi, valkey -> kiwi and, under mockauth and smoke,
+# mockoidc -> kiwi and, under smoke, llmreplay -> kiwi. resource_deps make a
+# resource wait until its dependencies are ready (a Job is ready once it has
+# completed); they do not order later updates: after a code change kiwi and
+# migrate are rebuilt and redeployed in parallel.
 #
 # The ConfigMap kiwi-config reaches the pod through envFrom, so editing it
 # changes nothing in a running kiwi. Restart it to pick the change up:
@@ -22,11 +26,13 @@ REGISTRY = 'kiwi-registry.localhost:5001'
 config.define_string('overlay')
 cfg = config.parse()
 overlay = cfg.get('overlay', 'mockauth')
-if overlay not in ['local', 'mockauth']:
-    fail("overlay '%s' is not available: use 'local' or 'mockauth'" % overlay)
+if overlay not in ['local', 'mockauth', 'smoke']:
+    fail("overlay '%s' is not available: use 'local', 'mockauth' or 'smoke'" % overlay)
 
-# kiwi checks its sign-in provider at startup, so it waits for the mock.
-auth_deps = ['mockoidc'] if overlay == 'mockauth' else []
+# kiwi checks its sign-in provider at startup, so it waits for the mock; under smoke
+# it also waits for the replay server its model calls go to.
+auth_deps = ['mockoidc'] if overlay in ['mockauth', 'smoke'] else []
+llm_deps = ['llmreplay'] if overlay == 'smoke' else []
 
 # Everything here is meant for the local cluster and nothing else.
 if k8s_context() != KUBE_CONTEXT:
@@ -65,7 +71,7 @@ custom_build(
     ignore=['**/*_test.go', 'backend/**/testdata'],
 )
 
-if overlay == 'mockauth':
+if overlay in ['mockauth', 'smoke']:
     # mockoidc: the mock sign-in provider, built from the `tools` stage of
     # backend/Dockerfile (a Go build inside Docker, cached by layer). It links only
     # the fakeoidc package, so only a change there or under tools/ rebuilds it.
@@ -79,12 +85,35 @@ if overlay == 'mockauth':
             'backend/go.mod',
             'backend/go.sum',
         ],
-        ignore=['**/*_test.go', 'backend/internal/testkit/fakeoidc/fakeoidctest'],
+        ignore=['**/*_test.go', 'backend/**/testdata', 'backend/internal/testkit/fakeoidc/fakeoidctest'],
     )
     k8s_resource(
         'mockoidc',
         objects=['mockoidc:ingress'],
         links=[link('http://localhost:8080/mockoidc/.well-known/openid-configuration', 'mock sign-in')],
+        labels=['deps'],
+    )
+
+if overlay == 'smoke':
+    # llmreplay: the recorded LLM, the same `tools` stage as mockoidc under another
+    # tag (the Deployment names /app/llmreplay). It imports nothing of K.I.W.I.'s, so
+    # only a change under tools/llmreplay rebuilds it. A fixture is not part of the
+    # image: the files of deploy/k8s/overlays/smoke/fixtures reach the pod as the
+    # ConfigMap llmreplay-fixtures, whose name changes with its content, so editing
+    # one rolls the replay out by itself.
+    custom_build(
+        REGISTRY + '/llmreplay',
+        command='docker build -q --target tools -t $EXPECTED_REF backend',
+        deps=[
+            'backend/tools/llmreplay',
+            'backend/Dockerfile',
+            'backend/go.mod',
+            'backend/go.sum',
+        ],
+        ignore=['**/*_test.go', 'backend/**/testdata'],
+    )
+    k8s_resource(
+        'llmreplay',
         labels=['deps'],
     )
 
@@ -120,7 +149,7 @@ k8s_resource(
 k8s_resource(
     'kiwi',
     objects=['kiwi-config:configmap', 'kiwi-data:persistentvolumeclaim', 'kiwi:ingress'],
-    resource_deps=['migrate', 'ollama-pull', 'valkey'] + auth_deps,
+    resource_deps=['migrate', 'ollama-pull', 'valkey'] + auth_deps + llm_deps,
     links=[link('http://localhost:8080', 'K.I.W.I.')],
     labels=['app'],
 )

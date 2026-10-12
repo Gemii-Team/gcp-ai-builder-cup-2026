@@ -1,0 +1,16 @@
+[
+  {
+    "match": {"stage": "agent_tool", "contains": "llmreplay example: what is the smoke overlay?"},
+    "response": {
+      "choices": [
+        {"message": {"tool_calls": [{"function": {"name": "search_knowledge", "arguments": {"question": "what is the smoke overlay?"}}}]}}
+      ]
+    }
+  },
+  {
+    "match": {"stage": "agent_final", "contains": "llmreplay example: what is the smoke overlay?"},
+    "response": {
+      "choices": [{"message": {"content": "The smoke overlay answers the model calls from recorded fixtures."}}]
+    }
+  }
+]

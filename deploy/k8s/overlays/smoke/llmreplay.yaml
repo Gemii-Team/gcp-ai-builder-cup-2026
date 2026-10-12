@@ -1,0 +1,81 @@
+# The recorded LLM: an OpenAI-compatible server that answers from the fixtures of
+# the ConfigMap llmreplay-fixtures and answers HTTP 599 to a request it has no
+# fixture for. The image is the `tools` target of backend/Dockerfile. It holds no
+# secret: it reads no Secret and never logs a header or the credential kiwi sends.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmreplay
+  labels:
+    app.kubernetes.io/name: llmreplay
+    app.kubernetes.io/part-of: kiwi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmreplay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llmreplay
+        app.kubernetes.io/part-of: kiwi
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llmreplay
+          image: llmreplay
+          command: ["/app/llmreplay"]
+          args: ["-fixtures", "/fixtures"]
+          ports:
+            - name: http
+              containerPort: 8089
+          # /healthz answers once the fixtures have loaded; a fixture that does not
+          # parse stops the process, which names the file in its log.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: fixtures
+              mountPath: /fixtures
+              readOnly: true
+      volumes:
+        - name: fixtures
+          configMap:
+            name: llmreplay-fixtures
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmreplay
+  labels:
+    app.kubernetes.io/name: llmreplay
+    app.kubernetes.io/part-of: kiwi
+spec:
+  selector:
+    app.kubernetes.io/name: llmreplay
+  ports:
+    - name: http
+      port: 8089
+      targetPort: http

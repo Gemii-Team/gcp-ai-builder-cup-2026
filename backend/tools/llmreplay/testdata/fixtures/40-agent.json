@@ -1,0 +1,49 @@
+[
+  {
+    "match": {"stage": "agent_tool", "contains": "dark mode"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": null,
+            "reasoning_content": "The question needs the workspace's knowledge.",
+            "tool_calls": [{"function": {"name": "search_knowledge", "arguments": {"question": "What did we decide about dark mode?"}}}]
+          }
+        }
+      ],
+      "usage": {"prompt_tokens": 484, "completion_tokens": 60, "total_tokens": 544}
+    }
+  },
+  {
+    "match": {"stage": "agent_final", "contains": "dark mode"},
+    "response": {
+      "choices": [{"message": {"content": "We moved dark mode out of v1.0 and into v1.1."}}],
+      "usage": {"prompt_tokens": 552, "completion_tokens": 74, "total_tokens": 626}
+    }
+  },
+  {
+    "match": {"stage": "agent_tool", "contains": "draft a task"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "tool_calls": [
+              {
+                "id": "call_draft",
+                "function": {
+                  "name": "create_task_draft",
+                  "arguments": {
+                    "channel_id": "{{uuid:the channel with id }}",
+                    "title": "Update the release notes",
+                    "owner_user_id": "{{uuid:Nok = }}",
+                    "due_hint": "next:fri"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+]

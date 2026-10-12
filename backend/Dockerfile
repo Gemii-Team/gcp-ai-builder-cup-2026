@@ -2,9 +2,10 @@
 # Build from this directory: docker build backend
 # The last stage is the default target: the kiwi image, one binary at /app/kiwi.
 # `--target tools` builds the servers under tools/ instead, one binary each at
-# /app/<name>: /app/mockoidc, the mock sign-in provider of the mockauth overlay
-# (the smoke harness adds llmreplay). It has no ENTRYPOINT: the Deployment names
-# the command.
+# /app/<name>: /app/mockoidc, the mock sign-in provider of the mockauth overlay, and
+# /app/llmreplay, the recorded LLM of the smoke overlay. Both images are this one
+# target (Tilt tags it twice). It has no ENTRYPOINT: the Deployments name the
+# command.
 
 FROM golang:1.26 AS build
 WORKDIR /src

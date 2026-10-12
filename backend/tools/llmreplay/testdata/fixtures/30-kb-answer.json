@@ -1,0 +1,54 @@
+[
+  {
+    "match": {"schema": "kb_answer", "contains": "How many days of annual leave"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "Staff get 15 days of annual leave [1] and may carry five over [2].",
+              "citations": [
+                {"chunk_id": "{{chunk:15 days of annual leave}}", "quote": "15 days of annual leave"},
+                {"chunk_id": "{{chunk:carry over five days}}", "quote": "carry over five days"}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "ลาพักร้อนกี่วัน"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "พนักงานลาพักร้อนได้ 15 วันต่อปี [1]",
+              "citations": [{"chunk_id": "{{chunk:ลาพักร้อนประจำปี 15 วัน}}", "quote": "ลาพักร้อนประจำปี 15 วัน"}]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "unanswerable"},
+    "response": {"choices": [{"message": {"content": {"answer_markdown": "", "citations": []}}}]}
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "drifted"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "This cites a passage the request does not carry [1]",
+              "citations": [{"chunk_id": "{{chunk:text that no retrieved chunk holds}}", "quote": "text that no retrieved chunk holds"}]
+            }
+          }
+        }
+      ]
+    }
+  }
+]

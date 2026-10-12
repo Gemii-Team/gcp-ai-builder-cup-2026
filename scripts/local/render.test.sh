@@ -339,6 +339,114 @@ kiwi_env_differs_only_in_oidc() {
 }
 check "mockauth: the kiwi environment differs from local only in the OIDC addresses and the workspace heading" kiwi_env_differs_only_in_oidc
 
+# --- the smoke overlay ----------------------------------------------------------------
+# mockauth with the model replaced by recorded fixtures (backend/tools/llmreplay): the
+# replay workload, and a kiwi whose explicit env sends its LLM and embedding calls to
+# it. local and mockauth, which talk to LiteLLM and Ollama, must not carry the replay.
+SMOKE="$WORK/smoke.yaml"
+if kustomize build deploy/k8s/overlays/smoke >"$SMOKE" 2>"$WORK/smoke.err"; then
+  ok "kustomize build deploy/k8s/overlays/smoke"
+else
+  bad "kustomize build deploy/k8s/overlays/smoke" "$(head -n 5 "$WORK/smoke.err")"
+  : >"$SMOKE"
+fi
+if [ -s "$SMOKE" ] && kubeconform -strict -ignore-missing-schemas -summary - <"$SMOKE" >"$WORK/kc-smoke.out" 2>&1; then
+  ok "kubeconform -strict accepts the rendered smoke overlay"
+else
+  bad "kubeconform -strict accepts the rendered smoke overlay" "$(head -n 5 "$WORK/kc-smoke.out" 2>/dev/null || echo 'nothing rendered')"
+fi
+check "smoke: no :latest and every image tagged or pinned by digest" no_latest "$SMOKE"
+check "smoke: no literal secret value in any manifest" no_literal_secrets "$SMOKE"
+
+# no_llmreplay file: neither the workload, the Service, the address nor the fixtures.
+no_llmreplay() {
+  [ -s "$1" ] || { echo "nothing rendered"; return 1; }
+  if grep -n -i llmreplay "$1"; then echo "the overlay renders the recorded LLM"; return 1; fi
+}
+check "local: renders no llmreplay workload, Service, fixtures ConfigMap or address" no_llmreplay "$RENDER"
+check "mockauth: renders no llmreplay workload, Service, fixtures ConfigMap or address" no_llmreplay "$MOCK"
+
+llmreplay_workload() {
+  local dep svc cm rc=0
+  dep=$(doc Deployment llmreplay "$SMOKE")
+  svc=$(doc Service llmreplay "$SMOKE")
+  [ -n "$dep" ] || { echo "no Deployment llmreplay"; return 1; }
+  [ -n "$svc" ] || { echo "no Service llmreplay"; return 1; }
+  printf '%s\n' "$dep" | grep -qE '^ *image: kiwi-registry\.localhost:5001/llmreplay:[^ :]+$' || { echo "the image is not kiwi-registry.localhost:5001/llmreplay with a tag"; rc=1; }
+  printf '%s\n' "$dep" | grep -qxE ' *- /app/llmreplay' || { echo "the container does not run /app/llmreplay"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *(- )?containerPort: 8089$' || { echo "the container does not listen on 8089"; rc=1; }
+  printf '%s\n' "$svc" | grep -qE '^ *port: 8089$' || { echo "the Service does not expose 8089"; rc=1; }
+  # It reads fixtures from a ConfigMap and no Secret.
+  if printf '%s\n' "$dep" | grep -qE 'kiwi-env|secretKeyRef|secretRef'; then echo "the replay reads a Secret"; rc=1; fi
+  [ "$(printf '%s\n' "$dep" | grep -cE '^ *path: /healthz$')" -eq 2 ] || { echo "the readiness and liveness probes do not both ask /healthz"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *readOnlyRootFilesystem: true$' || { echo "the root filesystem is not read-only"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *runAsNonRoot: true$' || { echo "the container may run as root"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *allowPrivilegeEscalation: false$' || { echo "the container may escalate privileges"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *type: RuntimeDefault$' || { echo "no seccomp profile"; rc=1; }
+  printf '%s\n' "$dep" | awk '/^ *drop:$/ { d = 1; next } d && /^ *- ALL$/ { ok = 1 } END { exit !ok }' || { echo "the capabilities are not dropped"; rc=1; }
+  # The fixtures volume is the generated ConfigMap, mounted read-only at /fixtures.
+  cm=$(printf '%s\n' "$dep" | awk '/^ *(- )?configMap:$/ { c = 1; next } c && /^ *name: / { print $2; exit }')
+  case $cm in
+    llmreplay-fixtures-?*) ;;
+    *) echo "the fixtures volume is the ConfigMap '$cm', want llmreplay-fixtures-<hash>"; rc=1 ;;
+  esac
+  [ -n "$cm" ] && [ -n "$(doc ConfigMap "$cm" "$SMOKE")" ] || { echo "the ConfigMap '$cm' of the fixtures volume is not rendered"; rc=1; }
+  printf '%s\n' "$dep" | awk '/^ *- mountPath: \/fixtures$/ { m = 1; next } m && /^ *name: fixtures$/ { ok = 1 } m && /^ *readOnly: true$/ { ro = 1 } END { exit !(ok && ro) }' || { echo "the fixtures are not mounted read-only at /fixtures"; rc=1; }
+  return "$rc"
+}
+check "smoke: Deployment and Service llmreplay on 8089, pinned image, probes on /healthz, hardened, no Secret, fixtures ConfigMap read-only at /fixtures" llmreplay_workload
+
+# explicit_env kind name file: NAME=value of the literal env entries of the first container.
+explicit_env() {
+  doc "$1" "$2" "$3" | awk '
+    /^ *(- )?env:$/ { match($0, /env:/); col = RSTART; inenv = 1; next }
+    inenv {
+      match($0, /^ */)
+      if (RLENGTH == col - 1 && $0 !~ /^ *- /) { inenv = 0; next }
+    }
+    inenv && /^ *- name: / { cur = $3; next }
+    inenv && /^ *value: / { v = $0; sub(/^ *value: /, "", v); gsub(/^"|"$/, "", v); print cur "=" v }
+  '
+}
+# effective_env file: the environment of kiwi, as KEY=value lines. The ConfigMap
+# kiwi-config reaches it through envFrom, and an explicit env entry wins over envFrom.
+effective_env() {
+  { config_data "$1"; explicit_env Deployment kiwi "$1"; } | awk -F= '{ k = $1; m[k] = substr($0, length(k) + 2) } END { for (k in m) print k "=" m[k] }' | sort
+}
+
+kiwi_talks_to_llmreplay() {
+  local changed rc=0 pair kind name allowed
+  { [ -s "$RENDER" ] && [ -s "$MOCK" ] && [ -s "$SMOKE" ]; } || { echo "nothing rendered"; return 1; }
+  # Against mockauth, only the two addresses of the model change.
+  changed=$(diff <(effective_env "$MOCK") <(effective_env "$SMOKE") | sed -nE 's/^[<>] ([A-Z0-9_]+)=.*/\1/p' | sort -u | tr '\n' ' ')
+  [ "$changed" = "KIWI_EMBED_BASE_URL KIWI_LLM_BASE_URL " ] || { printf 'the kiwi environment differs from mockauth in: %s\nwant: KIWI_EMBED_BASE_URL KIWI_LLM_BASE_URL\n' "$changed"; rc=1; }
+  # Against local, those two and what mockauth changes.
+  changed=$(diff <(effective_env "$RENDER") <(effective_env "$SMOKE") | sed -nE 's/^[<>] ([A-Z0-9_]+)=.*/\1/p' | sort -u | tr '\n' ' ')
+  [ "$changed" = "KIWI_EMBED_BASE_URL KIWI_LLM_BASE_URL KIWI_OIDC_INTERNAL_URL KIWI_OIDC_ISSUER KIWI_WORKSPACE_DOMAIN KIWI_WORKSPACE_NAME " ] || { printf 'the kiwi environment differs from local in: %s\n' "$changed"; rc=1; }
+  for name in KIWI_LLM_BASE_URL KIWI_EMBED_BASE_URL; do
+    effective_env "$SMOKE" | grep -qxF "$name=http://llmreplay:8089" || { echo "$name is not http://llmreplay:8089"; rc=1; }
+  done
+  # The URLs are the origin without /v1: the adapter appends the path.
+  effective_env "$SMOKE" | grep -E '^KIWI_(LLM|EMBED)_BASE_URL=.*/v1' && { echo "a base URL carries /v1"; rc=1; }
+  # The addresses are set by an explicit env entry on kiwi, which is what wins over the Secret.
+  for name in KIWI_LLM_BASE_URL KIWI_EMBED_BASE_URL; do
+    explicit_env Deployment kiwi "$SMOKE" | grep -qxF "$name=http://llmreplay:8089" || { echo "$name is not an explicit env entry of Deployment kiwi"; rc=1; }
+  done
+  # Nothing else of the stack moves: the same documents as mockauth, and a kiwi
+  # Deployment that differs only by that env stanza.
+  for pair in "ConfigMap kiwi-config" "Job migrate" "Deployment postgres" "Deployment valkey" "Deployment ollama" "Deployment web" "Deployment mockoidc" "Service kiwi" "Ingress kiwi" "Ingress mockoidc"; do
+    read -r kind name <<<"$pair"
+    [ "$(doc "$kind" "$name" "$MOCK")" = "$(doc "$kind" "$name" "$SMOKE")" ] || { echo "$kind $name differs between mockauth and smoke"; rc=1; }
+  done
+  allowed='^[<>] +(- )?(env|envFrom):$|^> +- name: KIWI_(LLM|EMBED)_BASE_URL$|^> +value: http://llmreplay:8089$'
+  diff <(doc Deployment kiwi "$MOCK") <(doc Deployment kiwi "$SMOKE") | grep -E '^[<>]' | grep -vE "$allowed" >"$WORK/kiwi-diff.out"
+  [ ! -s "$WORK/kiwi-diff.out" ] || { printf 'Deployment kiwi differs from mockauth beyond its env:\n'; head -n 5 "$WORK/kiwi-diff.out"; rc=1; }
+  # Still a local stack: the replay is no way to run prod.
+  config_data "$SMOKE" | grep -qxF 'KIWI_ENV=local' || { echo "KIWI_ENV is not local"; rc=1; }
+  return "$rc"
+}
+check "smoke: kiwi sends its LLM and embedding calls to llmreplay, and its environment differs from mockauth in nothing else" kiwi_talks_to_llmreplay
+
 # --- the Postgres bootstrap and its probe ----------------------------------------
 # Pinned here and, from the other side, by backend/internal/testkit/dbtest
 # (TestRoles_MatchLocalPostgresInit): a role added or widened in only one of the
@@ -432,40 +540,68 @@ tilt_overlay_guard() { # [Tiltfile]
     END { exit !(found && ok) }
   ' "${1:-Tiltfile}"
 }
-check "Tiltfile: an overlay other than local or mockauth is refused with fail()" tilt_overlay_guard
+check "Tiltfile: an overlay other than local, mockauth or smoke is refused with fail()" tilt_overlay_guard
 
 # The overlays the guard accepts, as the Tiltfile lists them.
 tilt_accepts_overlays() { # [Tiltfile]
-  grep -vE '^[ \t]*#' "${1:-Tiltfile}" | grep -qxF "if overlay not in ['local', 'mockauth']:"
+  grep -vE '^[ \t]*#' "${1:-Tiltfile}" | grep -qxF "if overlay not in ['local', 'mockauth', 'smoke']:"
 }
-check "Tiltfile: accepts exactly the overlays local and mockauth" tilt_accepts_overlays
+check "Tiltfile: accepts exactly the overlays local, mockauth and smoke" tilt_accepts_overlays
 
-# mockauth builds the mock provider from the tools stage of backend/Dockerfile.
+# mockauth and smoke build the mock provider from the tools stage of backend/Dockerfile.
 tilt_builds_mockoidc() { # [Tiltfile]
   awk '
     /^[ \t]*#/ { next }
-    /^if overlay == \047mockauth\047:$/ { inblk = 1; next }
+    /^if overlay in \[\047mockauth\047, \047smoke\047\]:$/ { inblk = 1; next }
     /^[^ \t]/ { inblk = 0 }
     inblk && /REGISTRY \+ \047\/mockoidc\047/ { img = 1 }
     inblk && /command=.*docker build .*--target tools/ { tgt = 1 }
     END { exit !(img && tgt) }
   ' "${1:-Tiltfile}"
 }
-check "Tiltfile: the mockauth overlay builds the mockoidc image from the tools target of backend/Dockerfile" tilt_builds_mockoidc
+check "Tiltfile: the mockauth and smoke overlays build the mockoidc image from the tools target of backend/Dockerfile" tilt_builds_mockoidc
 
-# kiwi verifies tokens against the mock at startup, so under mockauth it waits for it.
+# kiwi verifies tokens against the mock at startup, so under mockauth and smoke it waits for it.
 tilt_kiwi_waits_for_mock() { # [Tiltfile]
   awk '
     /^[ \t]*#/ { next }
-    /^auth_deps = \[\047mockoidc\047\] if overlay == \047mockauth\047 else \[\]$/ { def = 1 }
+    /^auth_deps = \[\047mockoidc\047\] if overlay in \[\047mockauth\047, \047smoke\047\] else \[\]$/ { def = 1 }
     /^k8s_resource\($/ { incall = 1; name = ""; next }
     incall && name == "" { n = $0; gsub(/[ \047,"]/, "", n); name = n; next }
-    incall && name == "kiwi" && /resource_deps=.*\+ auth_deps,?$/ { use = 1 }
+    incall && name == "kiwi" && /resource_deps=.*\+ auth_deps( \+ llm_deps)?,?$/ { use = 1 }
     /^\)$/ { incall = 0 }
     END { exit !(def && use) }
   ' "${1:-Tiltfile}"
 }
-check "Tiltfile: kiwi waits for mockoidc under the mockauth overlay" tilt_kiwi_waits_for_mock
+check "Tiltfile: kiwi waits for mockoidc under the mockauth and smoke overlays" tilt_kiwi_waits_for_mock
+
+# smoke builds the recorded LLM from the same tools stage and gives it a resource.
+tilt_builds_llmreplay() { # [Tiltfile]
+  awk '
+    /^[ \t]*#/ { next }
+    /^if overlay == \047smoke\047:$/ { inblk = 1; next }
+    /^[^ \t]/ { inblk = 0 }
+    inblk && /REGISTRY \+ \047\/llmreplay\047/ { img = 1 }
+    inblk && /command=.*docker build .*--target tools/ { tgt = 1 }
+    inblk && /^[ \t]+\047llmreplay\047,$/ { res = 1 }
+    END { exit !(img && tgt && res) }
+  ' "${1:-Tiltfile}"
+}
+check "Tiltfile: the smoke overlay builds the llmreplay image from the tools target of backend/Dockerfile and runs it as a resource" tilt_builds_llmreplay
+
+# kiwi sends its model calls to the replay, so under smoke it waits for it, and under no other overlay.
+tilt_kiwi_waits_for_llmreplay() { # [Tiltfile]
+  awk '
+    /^[ \t]*#/ { next }
+    /^llm_deps = \[\047llmreplay\047\] if overlay == \047smoke\047 else \[\]$/ { def = 1 }
+    /^k8s_resource\($/ { incall = 1; name = ""; next }
+    incall && name == "" { n = $0; gsub(/[ \047,"]/, "", n); name = n; next }
+    incall && name == "kiwi" && /resource_deps=.*\+ llm_deps,?$/ { use = 1 }
+    /^\)$/ { incall = 0 }
+    END { exit !(def && use) }
+  ' "${1:-Tiltfile}"
+}
+check "Tiltfile: kiwi waits for llmreplay under the smoke overlay only" tilt_kiwi_waits_for_llmreplay
 
 # The guards themselves: each mutated copy of the Tiltfile must be refused.
 tilt_mutant() { # name check-function sed-script
@@ -479,11 +615,21 @@ tilt_mutant "migrations dependency commented out is refused" tilt_migrations_dep
 tilt_mutant "overlay guard deleted is refused" tilt_overlay_guard "/^if overlay not in \[.*\]:\$/,+1d"
 tilt_mutant "overlay guard that no longer calls fail() is refused" tilt_overlay_guard "s/^( +)fail\(/\1print(/"
 tilt_mutant "overlay guard commented out is refused" tilt_overlay_guard "s/^if overlay not in \[.*\]:\$/# &/"
-tilt_mutant "an overlay list that admits smoke is refused" tilt_accepts_overlays "s/'mockauth'\]/'mockauth', 'smoke']/"
+tilt_mutant "an overlay list that admits another overlay is refused" tilt_accepts_overlays "s/^(if overlay not in .*)'smoke'\]/\1'smoke', 'e2e']/"
+tilt_mutant "an overlay list that drops smoke is refused" tilt_accepts_overlays "s/^(if overlay not in \['local', 'mockauth'), 'smoke'\]/\1]/"
 tilt_mutant "mockoidc built from another target is refused" tilt_builds_mockoidc "s/--target tools/--target kiwi/"
 tilt_mutant "mockoidc image build removed is refused" tilt_builds_mockoidc "s/REGISTRY \+ '\/mockoidc'/REGISTRY + '\/other'/"
+tilt_mutant "mockoidc built under mockauth only is refused" tilt_builds_mockoidc "s/^if overlay in \['mockauth', 'smoke'\]:\$/if overlay == 'mockauth':/"
 tilt_mutant "kiwi not waiting for mockoidc is refused" tilt_kiwi_waits_for_mock "s/ \+ auth_deps//"
 tilt_mutant "auth_deps that no longer names mockoidc is refused" tilt_kiwi_waits_for_mock "s/auth_deps = \['mockoidc'\]/auth_deps = []/"
+tilt_mutant "auth_deps that leaves smoke out is refused" tilt_kiwi_waits_for_mock "s/^(auth_deps = .*) in \['mockauth', 'smoke'\]/\1 == 'mockauth'/"
+tilt_mutant "llmreplay built from another target is refused" tilt_builds_llmreplay "s/--target tools/--target kiwi/"
+tilt_mutant "llmreplay image build removed is refused" tilt_builds_llmreplay "s/REGISTRY \+ '\/llmreplay'/REGISTRY + '\/other'/"
+tilt_mutant "llmreplay without a resource is refused" tilt_builds_llmreplay "s/^( +)'llmreplay',\$/\1'other',/"
+tilt_mutant "llmreplay built under every overlay is refused" tilt_builds_llmreplay "s/^if overlay == 'smoke':\$/if overlay != 'x':/"
+tilt_mutant "kiwi not waiting for llmreplay is refused" tilt_kiwi_waits_for_llmreplay "s/ \+ llm_deps//"
+tilt_mutant "llm_deps that no longer names llmreplay is refused" tilt_kiwi_waits_for_llmreplay "s/llm_deps = \['llmreplay'\]/llm_deps = []/"
+tilt_mutant "llm_deps that applies to every overlay is refused" tilt_kiwi_waits_for_llmreplay "s/^(llm_deps = .*) if overlay == 'smoke' else \[\]/\1 if overlay != 'x' else []/"
 tilt_mutant "kiwi not waiting for ollama-pull is refused" tilt_orders "s/'migrate', 'ollama-pull', 'valkey'/'migrate', 'valkey'/"
 tilt_mutant "migrate not waiting for postgres is refused" tilt_orders "s/resource_deps=\['postgres'\]/resource_deps=[]/"
 
