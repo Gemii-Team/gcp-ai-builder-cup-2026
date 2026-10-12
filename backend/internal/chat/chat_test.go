@@ -881,6 +881,27 @@ func TestSyncChannels_RejectsMalformedCursors(t *testing.T) {
 	}
 }
 
+// One request may name at most 200 cursors: every cursor is a channel read and up to 200
+// messages in the answer, so an unbounded list is an unbounded query and response.
+func TestSyncChannels_MoreThan200Cursors_IsInvalid(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("public", f.alice)
+	cursors := func(n int) []*chatv1.Cursor {
+		out := make([]*chatv1.Cursor, n)
+		for i := range out {
+			out[i] = &chatv1.Cursor{ChannelId: ch.String(), LastSeq: 0}
+		}
+		return out
+	}
+
+	deltas, err := f.svc.SyncChannels(t.Context(), f.user(f.alice), cursors(200))
+	if err != nil || len(deltas) != 200 {
+		t.Fatalf("SyncChannels with 200 cursors = %d deltas, %v, want one per cursor", len(deltas), err)
+	}
+	_, err = f.svc.SyncChannels(t.Context(), f.user(f.alice), cursors(201))
+	wantErr(t, err, errs.ErrInvalid, "201 cursors")
+}
+
 // ---- access -----------------------------------------------------------------
 
 func TestPrivateChannel_NonMemberCannotListOrSync(t *testing.T) {

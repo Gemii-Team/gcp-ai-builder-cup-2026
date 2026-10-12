@@ -863,6 +863,46 @@ func TestConnectProtocolHeaderRequired(t *testing.T) {
 	}
 }
 
+// No RPC reads a request of any size: connect-go decodes whatever it is sent unless told a
+// limit, and every limit of a domain (a message's 8000 runes) applies only after the decode.
+// File bytes never travel through an RPC (they go to /api/blob/, which has its own cap), so
+// the shell bounds every RPC at 1 MiB.
+func TestRequestBody_IsBoundedAndANormalOneStillPasses(t *testing.T) {
+	f := newFixture(t, nil)
+	sid := f.signIn(f.alice)
+	channel := f.createChannel(sid, "general", chatv1.ChannelKind_CHANNEL_KIND_PUBLIC)
+	send := func(msgID, text string) reply {
+		body := fmt.Sprintf(`{"channelId":%q,"clientMsgId":%q,"body":%q}`, channel, msgID, text)
+		return f.rpc(sid, "/kiwi.chat.v1.ChatService/SendMessage", body, nil)
+	}
+	stored := func() int {
+		res, err := f.chatClient(sid).ListMessages(t.Context(), connect.NewRequest(&chatv1.ListMessagesRequest{ChannelId: channel}))
+		if err != nil {
+			t.Fatalf("ListMessages: %v", err)
+		}
+		return len(res.Msg.GetMessages())
+	}
+
+	if r := send("m-normal", "hello"); r.status != http.StatusOK {
+		t.Fatalf("a normal message: status = %d, want 200 (body %q)", r.status, r.body)
+	}
+
+	// Just under the bound the transport lets the request through, and the service applies its own limit.
+	under := send("m-under", strings.Repeat("x", 1<<20-512))
+	if we := decodeError(t, under); under.status != http.StatusBadRequest || we.Code != "invalid_argument" {
+		t.Errorf("a body just under 1 MiB: status = %d code = %q, want the service's own invalid_argument", under.status, we.Code)
+	}
+
+	// Over it the transport refuses before any domain sees the message.
+	over := send("m-over", strings.Repeat("x", 1<<20))
+	if we := decodeError(t, over); over.status/100 != 4 || we.Code != "resource_exhausted" {
+		t.Errorf("a body over 1 MiB: status = %d code = %q (%q), want a 4xx resource_exhausted", over.status, we.Code, we.Message)
+	}
+	if got := stored(); got != 1 {
+		t.Errorf("%d messages stored, want only the normal one", got)
+	}
+}
+
 func TestCrossOriginPOSTRejected(t *testing.T) {
 	f := newFixture(t, nil)
 	sid := f.signIn(f.alice)

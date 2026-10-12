@@ -45,6 +45,9 @@ const (
 	// maxCatchUp is how far behind a cursor may be and still catch up by delta;
 	// a cursor further behind reloads (spec decision D10).
 	maxCatchUp = 200
+	// maxSyncCursors is the most cursors one SyncChannels request may name: each is a
+	// channel read and up to maxCatchUp messages in the answer.
+	maxSyncCursors = 200
 	// invalidateTimeout bounds the cache write that follows a committed membership
 	// change; it runs on a context that outlives the request, so a client that gave
 	// up cannot leave a removed member in the cache.
@@ -540,8 +543,11 @@ func (s *service) ListMessages(ctx context.Context, a authz.Actor, channelID uui
 // SyncChannels implements Service. One delta comes back per cursor, in the
 // cursors' order, with its messages oldest first: the messages after the cursor, or
 // when it is more than 200 behind, a reload carrying the latest page. One channel
-// the actor may not read refuses the whole request.
+// the actor may not read refuses the whole request, and so do more than 200 cursors.
 func (s *service) SyncChannels(ctx context.Context, a authz.Actor, cursors []*chatv1.Cursor) ([]*chatv1.ChannelDelta, error) {
+	if len(cursors) > maxSyncCursors {
+		return nil, fmt.Errorf("chat: sync names %d channels, at most %d: %w", len(cursors), maxSyncCursors, errs.ErrInvalid)
+	}
 	ids := make([]uuid.UUID, len(cursors))
 	for i, c := range cursors {
 		id, err := parseID(c.GetChannelId(), "cursor channel id")

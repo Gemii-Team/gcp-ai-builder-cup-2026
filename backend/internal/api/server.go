@@ -19,6 +19,12 @@ import (
 	"kiwi/internal/platform/httpx"
 )
 
+// maxRequestBytes bounds what any RPC reads of a request. connect-go decodes a body of any
+// size unless told a limit, and each domain's own limits apply only after the decode. File
+// bytes never travel through an RPC (they go to /api/blob/, whose signed URL carries its
+// own cap), so 1 MiB is far above the largest request a client has a reason to send.
+const maxRequestBytes = 1 << 20
+
 // Handler is how a domain's Connect handler is registered: not as a built
 // http.Handler, which no interceptor can be added to, but as the function that
 // builds it.
@@ -95,7 +101,7 @@ func New(d Deps) http.Handler {
 	sameOrigin := httpx.RequireSameOrigin(d.PublicURL)
 	session := requireSession(d.Sessions, log)
 	mapper := &errorMapper{log: log}
-	opts := []connect.HandlerOption{connect.WithInterceptors(mapper)}
+	opts := []connect.HandlerOption{connect.WithInterceptors(mapper), connect.WithReadMaxBytes(maxRequestBytes)}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/auth/", d.Auth)
