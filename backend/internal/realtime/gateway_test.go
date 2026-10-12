@@ -692,6 +692,10 @@ func TestSubscribe_RevocationDuringMembershipCheck_DoesNotSubscribe(t *testing.T
 	x := uuid.Must(uuid.NewV7())
 
 	a := f.connect(ana)
+	// connect returns once the gateway has registered the connection, not once Valkey has
+	// confirmed the SSUBSCRIBE of u:{ana}; a frame published before that is lost and the
+	// REMOVED frame below never arrives.
+	f.live(usr(ana), 1)
 	a.subscribe(x.String())
 	<-m.entered // the check is running and will answer "member"
 
