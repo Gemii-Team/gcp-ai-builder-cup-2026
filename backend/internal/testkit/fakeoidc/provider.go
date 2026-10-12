@@ -7,9 +7,10 @@
 // /authorize (which approves the account named by login_hint, or lists the
 // accounts to pick from when there is none) and /token (code and refresh-token
 // grants). Like Google it adds hd to the redirect and the hd claim to the ID
-// token for Workspace accounts and for them only, issues a refresh token to a
-// client that asks for offline access once per grant, and reports granted
-// scopes under their full URLs.
+// token for Workspace accounts and for them only (a NoHD user stands for an
+// account without one), issues a refresh token to a client that asks for
+// offline access once per grant, and reports granted scopes under their full
+// URLs.
 package fakeoidc
 
 import (
@@ -52,6 +53,11 @@ type User struct {
 	Email string
 	Name  string
 	Sub   string
+	// NoHD leaves hd out of the account's ID token and redirect, as for a personal
+	// Gmail account or any other that belongs to no Workspace domain.
+	NoHD bool
+	// Unverified makes the account's ID token say email_verified=false.
+	Unverified bool
 }
 
 func (u User) sub() string { return cmp.Or(u.Sub, "seed:"+u.Email) }
@@ -73,10 +79,9 @@ type Config struct {
 	AnyClient bool
 	// HostedDomain is the hd claim of Users.
 	HostedDomain string
-	// Users are Workspace accounts: their ID tokens carry hd.
+	// Users are the accounts that can sign in. Their ID tokens carry hd, the
+	// hosted domain of a Workspace account, unless the user is NoHD.
 	Users []User
-	// Outsider, when set, is an account without hd, like a personal Gmail one.
-	Outsider *User
 	// RedirectURIs are the redirect_uri values /authorize accepts, compared
 	// exactly. A request for any other is answered 400 and never redirected.
 	RedirectURIs []string
@@ -174,8 +179,8 @@ func NewProvider(cfg Config) (*Provider, error) {
 	case !cfg.AnyClient && (cfg.ClientID == "" || cfg.ClientSecret == ""):
 		return nil, errors.New("fakeoidc: ClientID and ClientSecret are required")
 	}
-	if len(cfg.Users) > 0 && cfg.HostedDomain == "" {
-		return nil, errors.New("fakeoidc: HostedDomain is required when Users are set")
+	if cfg.HostedDomain == "" && slices.ContainsFunc(cfg.Users, func(usr User) bool { return !usr.NoHD }) {
+		return nil, errors.New("fakeoidc: HostedDomain is required when a user's token carries hd")
 	}
 	base := strings.TrimSuffix(u.Path, "/")
 	if strings.ContainsAny(base, "{} ") {
@@ -354,11 +359,11 @@ func (p *Provider) jwks(w http.ResponseWriter, _ *http.Request) {
 func (p *Provider) lookup(email string) (u User, hd string, ok bool) {
 	for _, usr := range p.cfg.Users {
 		if strings.EqualFold(usr.Email, email) {
+			if usr.NoHD {
+				return usr, "", true
+			}
 			return usr, p.cfg.HostedDomain, true
 		}
-	}
-	if o := p.cfg.Outsider; o != nil && strings.EqualFold(o.Email, email) {
-		return *o, "", true
 	}
 	return User{}, "", false
 }
@@ -457,7 +462,7 @@ button { display: block; width: 100%; min-height: 44px; padding: .5rem 1rem; fon
 </style></head>
 <body><main><h1>Mock sign-in</h1>
 <p>Pick who to sign in as. This provider is a stand-in for Google; no real account is used.</p>
-{{range .}}<form method="get" action="{{.Action}}">{{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<button type="submit" name="login_hint" value="{{.Email}}">{{.Email}}</button>{{if not .Workspace}}<p class="note">outside the workspace - sign-in is rejected</p>{{end}}</form>
+{{range .}}<form method="get" action="{{.Action}}">{{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}<button type="submit" name="login_hint" value="{{.Email}}">{{.Email}}</button>{{if not .Workspace}}<p class="note">no hosted domain - signs in only if invited</p>{{end}}</form>
 {{end}}</main></body></html>`))
 
 // chooser lists the accounts without signing anybody in: a button per account
@@ -488,10 +493,7 @@ func (p *Provider) chooser(w http.ResponseWriter, r *http.Request) {
 
 	var accounts []account
 	for _, u := range p.cfg.Users {
-		accounts = append(accounts, account{Action: r.URL.Path, Hidden: hidden, Email: u.Email, Workspace: true})
-	}
-	if o := p.cfg.Outsider; o != nil {
-		accounts = append(accounts, account{Action: r.URL.Path, Hidden: hidden, Email: o.Email})
+		accounts = append(accounts, account{Action: r.URL.Path, Hidden: hidden, Email: u.Email, Workspace: !u.NoHD})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -589,7 +591,7 @@ func (p *Provider) exchangeCode(w http.ResponseWriter, r *http.Request, clientID
 			Email:         ac.user.Email,
 			Name:          ac.user.Name,
 			HD:            ac.hd,
-			EmailVerified: true,
+			EmailVerified: !ac.user.Unverified,
 		}, MintOptions{Nonce: ac.nonce, Audience: ac.clientID}),
 	}
 	if refreshToken != "" {

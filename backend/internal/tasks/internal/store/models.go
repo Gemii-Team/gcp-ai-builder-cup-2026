@@ -120,7 +120,7 @@ type IdentityUser struct {
 type IdentityWorkspace struct {
 	ID           uuid.UUID
 	Name         string
-	GoogleDomain string
+	GoogleDomain *string
 	CreatedAt    pgtype.Timestamptz
 }
 

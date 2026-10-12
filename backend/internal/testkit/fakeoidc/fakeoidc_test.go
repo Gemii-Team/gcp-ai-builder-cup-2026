@@ -185,6 +185,45 @@ func TestProvider_AddsHostedDomainForWorkspaceAccountsOnly(t *testing.T) {
 	}
 }
 
+// A NoHD user is an account the way a personal Gmail one is: its token and its
+// redirect carry no hd although the provider has a hosted domain, and Unverified
+// makes its token say email_verified=false.
+func TestProvider_NoHDUsersCarryNoHostedDomain_UnverifiedOnesSayEmailUnverified(t *testing.T) {
+	f := fakeoidctest.New(t, fakeoidctest.WithUsers(
+		fakeoidc.User{Email: "alice@acme.test", Name: "Alice"},
+		fakeoidc.User{Email: "bob@acme.test", Name: "Bob", NoHD: true},
+		fakeoidc.User{Email: "quinn@gmail.test", Name: "Quinn", NoHD: true, Unverified: true},
+	))
+	for _, tc := range []struct {
+		email    string
+		hd       string
+		verified bool
+	}{
+		{"alice@acme.test", "acme.test", true},
+		{"bob@acme.test", "", true},
+		{"quinn@gmail.test", "", false},
+	} {
+		cb := authorize(t, f.URL, url.Values{"login_hint": {tc.email}})
+		if got := cb.Query().Get("hd"); got != tc.hd {
+			t.Errorf("%s: hd parameter = %q, want %q", tc.email, got, tc.hd)
+		}
+		status, tok := exchange(t, f.URL, url.Values{
+			"grant_type": {"authorization_code"}, "code": {cb.Query().Get("code")},
+			"redirect_uri": {redirectURI}, "code_verifier": {"verifier"},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("%s: token endpoint answered %d: %v", tc.email, status, tok)
+		}
+		claims := claimsOf(t, tok["id_token"].(string))
+		if hd, has := claims["hd"]; has != (tc.hd != "") || (has && hd != tc.hd) {
+			t.Errorf("%s: hd claim = %v (present %v), want %q", tc.email, hd, has, tc.hd)
+		}
+		if claims["email_verified"] != tc.verified {
+			t.Errorf("%s: email_verified = %v, want %v", tc.email, claims["email_verified"], tc.verified)
+		}
+	}
+}
+
 func TestProvider_PKCEIsMandatoryAndCodesAreSingleUse(t *testing.T) {
 	f := fakeoidctest.New(t)
 
@@ -237,7 +276,7 @@ func TestProvider_PKCEIsMandatoryAndCodesAreSingleUse(t *testing.T) {
 	}
 }
 
-func TestProvider_ChooserOffersAButtonPerAccountAndFlagsTheOutsider(t *testing.T) {
+func TestProvider_ChooserOffersAButtonPerAccountAndFlagsTheOnesWithoutHD(t *testing.T) {
 	f := fakeoidctest.New(t)
 	q := url.Values{
 		"client_id": {fakeoidc.DefaultClientID}, "redirect_uri": {redirectURI}, "response_type": {"code"},
@@ -264,7 +303,7 @@ func TestProvider_ChooserOffersAButtonPerAccountAndFlagsTheOutsider(t *testing.T
 	want := []fakeoidctest.Account{
 		{Email: fakeoidc.AliceEmail},
 		{Email: fakeoidc.BobEmail},
-		{Email: fakeoidc.CarolEmail, Note: "outside the workspace - sign-in is rejected"},
+		{Email: fakeoidc.CarolEmail, Note: "no hosted domain - signs in only if invited"},
 	}
 	if got := fakeoidctest.ChooserAccounts(t, body); !slices.Equal(got, want) {
 		t.Errorf("chooser accounts = %+v, want %+v", got, want)

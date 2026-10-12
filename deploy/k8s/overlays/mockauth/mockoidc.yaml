@@ -1,5 +1,5 @@
 # The mock sign-in provider: an OIDC provider that lets a developer choose which
-# seeded user (or the outsider without a hosted domain) to sign in as. The image
+# seeded user (or the outsider without a hosted domain or an invitation) to sign in as. The image
 # is the `tools` target of backend/Dockerfile. It holds no secret: it reads no
 # Secret, and takes KIWI_ENV from the ConfigMap that kiwi reads, so it refuses to
 # start the day that says anything but local.
@@ -43,13 +43,15 @@ spec:
             # Tokens name this issuer, which is the one kiwi verifies against.
             - name: MOCKOIDC_ISSUER
               value: http://localhost:8080/mockoidc
-            # The hosted domain of the users; `task seed -- --domain demo.example`
-            # creates the workspace they sign in to.
+            # The hosted domain of the users whose token carries one; `task seed` creates
+            # the workspace (demo.example, with alice and bob) they sign in to.
             - name: MOCKOIDC_HD
               value: demo.example
+            # Alice signs in as a Workspace account (hd). Bob's token has no hd (":no-hd"),
+            # so kiwi lets him in only because the seed invited him.
             - name: MOCKOIDC_USERS
-              value: alice@demo.example,bob@demo.example
-            # Signs in without a hosted domain, so kiwi turns it away.
+              value: alice@demo.example,bob@demo.example:no-hd
+            # No hd and not seeded: kiwi turns her away as not invited.
             - name: MOCKOIDC_OUTSIDER
               value: carol@elsewhere.example
             # The only address the provider redirects to: the callback of KIWI_PUBLIC_URL.

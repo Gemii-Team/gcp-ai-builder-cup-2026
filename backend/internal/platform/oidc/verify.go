@@ -20,19 +20,21 @@ const discoveryTimeout = 15 * time.Second
 
 // Claims are the verified claims of an ID token.
 type Claims struct {
-	Sub           string
-	Email         string
-	Name          string
-	Picture       string
-	HD            string
+	Sub     string
+	Email   string
+	Name    string
+	Picture string
+	HD      string
+	// EmailVerified is the email_verified claim. It is false only next to
+	// ErrNoHostedDomain: Verify rejects an unverified email of a token with hd.
 	EmailVerified bool
 	// Nonce is the nonce claim of the token, empty when it has none.
 	Nonce string
 }
 
-// ErrNoHostedDomain is returned, together with the otherwise verified claims,
-// for a token without an hd claim: an account that does not belong to a Workspace
-// domain, such as a personal Gmail address.
+// ErrNoHostedDomain is returned, together with the otherwise verified claims, for a
+// token without an hd claim: an account that does not belong to a Workspace domain,
+// such as a personal Gmail address. Its email may be unverified.
 var ErrNoHostedDomain = errors.New("oidc: the ID token has no hd claim")
 
 // Verifier checks ID tokens of one issuer for one client.
@@ -73,12 +75,15 @@ func NewVerifier(ctx context.Context, issuer, internalURL, clientID string) (*Ve
 // its discovery document advertises them.
 func (v *Verifier) Endpoint() oauth2.Endpoint { return v.provider.Endpoint() }
 
-// Verify checks raw's signature, audience, issuer and expiry, that the email is
-// verified and that the token names a hosted domain, and returns its claims.
+// Verify checks raw's signature, audience, issuer and expiry and that the token names
+// a subject and an email, and returns its claims.
 //
-// A token that passes every check except for the missing hd claim returns its
-// verified claims together with ErrNoHostedDomain, so the caller can tell the user
-// which account was turned away. Every other failure returns zero Claims.
+// A token with an hd claim is accepted only when its email is verified. A token
+// without one has no hosted domain to vouch for the address, so it returns its
+// verified claims together with ErrNoHostedDomain, whether or not the email is
+// verified (Claims.EmailVerified says which): the caller decides what such an
+// account may do, and must not trust the address unless EmailVerified is true. Every
+// other failure returns zero Claims.
 func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	tok, err := v.verifier.Verify(ctx, raw)
 	if err != nil {
@@ -94,11 +99,8 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if err := tok.Claims(&body); err != nil {
 		return Claims{}, fmt.Errorf("oidc: read ID token claims: %w", err)
 	}
-	switch {
-	case tok.Subject == "" || body.Email == "":
+	if tok.Subject == "" || body.Email == "" {
 		return Claims{}, errors.New("oidc: the ID token carries no subject or email")
-	case !body.EmailVerified:
-		return Claims{}, errors.New("oidc: the email of the ID token is not verified")
 	}
 
 	c := Claims{
@@ -107,11 +109,14 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 		Name:          body.Name,
 		Picture:       body.Picture,
 		HD:            body.HD,
-		EmailVerified: true,
+		EmailVerified: body.EmailVerified,
 		Nonce:         tok.Nonce,
 	}
 	if c.HD == "" {
 		return c, ErrNoHostedDomain
+	}
+	if !c.EmailVerified {
+		return Claims{}, errors.New("oidc: the email of the ID token is not verified")
 	}
 	return c, nil
 }

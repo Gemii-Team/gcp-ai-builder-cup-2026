@@ -48,8 +48,9 @@ func WithRedirectURIs(uris ...string) Option {
 
 // New starts a Provider with fakeoidc.DefaultClientID and
 // fakeoidc.DefaultClientSecret, hosted domain fakeoidc.DefaultDomain, users Alice
-// and Bob, the outsider Carol and fakeoidc.DefaultRedirectURI as the only
-// registered redirect_uri, and stops it when the test ends.
+// and Bob (their tokens carry hd), Carol (hers does not: she is a personal
+// account) and fakeoidc.DefaultRedirectURI as the only registered redirect_uri,
+// and stops it when the test ends.
 func New(t testing.TB, opts ...Option) *Server {
 	t.Helper()
 
@@ -67,8 +68,8 @@ func New(t testing.TB, opts ...Option) *Server {
 		Users: []fakeoidc.User{
 			{Email: fakeoidc.AliceEmail, Name: fakeoidc.AliceName},
 			{Email: fakeoidc.BobEmail, Name: fakeoidc.BobName},
+			{Email: fakeoidc.CarolEmail, Name: fakeoidc.CarolName, NoHD: true},
 		},
-		Outsider:     &fakeoidc.User{Email: fakeoidc.CarolEmail, Name: fakeoidc.CarolName},
 		RedirectURIs: []string{fakeoidc.DefaultRedirectURI},
 	}
 	for _, opt := range opts {

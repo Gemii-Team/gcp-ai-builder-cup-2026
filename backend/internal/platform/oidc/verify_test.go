@@ -148,7 +148,7 @@ func TestVerify_RejectsBadSignature(t *testing.T) {
 	}
 }
 
-func TestVerify_RejectsUnverifiedEmail(t *testing.T) {
+func TestVerify_HDWithUnverifiedEmail_RejectedWithZeroClaims(t *testing.T) {
 	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
@@ -178,12 +178,33 @@ func TestVerify_MissingHD_ReturnsErrNoHostedDomainWithVerifiedClaims(t *testing.
 	}
 }
 
+// An account without hd is judged by the invite rule, which needs to tell an
+// unverified address from a verified one: the claims come back whichever it is.
+func TestVerify_NoHD_UnverifiedEmail_ReturnsClaimsWithErrNoHostedDomain(t *testing.T) {
+	f := fakeoidctest.New(t)
+	v := verifier(t, f)
+
+	c := valid
+	c.HD, c.EmailVerified = "", false
+	got, err := v.Verify(t.Context(), f.Mint(c, fakeoidc.MintOptions{}))
+	if !errors.Is(err, ErrNoHostedDomain) {
+		t.Fatalf("err = %v, want ErrNoHostedDomain", err)
+	}
+	want := Claims{Sub: valid.Sub, Email: valid.Email, Name: valid.Name, Picture: valid.Picture, EmailVerified: false}
+	if got != want {
+		t.Fatalf("claims = %+v, want %+v: the verified claims with EmailVerified false", got, want)
+	}
+
+	c.EmailVerified = true
+	if got, err := v.Verify(t.Context(), f.Mint(c, fakeoidc.MintOptions{})); !errors.Is(err, ErrNoHostedDomain) || !got.EmailVerified {
+		t.Fatalf("a verified address without hd: got %+v, %v; want EmailVerified true with ErrNoHostedDomain", got, err)
+	}
+}
+
 func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
 	f := fakeoidctest.New(t)
 	v := verifier(t, f)
 
-	noHDUnverified := valid
-	noHDUnverified.HD, noHDUnverified.EmailVerified = "", false
 	noSub := valid
 	noSub.Sub = ""
 	noEmail := valid
@@ -196,7 +217,6 @@ func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
 		"bad signature":                       f.Mint(valid, fakeoidc.MintOptions{WrongKey: true}),
 		"bad signature and no hd":             f.Mint(fakeoidc.Claims{Sub: "1", Email: "x@y.test", EmailVerified: true}, fakeoidc.MintOptions{WrongKey: true}),
 		"expired and no hd":                   f.Mint(fakeoidc.Claims{Sub: "1", Email: "x@y.test", EmailVerified: true}, fakeoidc.MintOptions{ExpiresIn: -time.Hour}),
-		"unverified email and no hd":          f.Mint(noHDUnverified, fakeoidc.MintOptions{}),
 		"no subject":                          f.Mint(noSub, fakeoidc.MintOptions{}),
 		"no email":                            f.Mint(noEmail, fakeoidc.MintOptions{}),
 		"not a token":                         "definitely-not-a-jwt",
@@ -212,7 +232,7 @@ func TestVerify_OtherFailuresReturnNoClaims(t *testing.T) {
 				t.Fatal("the token was accepted")
 			}
 			if errors.Is(err, ErrNoHostedDomain) {
-				t.Fatalf("err = %v: only a fully verified token may be named by ErrNoHostedDomain", err)
+				t.Fatalf("err = %v: only a token whose signature, audience, issuer, expiry and subject verified may be named by ErrNoHostedDomain", err)
 			}
 			if got != (Claims{}) {
 				t.Fatalf("claims = %+v with an error, want zero", got)

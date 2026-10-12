@@ -141,7 +141,7 @@ func (m *Module) handleCallback(w http.ResponseWriter, r *http.Request) {
 		var ce *CallbackError
 		if errors.As(err, &ce) {
 			code, email = ce.Code, ce.Email
-			m.log.InfoContext(ctx, "sign-in rejected", "code", code, "err", err)
+			m.log.InfoContext(ctx, "sign-in rejected", "code", code, "reason", ce.Reason, "err", err)
 		} else {
 			m.log.ErrorContext(ctx, "sign-in failed", "err", err)
 		}
@@ -174,8 +174,8 @@ func boundTo(r *http.Request, state string) bool {
 	return err == nil && state != "" && subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) == 1
 }
 
-// signinError sends the browser to the sign-in page with the reason. The email,
-// which only a domain_not_allowed carries and which comes from the verified token,
+// signinError sends the browser to the sign-in page with the reason. The email, which
+// only domain_not_allowed and not_invited carry and which comes from the verified token,
 // lets the page name the account that was turned away.
 func signinError(w http.ResponseWriter, r *http.Request, code, email string) {
 	target := "/signin?error=" + url.QueryEscape(code)

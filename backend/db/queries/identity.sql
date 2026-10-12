@@ -6,10 +6,11 @@
 -- that. Everything else runs as kiwi_app inside db.InWorkspace, where row-level
 -- security binds it to one workspace.
 
--- name: GetWorkspaceByDomain :one
+-- name: FindWorkspaceByDomain :one
+-- The workspace of a hosted domain, compared without regard to case.
 SELECT id, name, google_domain, created_at
 FROM identity.workspaces
-WHERE google_domain = $1;
+WHERE lower(google_domain) = lower(sqlc.arg(domain)::text);
 
 -- name: GetWorkspace :one
 SELECT id, name, google_domain, created_at
@@ -22,9 +23,12 @@ WHERE id = $1;
 SELECT id FROM identity.workspaces ORDER BY id;
 
 -- name: InsertWorkspaceIfAbsent :exec
+-- google_domain is NULL for the one workspace without a domain, whose id is fixed. A
+-- conflict is that id or the domain (unique without regard to case): the workspace is
+-- there already.
 INSERT INTO identity.workspaces (id, name, google_domain)
 VALUES ($1, $2, $3)
-ON CONFLICT (google_domain) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- name: GetUserBySub :one
 SELECT id, workspace_id, google_sub, email, name, avatar_url, created_at
@@ -50,6 +54,14 @@ WHERE workspace_id = $1 AND email = $2;
 SELECT id, workspace_id, google_sub, email, name, avatar_url, created_at
 FROM identity.users
 ORDER BY name, email;
+
+-- name: FindUsersByEmail :many
+-- Every user, in any workspace, whose address is email (lowercased by the caller):
+-- what the sign-in rule for a token without hd decides on. A System query, since the
+-- workspace is not known yet; it reads three columns and writes nothing.
+SELECT id, workspace_id, google_sub
+FROM identity.users
+WHERE lower(email) = sqlc.arg(email)::text;
 
 -- name: InsertSeedUserIfAbsent :exec
 INSERT INTO identity.users (id, workspace_id, google_sub, email, name)

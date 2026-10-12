@@ -178,10 +178,11 @@ func safeReturnTo(raw string) string {
 
 // HandleCallback implements Service. It completes a flow begun by LoginURL or the
 // Meet consent: it spends the state, exchanges the code with the PKCE verifier,
-// verifies the ID token, resolves the workspace by the hd claim and the user by
-// google_sub, keeps the refresh token encrypted and opens a session. Rejections
-// are *CallbackError. Binding the state to the browser is the HTTP route's job
-// (handleCallback), not this method's.
+// verifies the ID token, finds the user (by the hd claim and google_sub, or for a
+// token without hd by the invitation of its address; see resolveUser and
+// resolveInvitedUser), keeps the refresh token encrypted and opens a session.
+// Rejections are *CallbackError and write nothing. Binding the state to the browser
+// is the HTTP route's job (handleCallback), not this method's.
 func (m *Module) HandleCallback(ctx context.Context, code, state string) (Session, string, error) {
 	st, err := m.cache.TakeOAuthState(ctx, state)
 	if errors.Is(err, errs.ErrNotFound) {
@@ -213,13 +214,18 @@ func (m *Module) HandleCallback(ctx context.Context, code, state string) (Sessio
 	if st.Nonce == "" || subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(st.Nonce)) != 1 {
 		return Session{}, "", &CallbackError{Code: CodeExchangeFailed, Err: errors.New("the ID token does not carry the nonce of the request")}
 	}
-	if errors.Is(err, oidc.ErrNoHostedDomain) {
-		return Session{}, "", &CallbackError{Code: CodeDomainNotAllowed, Email: claims.Email, Err: err}
-	}
 
-	user, err := resolveUser(ctx, m.db, claims)
-	if errors.Is(err, errDomainNotAllowed) {
-		return Session{}, "", &CallbackError{Code: CodeDomainNotAllowed, Email: claims.Email, Err: err}
+	// A token with hd belongs to a workspace by its domain; one without belongs to
+	// whoever was invited by address. Never the second for a token with hd.
+	resolve := resolveUser
+	if errors.Is(err, oidc.ErrNoHostedDomain) {
+		resolve = resolveInvitedUser
+	}
+	user, err := resolve(ctx, m.db, claims)
+	var rejection *CallbackError
+	if errors.As(err, &rejection) {
+		rejection.Email = normalizeEmail(claims.Email)
+		return Session{}, "", rejection
 	}
 	if err != nil {
 		return Session{}, "", fmt.Errorf("identity: resolve user: %w", err)
@@ -323,12 +329,18 @@ func (m *Module) Me(ctx context.Context, a authz.Actor) (*identityv1.User, *iden
 	}
 
 	// KIWI_WORKSPACE_NAME is how the deployment calls its workspace; the column
-	// holds the domain. It names this workspace only if it is the configured one.
+	// holds the domain, or nothing for the workspace without one. The configured
+	// name belongs to the workspace of KIWI_WORKSPACE_DOMAIN, or to the workspace of
+	// a deployment that configures no domain.
+	domain := ""
+	if w.GoogleDomain != nil {
+		domain = *w.GoogleDomain
+	}
 	name := w.Name
-	if m.cfg.WorkspaceName != "" && (m.cfg.WorkspaceDomain == "" || strings.EqualFold(m.cfg.WorkspaceDomain, w.GoogleDomain)) {
+	if m.cfg.WorkspaceName != "" && (m.cfg.WorkspaceDomain == "" || strings.EqualFold(m.cfg.WorkspaceDomain, domain)) {
 		name = m.cfg.WorkspaceName
 	}
-	return userProto(u), &identityv1.Workspace{Id: w.ID.String(), Name: name, GoogleDomain: w.GoogleDomain}, nil
+	return userProto(u), &identityv1.Workspace{Id: w.ID.String(), Name: name, GoogleDomain: domain}, nil
 }
 
 // ListUsers implements Service.

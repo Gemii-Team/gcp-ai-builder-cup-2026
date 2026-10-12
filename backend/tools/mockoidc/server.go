@@ -17,24 +17,27 @@ import (
 )
 
 // The defaults describe the mockauth stack: K.I.W.I. on http://localhost:8080
-// and a workspace seeded for demo.example with `kiwi seed`.
+// and the workspace `kiwi seed` makes for demo.example: Alice signs in as a
+// Workspace account (hd), Bob as a personal one without hd whom the seed has
+// invited, Carol as a personal one nobody invited.
 const (
 	listenAddr          = ":8090"
 	defaultIssuer       = "http://localhost:8080/mockoidc"
 	defaultHD           = "demo.example"
-	defaultUsers        = "alice@demo.example,bob@demo.example"
+	defaultUsers        = "alice@demo.example,bob@demo.example:" + noHDFlag
 	defaultOutsider     = "carol@elsewhere.example"
 	defaultRedirectURIs = "http://localhost:8080/api/auth/callback"
+
+	// noHDFlag marks a MOCKOIDC_USERS entry whose token carries no hd.
+	noHDFlag = "no-hd"
 )
 
 // newProvider builds the mock sign-in provider the MOCKOIDC_* variables
-// describe: a fakeoidc.Provider whose Workspace users carry hd and sub
-// "seed:" + email (the placeholder a seed leaves, so a sign-in lands on the
-// seeded user), plus an outsider without hd, and which takes whatever OAuth
-// client it is presented. It redirects only to MOCKOIDC_REDIRECT_URIS.
-//
-// A mock that signs anybody in must never run beside real users: any KIWI_ENV
-// other than unset or "local" is refused.
+// describe: a fakeoidc.Provider whose users have sub "seed:" + email (the
+// placeholder a seed leaves, so a sign-in lands on the seeded user) and, as
+// Workspace accounts, carry hd; an entry of MOCKOIDC_USERS written
+// "email:no-hd" has none, and neither has MOCKOIDC_OUTSIDER. It takes whatever
+// OAuth client it is presented and redirects only to MOCKOIDC_REDIRECT_URIS.
 func newProvider(getenv func(string) string) (*fakeoidc.Provider, error) {
 	if env := getenv("KIWI_ENV"); env != "" && env != "local" {
 		return nil, fmt.Errorf("refusing to start with KIWI_ENV=%q: the mock sign-in provider signs anybody in and runs only locally (KIWI_ENV unset or \"local\")", env)
@@ -53,7 +56,11 @@ func newProvider(getenv func(string) string) (*fakeoidc.Provider, error) {
 
 	var users []fakeoidc.User
 	seen := map[string]bool{}
-	for _, email := range splitList(value("MOCKOIDC_USERS", defaultUsers)) {
+	for _, entry := range splitList(value("MOCKOIDC_USERS", defaultUsers)) {
+		email, flag, flagged := strings.Cut(entry, ":")
+		if flagged && flag != noHDFlag {
+			return nil, fmt.Errorf("MOCKOIDC_USERS: %q has the unknown flag %q, the only one is :%s", entry, flag, noHDFlag)
+		}
 		if err := checkEmail("MOCKOIDC_USERS", email); err != nil {
 			return nil, err
 		}
@@ -61,7 +68,7 @@ func newProvider(getenv func(string) string) (*fakeoidc.Provider, error) {
 			return nil, fmt.Errorf("MOCKOIDC_USERS lists %s twice", email)
 		}
 		seen[strings.ToLower(email)] = true
-		users = append(users, fakeoidc.User{Email: email, Name: displayName(email)})
+		users = append(users, fakeoidc.User{Email: email, Name: displayName(email), NoHD: flagged})
 	}
 
 	outsider := value("MOCKOIDC_OUTSIDER", defaultOutsider)
@@ -79,12 +86,12 @@ func newProvider(getenv func(string) string) (*fakeoidc.Provider, error) {
 		}
 	}
 
+	users = append(users, fakeoidc.User{Email: outsider, Name: displayName(outsider), NoHD: true})
 	p, err := fakeoidc.NewProvider(fakeoidc.Config{
 		Issuer:       issuer,
 		AnyClient:    true,
 		HostedDomain: hd,
 		Users:        users,
-		Outsider:     &fakeoidc.User{Email: outsider, Name: displayName(outsider)},
 		RedirectURIs: redirects,
 	})
 	if err != nil {

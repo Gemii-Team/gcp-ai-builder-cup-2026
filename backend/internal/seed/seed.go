@@ -9,6 +9,10 @@
 // name, a message by a client_msg_id derived from the workspace, channel and position
 // (UUIDv5), the document by its file name in its channel, and the meeting by an id
 // derived the same way. A run that stopped half way is finished by the next one.
+//
+// The workspace is that of a Google domain (its members sign in with hd) or, with no
+// domain, the one workspace without a domain: its members are personal Google accounts
+// that sign in because the seed listed them (identity.EnsureSeedWorkspace).
 package seed
 
 import (
@@ -63,9 +67,13 @@ type Deps struct {
 }
 
 // Options are what to seed. Domain is the workspace's Google domain, created if it does
-// not exist; MemberEmails are its members, in order: the first one owns the channels and
-// is the only member of the private one, the first two write the messages and are named
-// as owners of the drafts. Each is a placeholder user until that email signs in. With
+// not exist; empty, it is the one workspace without a domain, for a team whose Google
+// accounts carry no hd claim (personal addresses), whose members sign in because they
+// are listed here. MemberEmails are its members, in order: the first one owns the
+// channels and is the only member of the private one, the first two write the messages
+// and are named as owners of the drafts (a single member writes every message and owns
+// the drafts that have an owner).
+// Each is a placeholder user until that email signs in. With
 // IndexInline Run analyses the document and indexes everything itself, and the workspace
 // can be searched when it returns; without it Run leaves both to the doc.analyze and
 // embed.index jobs, which pick them up from the outbox when the stack is running.
@@ -75,12 +83,10 @@ type Options struct {
 	IndexInline  bool
 }
 
-// clean checks Options and returns the domain and the emails the way identity keeps them.
+// clean checks Options and returns the domain (empty for the workspace without one) and
+// the emails the way identity keeps them.
 func (o Options) clean() (domain string, emails []string, err error) {
 	domain = strings.ToLower(strings.TrimSpace(o.Domain))
-	if domain == "" {
-		return "", nil, errors.New("seed: a workspace domain is required")
-	}
 	if len(o.MemberEmails) == 0 {
 		return "", nil, errors.New("seed: at least one member is required: the first one owns the channels")
 	}
@@ -97,7 +103,8 @@ func (o Options) clean() (domain string, emails []string, err error) {
 	return domain, emails, nil
 }
 
-// Run seeds the workspace of o.Domain. See Options and the package comment.
+// Run seeds the workspace of o.Domain, or the one without a domain. See Options and the
+// package comment.
 func Run(ctx context.Context, d Deps, o Options) error {
 	if d.DB == nil || d.Cache == nil || d.Blob == nil || d.LLM == nil {
 		return errors.New("seed: Deps needs DB, Cache, Blob and LLM")

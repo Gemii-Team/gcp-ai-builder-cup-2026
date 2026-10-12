@@ -26,7 +26,7 @@ const (
 	// clientID is not "mock": the provider takes the id it is presented.
 	clientID = "kiwi-local-client"
 	verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-	outsider = "outside the workspace - sign-in is rejected"
+	noHD     = "no hosted domain - signs in only if invited"
 )
 
 var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -178,16 +178,18 @@ func TestMockOIDC_FullCodeFlowWithPKCE_VerifiesWithKiwiVerifier(t *testing.T) {
 		// display is the name claim: the local part, capitalised.
 		display string
 		other   string
+		// otherHD is the hd of the other user's token: empty for a user marked :no-hd.
+		otherHD string
 	}{
 		{
 			name: "defaults", hd: "demo.example",
-			email: "alice@demo.example", display: "Alice", other: "bob@demo.example",
+			email: "alice@demo.example", display: "Alice", other: "bob@demo.example", otherHD: "",
 		},
 		{
 			name:  "MOCKOIDC_HD and MOCKOIDC_USERS",
 			env:   []string{"MOCKOIDC_HD", "acme.example", "MOCKOIDC_USERS", "dora@acme.example, erin@acme.example"},
 			hd:    "acme.example",
-			email: "dora@acme.example", display: "Dora", other: "erin@acme.example",
+			email: "dora@acme.example", display: "Dora", other: "erin@acme.example", otherHD: "acme.example",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -211,8 +213,8 @@ func TestMockOIDC_FullCodeFlowWithPKCE_VerifiesWithKiwiVerifier(t *testing.T) {
 
 			// With login_hint the code is issued without the page.
 			c, err = v.Verify(t.Context(), signIn(t, srv, v, tc.other, false))
-			if err != nil || c.HD != tc.hd || c.Sub != "seed:"+tc.other {
-				t.Errorf("login_hint sign-in: claims %+v, err %v", c, err)
+			if (tc.otherHD == "") != errors.Is(err, oidc.ErrNoHostedDomain) || (tc.otherHD != "" && err != nil) || c.HD != tc.otherHD || c.Sub != "seed:"+tc.other {
+				t.Errorf("login_hint sign-in: claims %+v, err %v, want hd %q", c, err, tc.otherHD)
 			}
 		})
 	}
@@ -225,10 +227,10 @@ func TestMockOIDC_ChooserListsEveryConfiguredUserAndTheOutsider(t *testing.T) {
 		want []fakeoidctest.Account
 	}{
 		{"defaults", nil, []fakeoidctest.Account{
-			{Email: "alice@demo.example"}, {Email: "bob@demo.example"}, {Email: "carol@elsewhere.example", Note: outsider},
+			{Email: "alice@demo.example"}, {Email: "bob@demo.example", Note: noHD}, {Email: "carol@elsewhere.example", Note: noHD},
 		}},
-		{"configured", []string{"MOCKOIDC_USERS", "a@x.test,b@x.test, c@x.test", "MOCKOIDC_OUTSIDER", "z@gmail.test"}, []fakeoidctest.Account{
-			{Email: "a@x.test"}, {Email: "b@x.test"}, {Email: "c@x.test"}, {Email: "z@gmail.test", Note: outsider},
+		{"configured", []string{"MOCKOIDC_USERS", "a@x.test,b@x.test:no-hd, c@x.test", "MOCKOIDC_OUTSIDER", "z@gmail.test"}, []fakeoidctest.Account{
+			{Email: "a@x.test"}, {Email: "b@x.test", Note: noHD}, {Email: "c@x.test"}, {Email: "z@gmail.test", Note: noHD},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,27 +250,42 @@ func TestMockOIDC_ChooserListsEveryConfiguredUserAndTheOutsider(t *testing.T) {
 	}
 }
 
-func TestMockOIDC_OutsiderTokenHasNoHD_VerifierRejects(t *testing.T) {
+// Alice's token carries hd; Bob (seeded, signing in through the invite rule) and
+// Carol (not seeded) have none, and the production verifier says so while still
+// returning who they are.
+func TestMockOIDC_TokensOfUsersWithoutHD_CarryNoHDClaim(t *testing.T) {
 	srv, v := startMock(t, publicIssuer)
-	raw := signIn(t, srv, v, "carol@elsewhere.example", true)
+	for _, tc := range []struct {
+		email  string
+		hd     string
+		name   string
+		hasHD  bool
+		wantHD error
+	}{
+		{"alice@demo.example", "demo.example", "Alice", true, nil},
+		{"bob@demo.example", "", "Bob", false, oidc.ErrNoHostedDomain},
+		{"carol@elsewhere.example", "", "Carol", false, oidc.ErrNoHostedDomain},
+	} {
+		raw := signIn(t, srv, v, tc.email, true)
 
-	c, err := v.Verify(t.Context(), raw)
-	if !errors.Is(err, oidc.ErrNoHostedDomain) {
-		t.Fatalf("Verify = %v, want oidc.ErrNoHostedDomain", err)
-	}
-	if c.Email != "carol@elsewhere.example" || c.Sub != "seed:carol@elsewhere.example" || c.Name != "Carol" {
-		t.Errorf("claims = %+v, want the outsider's verified identity next to the error", c)
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(raw, ".")[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		t.Fatal(err)
-	}
-	if _, has := claims["hd"]; has {
-		t.Errorf("the outsider's token carries hd = %v, want no hd claim", claims["hd"])
+		c, err := v.Verify(t.Context(), raw)
+		if !errors.Is(err, tc.wantHD) {
+			t.Fatalf("%s: Verify = %v, want %v", tc.email, err, tc.wantHD)
+		}
+		if c.Email != tc.email || c.Sub != "seed:"+tc.email || c.Name != tc.name || c.HD != tc.hd || !c.EmailVerified {
+			t.Errorf("%s: claims = %+v, want the verified identity with hd %q", tc.email, c, tc.hd)
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(strings.Split(raw, ".")[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var claims map[string]any
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			t.Fatal(err)
+		}
+		if _, has := claims["hd"]; has != tc.hasHD {
+			t.Errorf("%s: hd claim present = %v (%v), want %v", tc.email, has, claims["hd"], tc.hasHD)
+		}
 	}
 }
 
@@ -359,16 +376,22 @@ func TestRun_ProdExitsWithCode1NamingKIWI_ENV(t *testing.T) {
 }
 
 func TestMockOIDC_RefusesBrokenConfigurationNamingTheVariable(t *testing.T) {
-	for name, kv := range map[string][]string{
-		"MOCKOIDC_USERS":         {"MOCKOIDC_USERS", "alice@demo.example,not-an-email"},
-		"MOCKOIDC_OUTSIDER":      {"MOCKOIDC_OUTSIDER", "not-an-email"},
-		"MOCKOIDC_ISSUER":        {"MOCKOIDC_ISSUER", "localhost:8080/mockoidc"},
-		"MOCKOIDC_REDIRECT_URIS": {"MOCKOIDC_REDIRECT_URIS", "/api/auth/callback"},
-		"MOCKOIDC_HD":            {"MOCKOIDC_HD", "demo.example, other.example"},
+	for _, tc := range []struct {
+		name string
+		kv   []string
+	}{
+		{"MOCKOIDC_USERS", []string{"MOCKOIDC_USERS", "alice@demo.example,not-an-email"}},
+		{"MOCKOIDC_USERS", []string{"MOCKOIDC_USERS", "alice@demo.example,bob@demo.example:nope"}},
+		{"MOCKOIDC_USERS", []string{"MOCKOIDC_USERS", "alice@demo.example,ALICE@demo.example:no-hd"}},
+		{"MOCKOIDC_OUTSIDER", []string{"MOCKOIDC_OUTSIDER", "not-an-email"}},
+		{"MOCKOIDC_OUTSIDER", []string{"MOCKOIDC_OUTSIDER", "bob@demo.example"}},
+		{"MOCKOIDC_ISSUER", []string{"MOCKOIDC_ISSUER", "localhost:8080/mockoidc"}},
+		{"MOCKOIDC_REDIRECT_URIS", []string{"MOCKOIDC_REDIRECT_URIS", "/api/auth/callback"}},
+		{"MOCKOIDC_HD", []string{"MOCKOIDC_HD", "demo.example, other.example"}},
 	} {
-		_, err := newProvider(environ(kv...))
-		if err == nil || !strings.Contains(err.Error(), name) {
-			t.Errorf("%s=%q: %v, want an error naming %s", name, kv[1], err, name)
+		_, err := newProvider(environ(tc.kv...))
+		if err == nil || !strings.Contains(err.Error(), tc.name) {
+			t.Errorf("%s=%q: %v, want an error naming %s", tc.kv[0], tc.kv[1], err, tc.name)
 		}
 	}
 }

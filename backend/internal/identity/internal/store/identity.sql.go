@@ -51,6 +51,68 @@ func (q *Queries) AdoptSeedUser(ctx context.Context, arg AdoptSeedUserParams) (I
 	return i, err
 }
 
+const findUsersByEmail = `-- name: FindUsersByEmail :many
+SELECT id, workspace_id, google_sub
+FROM identity.users
+WHERE lower(email) = $1::text
+`
+
+type FindUsersByEmailRow struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	GoogleSub   string
+}
+
+// Every user, in any workspace, whose address is email (lowercased by the caller):
+// what the sign-in rule for a token without hd decides on. A System query, since the
+// workspace is not known yet; it reads three columns and writes nothing.
+func (q *Queries) FindUsersByEmail(ctx context.Context, email string) ([]FindUsersByEmailRow, error) {
+	rows, err := q.db.Query(ctx, findUsersByEmail, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindUsersByEmailRow
+	for rows.Next() {
+		var i FindUsersByEmailRow
+		if err := rows.Scan(&i.ID, &i.WorkspaceID, &i.GoogleSub); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findWorkspaceByDomain = `-- name: FindWorkspaceByDomain :one
+
+SELECT id, name, google_domain, created_at
+FROM identity.workspaces
+WHERE lower(google_domain) = lower($1::text)
+`
+
+// Queries of the identity domain (sqlc generates internal/identity/internal/store).
+//
+// Two roles run them. callback.go runs the sign-in queries as kiwi_system inside
+// db.System, which holds only SELECT+INSERT on identity.workspaces and
+// SELECT+INSERT+UPDATE on identity.users, so every System query below stays within
+// that. Everything else runs as kiwi_app inside db.InWorkspace, where row-level
+// security binds it to one workspace.
+// The workspace of a hosted domain, compared without regard to case.
+func (q *Queries) FindWorkspaceByDomain(ctx context.Context, domain string) (IdentityWorkspace, error) {
+	row := q.db.QueryRow(ctx, findWorkspaceByDomain, domain)
+	var i IdentityWorkspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.GoogleDomain,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getOAuthToken = `-- name: GetOAuthToken :one
 SELECT user_id, workspace_id, refresh_token_enc, scopes, updated_at
 FROM identity.oauth_tokens
@@ -169,32 +231,6 @@ func (q *Queries) GetWorkspace(ctx context.Context, id uuid.UUID) (IdentityWorks
 	return i, err
 }
 
-const getWorkspaceByDomain = `-- name: GetWorkspaceByDomain :one
-
-SELECT id, name, google_domain, created_at
-FROM identity.workspaces
-WHERE google_domain = $1
-`
-
-// Queries of the identity domain (sqlc generates internal/identity/internal/store).
-//
-// Two roles run them. callback.go runs the sign-in queries as kiwi_system inside
-// db.System, which holds only SELECT+INSERT on identity.workspaces and
-// SELECT+INSERT+UPDATE on identity.users, so every System query below stays within
-// that. Everything else runs as kiwi_app inside db.InWorkspace, where row-level
-// security binds it to one workspace.
-func (q *Queries) GetWorkspaceByDomain(ctx context.Context, googleDomain string) (IdentityWorkspace, error) {
-	row := q.db.QueryRow(ctx, getWorkspaceByDomain, googleDomain)
-	var i IdentityWorkspace
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.GoogleDomain,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const insertSeedUserIfAbsent = `-- name: InsertSeedUserIfAbsent :exec
 INSERT INTO identity.users (id, workspace_id, google_sub, email, name)
 VALUES ($1, $2, 'seed:' || $3::text, $3::text, $4)
@@ -258,15 +294,18 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (Identit
 const insertWorkspaceIfAbsent = `-- name: InsertWorkspaceIfAbsent :exec
 INSERT INTO identity.workspaces (id, name, google_domain)
 VALUES ($1, $2, $3)
-ON CONFLICT (google_domain) DO NOTHING
+ON CONFLICT DO NOTHING
 `
 
 type InsertWorkspaceIfAbsentParams struct {
 	ID           uuid.UUID
 	Name         string
-	GoogleDomain string
+	GoogleDomain *string
 }
 
+// google_domain is NULL for the one workspace without a domain, whose id is fixed. A
+// conflict is that id or the domain (unique without regard to case): the workspace is
+// there already.
 func (q *Queries) InsertWorkspaceIfAbsent(ctx context.Context, arg InsertWorkspaceIfAbsentParams) error {
 	_, err := q.db.Exec(ctx, insertWorkspaceIfAbsent, arg.ID, arg.Name, arg.GoogleDomain)
 	return err

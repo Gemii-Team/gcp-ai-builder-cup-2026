@@ -176,7 +176,11 @@ func seedPod(t *testing.T) *dbtest.Env {
 	return env
 }
 
-// seededUsers lists the emails of every user of every workspace, through the system pool.
+// noDomain is how seededUsers lists the workspace without a domain.
+const noDomain = "(no domain)"
+
+// seededUsers lists the domain of every workspace and the email of every user, through
+// the system pool; the workspace without a domain is listed as noDomain.
 func seededUsers(t *testing.T, env *dbtest.Env) (domains, emails []string) {
 	t.Helper()
 	ctx := t.Context()
@@ -186,8 +190,8 @@ func seededUsers(t *testing.T, env *dbtest.Env) (domains, emails []string) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 	for query, into := range map[string]*[]string{
-		`SELECT google_domain FROM identity.workspaces ORDER BY 1`: &domains,
-		`SELECT email FROM identity.users ORDER BY 1`:              &emails,
+		`SELECT coalesce(google_domain, '` + noDomain + `') FROM identity.workspaces ORDER BY 1`: &domains,
+		`SELECT email FROM identity.users ORDER BY 1`:                                            &emails,
 	} {
 		rows, err := conn.Query(ctx, query)
 		if err != nil {
@@ -287,5 +291,97 @@ func TestSeed_FlagsOverrideTheDefaults(t *testing.T) {
 	domains, emails := seededUsers(t, env)
 	if !slices.Equal(domains, []string{"acme.example"}) || !slices.Equal(emails, []string{"ann@acme.example", "you@acme.example"}) {
 		t.Errorf("seeded %v with users %v, want acme.example with you and ann", domains, emails)
+	}
+}
+
+// TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne is how the real Google sign-in
+// is prepared when the team has no Workspace domain: `task seed -- --members <address>`.
+// The one workspace has no domain, the member is a placeholder with the lowercased
+// address, and running it again changes nothing. An empty --domain says the same thing.
+func TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne(t *testing.T) {
+	env := seedPod(t)
+
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"seed", "--members", " Pat@Gmail.example "}, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr: %s", code, stderr.String())
+	}
+	domains, emails := seededUsers(t, env)
+	if !slices.Equal(domains, []string{noDomain}) || !slices.Equal(emails, []string{"pat@gmail.example"}) {
+		t.Fatalf("seeded %v with users %v, want the workspace without a domain with pat only", domains, emails)
+	}
+
+	if code := run(t.Context(), []string{"seed", "--domain", "", "--members", "pat@gmail.example"}, &stderr); code != 0 {
+		t.Fatalf("with --domain \"\": exit code = %d, stderr: %s", code, stderr.String())
+	}
+	if domains2, emails2 := seededUsers(t, env); !slices.Equal(domains2, domains) || !slices.Equal(emails2, emails) {
+		t.Errorf("after a second run: %v with users %v, want %v with %v", domains2, emails2, domains, emails)
+	}
+}
+
+func TestSeed_DomainFlagRules(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		domain string
+		given  map[string]bool
+		want   string
+		err    string
+	}{
+		{"neither flag: the mock's workspace", defaultDomain, nil, defaultDomain, ""},
+		{"only --members: the workspace without a domain", defaultDomain, map[string]bool{"members": true}, "", ""},
+		{"--domain: that domain", "acme.example", map[string]bool{"domain": true}, "acme.example", ""},
+		{"--domain and --members", "acme.example", map[string]bool{"domain": true, "members": true}, "acme.example", ""},
+		{"an empty --domain with --members", "", map[string]bool{"domain": true, "members": true}, "", ""},
+		{"a blank --domain with --members", "  ", map[string]bool{"domain": true, "members": true}, "", ""},
+		{"an empty --domain alone", "", map[string]bool{"domain": true}, "", `--domain "" seeds the workspace without a domain and needs --members`},
+	} {
+		got, err := seedDomain(tc.domain, tc.given)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%s: err = %v, want %q", tc.name, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || strings.TrimSpace(got) != tc.want {
+			t.Errorf("%s: domain %q, %v; want %q", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// The flag rules are checked before anything is opened, so a wrong command line names its
+// mistake without needing a database.
+func TestSeed_FlagMistakesAreNamedBeforeAnythingOpens(t *testing.T) {
+	t.Setenv("KIWI_DATABASE_URL", "")
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"an empty --domain without --members": {[]string{"seed", "--domain", ""}, `--domain "" seeds the workspace without a domain and needs --members`},
+	} {
+		var stderr bytes.Buffer
+		if code := run(context.Background(), tc.args, &stderr); code != 1 || !strings.Contains(stderr.String(), tc.want) {
+			t.Errorf("%s: exit code %d, stderr %q, want 1 and %q", name, code, stderr.String(), tc.want)
+		}
+	}
+}
+
+// A malformed member is refused by the seed with the entry named, and nothing is made.
+func TestSeed_MalformedMembersAreRefusedWithTheEntryNamed(t *testing.T) {
+	env := seedPod(t)
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"not an address, with a domain":    {[]string{"seed", "--domain", "acme.example", "--members", "you@acme.example,not-an-address"}, `"not-an-address" is not an email address`},
+		"not an address, without a domain": {[]string{"seed", "--members", "not-an-address"}, `"not-an-address" is not an email address`},
+		"a display name":                   {[]string{"seed", "--members", "Pat <pat@gmail.example>"}, "pat <pat@gmail.example>"},
+		"listed twice":                     {[]string{"seed", "--members", "pat@gmail.example,Pat@gmail.example"}, "member pat@gmail.example is listed twice"},
+	} {
+		var stderr bytes.Buffer
+		if code := run(t.Context(), tc.args, &stderr); code != 1 || !strings.Contains(stderr.String(), tc.want) {
+			t.Errorf("%s: exit code %d, stderr %q, want 1 and %q", name, code, stderr.String(), tc.want)
+		}
+	}
+	if domains, emails := seededUsers(t, env); len(domains) != 0 || len(emails) != 0 {
+		t.Errorf("refused commands made %v with users %v, want nothing", domains, emails)
 	}
 }

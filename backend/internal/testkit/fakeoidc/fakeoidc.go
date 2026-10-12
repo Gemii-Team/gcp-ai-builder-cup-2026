@@ -1,7 +1,7 @@
 package fakeoidc
 
-// The accounts fakeoidctest.New serves: two Workspace users and an outsider
-// without hd.
+// The accounts fakeoidctest.New serves: two Workspace users and Carol, whose
+// token has no hd.
 const (
 	DefaultClientID     = "kiwi-test-client"
 	DefaultClientSecret = "kiwi-test-secret"

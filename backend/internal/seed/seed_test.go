@@ -32,6 +32,7 @@ import (
 	"kiwi/internal/platform/cache"
 	"kiwi/internal/platform/config"
 	"kiwi/internal/platform/db"
+	"kiwi/internal/platform/errs"
 	"kiwi/internal/platform/llm"
 	"kiwi/internal/tasks"
 	"kiwi/internal/testkit/containers"
@@ -578,11 +579,11 @@ func TestSeed_OneMemberOwnsEverything(t *testing.T) {
 func TestSeed_RefusesWhatItCannotSeed(t *testing.T) {
 	h := newHarness(t)
 	for name, o := range map[string]Options{
-		"no domain":         {MemberEmails: members},
-		"no members":        {Domain: domain},
-		"a member twice":    {Domain: domain, MemberEmails: []string{alice, "Alice@Demo.example"}},
-		"a blank member":    {Domain: domain, MemberEmails: []string{alice, " "}},
-		"a malformed email": {Domain: domain, MemberEmails: []string{"alice"}},
+		"no members and no domain": {},
+		"no members":               {Domain: domain},
+		"a member twice":           {Domain: domain, MemberEmails: []string{alice, "Alice@Demo.example"}},
+		"a blank member":           {Domain: domain, MemberEmails: []string{alice, " "}},
+		"a malformed email":        {Domain: domain, MemberEmails: []string{"alice"}},
 	} {
 		if err := h.run(o); err == nil {
 			t.Errorf("%s: Run succeeded, want an error", name)
@@ -597,5 +598,78 @@ func TestSeed_RefusesWhatItCannotSeed(t *testing.T) {
 	var n int
 	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM identity.workspaces`).Scan(&n); err != nil || n != 0 {
 		t.Errorf("%d workspaces after refused runs (%v), want 0", n, err)
+	}
+}
+
+func TestSeed_RefusesAnAddressThatIsInAnotherWorkspace(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun(inline(alice))
+
+	err := h.run(Options{MemberEmails: []string{alice}}) // the workspace without a domain
+	if !errors.Is(err, errs.ErrInvalid) || !strings.Contains(err.Error(), alice) {
+		t.Fatalf("Run = %v, want errs.ErrInvalid naming %s: an address is in one workspace", err, alice)
+	}
+	if n := h.workspaces(); n != 1 {
+		t.Errorf("%d workspaces, want only the first: the refused run made none", n)
+	}
+}
+
+// workspaces counts every workspace through the system pool.
+func (h *harness) workspaces() (n int) {
+	h.t.Helper()
+	conn, err := pgx.Connect(h.t.Context(), h.env.SystemURL)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(h.t.Context()) }()
+	if err := conn.QueryRow(h.t.Context(), `SELECT count(*) FROM identity.workspaces`).Scan(&n); err != nil {
+		h.t.Fatal(err)
+	}
+	return n
+}
+
+// A team whose Google accounts carry no hd is seeded without a domain: the one
+// workspace without one, its members the invitations the sign-in rule reads, the
+// first of them owning the channels. A single member works.
+func TestSeed_WithoutADomain_SeedsTheWorkspaceWithoutOne(t *testing.T) {
+	const first, second = "owner@gmail.example", "Second@Gmail.example"
+	h := newHarness(t)
+
+	h.mustRun(Options{MemberEmails: []string{first, second}, IndexInline: true})
+
+	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), h.db, "", []string{first, second})
+	if err != nil {
+		t.Fatalf("EnsureSeedWorkspace: %v", err)
+	}
+	if n := h.workspaces(); n != 1 {
+		t.Fatalf("%d workspaces, want the one without a domain", n)
+	}
+	if n := h.count(ws, `SELECT count(*) FROM identity.workspaces WHERE google_domain IS NULL`); n != 1 {
+		t.Errorf("%d workspaces without a domain, want 1", n)
+	}
+	if n := h.count(ws, `SELECT count(*) FROM identity.users WHERE google_sub = 'seed:' || email AND email IN ('owner@gmail.example', 'second@gmail.example')`); n != 2 {
+		t.Errorf("%d placeholder users with the lowercased addresses, want 2", n)
+	}
+	if hr, ok := h.channels(ws, ids[0])["hr-private"]; !ok || hr.GetKind() != chatv1.ChannelKind_CHANNEL_KIND_PRIVATE {
+		t.Errorf("the owner sees %v, want the private hr-private", h.channels(ws, ids[0]))
+	}
+	if _, ok := h.channels(ws, ids[1])["hr-private"]; ok {
+		t.Error("the second member sees hr-private")
+	}
+	first1 := h.counts(ws)
+
+	h.mustRun(Options{MemberEmails: []string{first, second}, IndexInline: true})
+	if again := h.counts(ws); !mapsEqual(first1, again) {
+		t.Errorf("row counts changed on the second run:\n first  %v\n second %v", first1, again)
+	}
+
+	solo := newHarness(t)
+	solo.mustRun(Options{MemberEmails: []string{first}, IndexInline: true})
+	soloWS, soloIDs, err := identity.EnsureSeedWorkspace(t.Context(), solo.db, "", []string{first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := solo.count(soloWS, `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id <> $1`, soloIDs[0]); n != 0 {
+		t.Errorf("%d messages by another author, want every message by the one member", n)
 	}
 }

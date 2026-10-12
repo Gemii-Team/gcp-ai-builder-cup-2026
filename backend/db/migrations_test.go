@@ -725,6 +725,49 @@ func TestCrossSchemaForeignKeysOnlyReferenceIdentity(t *testing.T) {
 	}
 }
 
+// TestMigration_WorkspaceWithoutDomain_AllowedAndDomainsUniqueCaseInsensitively pins
+// 0011: a workspace may have no Google domain (the sign-in rule for accounts without
+// hd lives in such a workspace), any number of them may coexist at the database level,
+// and two workspaces never share a domain whatever its letter case.
+func TestMigration_WorkspaceWithoutDomain_AllowedAndDomainsUniqueCaseInsensitively(t *testing.T) {
+	env := dbtest.Start(t)
+	conn := connect(t, env.OwnerURL)
+	const insert = `INSERT INTO identity.workspaces (id, name, google_domain) VALUES ($1, $2, $3)`
+
+	if nullable := scalar[string](t, conn, `
+		SELECT is_nullable FROM information_schema.columns
+		WHERE table_schema = 'identity' AND table_name = 'workspaces' AND column_name = 'google_domain'`); nullable != "YES" {
+		t.Errorf("identity.workspaces.google_domain is_nullable = %s, want YES", nullable)
+	}
+
+	for _, name := range []string{"no domain one", "no domain two"} {
+		ws := uuid.New()
+		seedIn(t, env, ws, func(tx pgx.Tx) {
+			if _, err := tx.Exec(t.Context(), insert, ws, name, nil); err != nil {
+				t.Fatalf("workspace %q without a domain: %v", name, err)
+			}
+		})
+	}
+
+	first := uuid.New()
+	seedIn(t, env, first, func(tx pgx.Tx) {
+		if _, err := tx.Exec(t.Context(), insert, first, "demo", "demo.example"); err != nil {
+			t.Fatalf("demo.example: %v", err)
+		}
+	})
+	for _, domain := range []string{"demo.example", "Demo.Example", "DEMO.EXAMPLE"} {
+		ws := uuid.New()
+		pgErr := execErrIn(t, env.OwnerURL, &ws, insert, ws, "again", domain)
+		if pgErr == nil || pgErr.Code != "23505" || pgErr.ConstraintName != "workspaces_google_domain_lower_key" {
+			t.Errorf("a second workspace for %q: %v, want unique_violation on workspaces_google_domain_lower_key", domain, pgErr)
+		}
+	}
+	other := uuid.New()
+	if pgErr := execErrIn(t, env.OwnerURL, &other, insert, other, "other", "other.example"); pgErr != nil {
+		t.Errorf("a workspace for another domain: %v", pgErr)
+	}
+}
+
 func TestMigrateUp_IsIdempotent(t *testing.T) {
 	env := dbtest.StartEmpty(t)
 	conn := connect(t, env.OwnerURL)

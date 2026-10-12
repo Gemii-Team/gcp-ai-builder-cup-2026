@@ -20,23 +20,46 @@ import (
 
 func init() { register("seed", runSeed) }
 
-// The defaults are what the mock sign-in signs in: its provider mints hd = demo.example
-// and sub = "seed:" + email for alice and bob, so their first sign-in adopts the seeded
-// placeholder users, and carol@elsewhere.example (its outsider) is not seeded.
+// The defaults are what the mock sign-in signs in: its provider mints sub = "seed:" +
+// email for alice and bob, so their first sign-in adopts the seeded placeholder users.
+// Alice's token carries hd = demo.example and bob's carries none (he signs in because he
+// is seeded); carol@elsewhere.example (its outsider) has no hd and is not seeded, so she
+// is turned away.
 const (
 	defaultDomain  = "demo.example"
 	defaultMembers = "alice@demo.example,bob@demo.example"
 )
 
-// runSeed seeds the demo workspace, which is what `task seed -- <flags>` runs inside the
-// pod. It reads the environment of `kiwi serve`, indexes the corpus before it returns
-// (seed.Options.IndexInline), and can be run again: a second run changes nothing.
+// seedDomain is the domain to seed, given the flags that were set. Neither flag: the
+// mock's demo.example. --domain X: X, with the default members unless --members is set.
+// --members alone, or --domain "" with --members: the empty domain, the one workspace
+// without a domain, which is for Google accounts that carry no hd and whose members sign
+// in because they were invited. --domain "" alone is refused: the default members are
+// the mock's users, who must not be invited into that workspace.
+func seedDomain(domain string, given map[string]bool) (string, error) {
+	switch {
+	case !given["domain"] && given["members"]:
+		return "", nil
+	case !given["domain"]:
+		return defaultDomain, nil
+	case strings.TrimSpace(domain) == "" && !given["members"]:
+		return "", errors.New(`--domain "" seeds the workspace without a domain and needs --members: the people to invite`)
+	}
+	return domain, nil
+}
+
+// runSeed seeds a workspace with the demo corpus, which is what `task seed -- <flags>` runs
+// inside the pod. It reads the environment of `kiwi serve`, indexes the corpus before it
+// returns (seed.Options.IndexInline), and can be run again: a second run changes nothing.
+//
+// What is seeded follows the flags (seedDomain): none, the mock sign-in's workspace;
+// --domain, that Google domain; --members alone, the one workspace without a domain.
 func runSeed(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
 	var usage bytes.Buffer
 	fs.SetOutput(&usage)
-	domain := fs.String("domain", defaultDomain, "the workspace's Google domain (the hd of the people who sign in)")
-	members := fs.String("members", defaultMembers, "comma-separated member emails; the first owns the channels and is the only member of #hr-private")
+	domain := fs.String("domain", defaultDomain, "the workspace's Google domain (the hd of the people who sign in); with only --members, or an empty value, the one workspace without a domain instead, for Google accounts that carry no hd")
+	members := fs.String("members", defaultMembers, "comma-separated member emails; the first owns the channels and is the only member of #hr-private. Without a domain they are the people invited to sign in")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, werr := io.WriteString(os.Stdout, usage.String())
@@ -46,6 +69,12 @@ func runSeed(ctx context.Context, args []string) error {
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("takes no arguments, got %q", fs.Args())
+	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	workspaceDomain, err := seedDomain(*domain, given)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := config.Load(nil, os.Getenv)
@@ -76,6 +105,6 @@ func runSeed(ctx context.Context, args []string) error {
 
 	emails := strings.Split(*members, ",")
 	return seed.Run(ctx, seed.Deps{DB: d, Cache: c, Blob: store, LLM: model}, seed.Options{
-		Domain: *domain, MemberEmails: emails, IndexInline: true,
+		Domain: workspaceDomain, MemberEmails: emails, IndexInline: true,
 	})
 }
