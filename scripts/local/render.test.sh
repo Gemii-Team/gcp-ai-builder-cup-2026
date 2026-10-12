@@ -571,6 +571,10 @@ check "k3d registry listens on loopback only" grep -qE '^ +host: 127\.0\.0\.1$' 
 # the docker nat parser, which reads [HOST_IP:]HOST_PORT:CONTAINER_PORT.
 check "k3d app port is published on loopback only (127.0.0.1:8080:80)" grep -qE '^ +- port: 127\.0\.0\.1:8080:80$' deploy/local/k3d.yaml
 check "k3d publishes no port without a loopback address" bash -c "! grep -E '^ +- port: ' deploy/local/k3d.yaml | grep -vE '^ +- port: 127\\.0\\.0\\.1:'"
+# The Kubernetes API port of the load balancer is published on a host address too: k3d's default is
+# every interface. kubeAPI.hostIP moves it to loopback (kubectl reaches it through 127.0.0.1).
+k3d_api_on_loopback() { awk '/^kubeAPI:$/ { b = 1; next } /^[^ #]/ { b = 0 } b && /^  hostIP: "?127\.0\.0\.1"?$/ { ok = 1 } END { exit !ok }' deploy/local/k3d.yaml; }
+check "k3d Kubernetes API port is published on loopback only (kubeAPI.hostIP 127.0.0.1)" k3d_api_on_loopback
 
 # --- the Tiltfile --------------------------------------------------------------
 # These read the Tiltfile as text, in the layout it keeps: every k8s_resource( and
@@ -1060,9 +1064,15 @@ case "$1" in
     [ "${STUB_INFO_BULK:-0}" = 1 ] && { head -c 400000 /dev/zero | tr '\0' x; echo; }
     ;;
   inspect)
-    # The load balancer's bindings of its port 80, one HOST_IP|HOST_PORT per line; "!" = no such container.
-    [ "${STUB_LB_BINDINGS:-}" != '!' ] || exit 1
-    printf '%b' "${STUB_LB_BINDINGS:-}"
+    # The load balancer's bindings of one port, one HOST_IP|HOST_PORT per line: 6443 (the Kubernetes
+    # API) from STUB_API_BINDINGS, anything else (80) from STUB_LB_BINDINGS; "!" = no such container.
+    case "$*" in
+      *'"6443/tcp"'*) printf '%b' "${STUB_API_BINDINGS:-}" ;;
+      *)
+        [ "${STUB_LB_BINDINGS:-}" != '!' ] || exit 1
+        printf '%b' "${STUB_LB_BINDINGS:-}"
+        ;;
+    esac
     ;;
 esac
 exit 0
@@ -1074,9 +1084,9 @@ EOF
 chmod +x "$K3D_STUB/k3d" "$K3D_STUB/docker" "$K3D_STUB/kubectl"
 
 # k3d_up mode rootless controllers: sets RC, OUT and K3D_LOG_FILE. The cluster does not exist
-# unless LB_BINDINGS is set: then it does, and its load balancer reports those bindings of
-# port 80 (HOST_IP|HOST_PORT lines; an empty HOST_IP is every interface; "!" = not inspectable).
-# INFO_BULK=1 makes `docker info` long.
+# unless LB_BINDINGS (or API_BINDINGS) is set: then it does, and its load balancer reports those
+# bindings of port 80 (the app) and 6443 (the Kubernetes API) (HOST_IP|HOST_PORT lines; an empty
+# HOST_IP is every interface; "!" = not inspectable). INFO_BULK=1 makes `docker info` long.
 k3d_up() {
   local mode=$1 rootless=$2 controllers=$3 stubs=()
   CASE=$((CASE + 1))
@@ -1085,7 +1095,9 @@ k3d_up() {
   printf '%s\n' "$controllers" >"$d/controllers"
   K3D_LOG_FILE="$d/log"
   : >"$K3D_LOG_FILE"
-  [ "${LB_BINDINGS+set}" != set ] || stubs=(STUB_CLUSTER_EXISTS=1 "STUB_LB_BINDINGS=$LB_BINDINGS")
+  if [ "${LB_BINDINGS+set}" = set ] || [ "${API_BINDINGS+set}" = set ]; then
+    stubs=(STUB_CLUSTER_EXISTS=1 "STUB_LB_BINDINGS=${LB_BINDINGS-}" "STUB_API_BINDINGS=${API_BINDINGS-}")
+  fi
   [ "${INFO_BULK:-0}" != 1 ] || stubs+=(STUB_INFO_BULK=1)
   env -i PATH="$K3D_STUB:$PATH" HOME="$WORK" K3D_LOG="$K3D_LOG_FILE" STUB_ROOTLESS="$rootless" ${stubs[@]+"${stubs[@]}"} \
     KIWI_K3D_USER_CONTROLLERS="$d/controllers" ${mode:+KIWI_K3D_CPUSET_HOOK="$mode"} \
@@ -1162,6 +1174,30 @@ LB_BINDINGS='!' k3d_up 0 0 ""
 verdict=ok
 [ "$RC" -eq 0 ] && started && ! contains "$OUT" "WARNING" || verdict=bad
 expect "k3d-up: a load balancer that cannot be inspected is no reason to fail or to warn" "$verdict" "rc=$RC" "$OUT"
+
+# The Kubernetes API port: an old cluster has it on 0.0.0.0, the new config binds loopback.
+api_warned() { contains "$OUT" "WARNING" && contains "$OUT" "Kubernetes API" && contains "$OUT" "task local:down" && contains "$OUT" "task local:up"; }
+
+API_BINDINGS='0.0.0.0|37587\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && api_warned && contains "$OUT" "0.0.0.0:37587" || verdict=bad
+contains "$OUT" "spend the model quota" && verdict=bad
+expect "k3d-up: an old cluster whose Kubernetes API is on 0.0.0.0 is warned about, without the app-port warning" "$verdict" "rc=$RC" "$OUT"
+
+API_BINDINGS='127.0.0.1|37587\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && ! contains "$OUT" "WARNING" || verdict=bad
+expect "k3d-up: a Kubernetes API published on loopback is started without a warning" "$verdict" "rc=$RC" "$OUT"
+
+LB_BINDINGS='|8080\n' API_BINDINGS='|37587\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && warned && api_warned && contains "$OUT" "all interfaces:37587" || verdict=bad
+expect "k3d-up: both public ports of an old cluster are each warned about" "$verdict" "rc=$RC" "$OUT"
+
+LB_BINDINGS='127.0.0.1|8080\n' API_BINDINGS='0.0.0.0|37587\n' k3d_up 0 0 ""
+verdict=ok
+[ "$RC" -eq 0 ] && started && api_warned && ! contains "$OUT" "spend the model quota" || verdict=bad
+expect "k3d-up: a loopback app port does not hide a public Kubernetes API" "$verdict" "rc=$RC" "$OUT"
 
 k3d_up 0 0 ""
 verdict=ok

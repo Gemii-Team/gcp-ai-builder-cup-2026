@@ -29,23 +29,39 @@ rootless_without_cpuset() {
   [ -r "$file" ] && ! grep -qw cpuset "$file"
 }
 
-# warn_if_app_port_is_public: the app port (80 of the load balancer, 8080 on the host) is
-# published on loopback by deploy/local/k3d.yaml, but a cluster keeps the binding it was
-# created with. An empty host IP is every interface. Read-only and advisory: a load
-# balancer that cannot be inspected is not an error.
-warn_if_app_port_is_public() {
-  local bindings ip port public=()
-  bindings="$(docker inspect --format '{{range (index .HostConfig.PortBindings "80/tcp")}}{{.HostIp}}|{{.HostPort}}{{"\n"}}{{end}}' "k3d-$CLUSTER-serverlb" 2>/dev/null)" || return 0
+# public_bindings PORT: the host addresses ("ip:port"; an empty host IP is every interface, said
+# so) on which the load balancer of an existing cluster publishes its container port PORT/tcp,
+# leaving out the loopback ones. Read-only and advisory: a load balancer that cannot be
+# inspected prints nothing.
+public_bindings() {
+  local template bindings ip port
+  template='{{range (index .HostConfig.PortBindings "PORT/tcp")}}{{.HostIp}}|{{.HostPort}}{{"\n"}}{{end}}'
+  bindings="$(docker inspect --format "${template/PORT/$1}" "k3d-$CLUSTER-serverlb" 2>/dev/null)" || return 0
   while IFS='|' read -r ip port; do
     [ -n "$port" ] || continue
     case "$ip" in
       127.0.0.1 | ::1) ;;
-      *) public+=("${ip:-all interfaces}:$port") ;;
+      *) echo "${ip:-all interfaces}:$port" ;;
     esac
   done <<<"$bindings"
-  [ "${#public[@]}" -gt 0 ] || return 0
-  echo "k3d-up: WARNING: the existing cluster publishes the app on ${public[*]}, so any host that can reach this machine can sign in and spend the model quota." >&2
-  echo "k3d-up: WARNING: deploy/local/k3d.yaml now binds 127.0.0.1 only; the old binding stays until the cluster is recreated: task local:down, then task local:up (this deletes the cluster and its data)." >&2
+}
+
+# warn_if_ports_are_public: deploy/local/k3d.yaml publishes the app (80 of the load balancer,
+# 8080 on the host) and the Kubernetes API (6443) on loopback, but a cluster keeps the
+# bindings it was created with.
+warn_if_ports_are_public() {
+  local app api recreate="the old bindings stay until the cluster is recreated: task local:down, then task local:up (this deletes the cluster and its data)"
+  app="$(public_bindings 80 | paste -sd' ' -)"
+  api="$(public_bindings 6443 | paste -sd' ' -)"
+  if [ -n "$app" ]; then
+    echo "k3d-up: WARNING: the existing cluster publishes the app on $app, so any host that can reach this machine can sign in and spend the model quota." >&2
+  fi
+  if [ -n "$api" ]; then
+    echo "k3d-up: WARNING: the existing cluster publishes the Kubernetes API on $api, so any host that can reach this machine can reach it." >&2
+  fi
+  if [ -n "$app$api" ]; then
+    echo "k3d-up: WARNING: deploy/local/k3d.yaml now binds 127.0.0.1 only; $recreate." >&2
+  fi
 }
 
 case "$mode" in
@@ -57,7 +73,7 @@ case "$mode" in
 esac
 
 if k3d cluster get "$CLUSTER" >/dev/null 2>&1; then
-  warn_if_app_port_is_public
+  warn_if_ports_are_public
   k3d cluster start "$CLUSTER"
 else
   hook=off
