@@ -791,8 +791,8 @@ expect "load-env-secret mockauth: succeeds with no OAuth variable in .env at all
 load_secret mockauth KIWI_OAUTH_CLIENT_ID=client-id-from-env
 verdict=ok
 [ "$RC" -eq 0 ] || verdict=bad
-grep -qx 'KIWI_OAUTH_CLIENT_ID=client-id-from-env' "$COPY" || verdict=bad
-expect "load-env-secret mockauth: a client id set in .env is kept (the mock takes whichever it is presented)" "$verdict" "rc=$RC" "$OUT"
+grep -qx 'KIWI_OAUTH_CLIENT_ID=mock' "$COPY" || verdict=bad
+expect "load-env-secret mockauth: a client id set in .env is replaced by the dummy (the mock takes whichever it is presented)" "$verdict" "rc=$RC" "$OUT"
 
 load_secret local KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET
 verdict=ok
@@ -805,10 +805,59 @@ expect "load-env-secret local: absent OAuth variables are named and nothing is a
 load_secret smoke KIWI_LLM_BASE_URL= KIWI_LLM_API_KEY= KIWI_LLM_MODEL_FLASH= KIWI_LLM_MODEL_PRO= KIWI_ASR_MODEL= KIWI_OAUTH_CLIENT_ID= KIWI_OAUTH_CLIENT_SECRET=
 verdict=ok
 [ "$RC" -eq 0 ] || verdict=bad
-for v in KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_LLM_MODEL_FLASH KIWI_LLM_MODEL_PRO KIWI_ASR_MODEL KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
+for v in KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_ASR_MODEL KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
   grep -qx "$v=mock" "$COPY" || verdict=bad
 done
+# The adapter sends json_object with no schema name for a request whose model is the pro
+# one, so the two dummy model ids must differ or the replay cannot tell the calls apart.
+grep -qx 'KIWI_LLM_MODEL_FLASH=mock-flash' "$COPY" || verdict=bad
+grep -qx 'KIWI_LLM_MODEL_PRO=mock-pro' "$COPY" || verdict=bad
 expect "load-env-secret smoke: LLM, ASR and OAuth variables default to mock" "$verdict" "rc=$RC" "$OUT"
+
+# Secret hygiene: the .env of a developer holds the real Google client and the real LLM
+# key, and an overlay that does not reach those services must not carry them into the
+# cluster, whatever .env says. The values below are made up; write_env gives the LLM
+# variables their own fixture values ($SECRET_LLM_URL, $PROBE_LLM, flash-model, ...).
+REAL_OAUTH_ID='oauth-id-fixture-0123'
+REAL_OAUTH_SECRET='oauth-secret-fixture-0123'
+
+load_secret smoke "KIWI_OAUTH_CLIENT_ID=$REAL_OAUTH_ID" "KIWI_OAUTH_CLIENT_SECRET=$REAL_OAUTH_SECRET"
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+for v in KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_ASR_MODEL KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
+  grep -qx "$v=mock" "$COPY" || { verdict=bad; printf 'smoke Secret: %s is not the dummy\n' "$v"; }
+done
+grep -qx 'KIWI_LLM_MODEL_FLASH=mock-flash' "$COPY" || { verdict=bad; printf 'smoke Secret: the flash model is not its dummy\n'; }
+grep -qx 'KIWI_LLM_MODEL_PRO=mock-pro' "$COPY" || { verdict=bad; printf 'smoke Secret: the pro model is not its dummy\n'; }
+for real in "$SECRET_LLM_URL" "$PROBE_LLM" flash-model pro-model asr-model "$REAL_OAUTH_ID" "$REAL_OAUTH_SECRET"; do
+  grep -qF -- "$real" "$COPY" && { verdict=bad; printf 'smoke Secret holds a real-looking value of .env\n'; }
+done
+grep -qx "KIWI_DB_PASSWORD=$SECRET_DB_PW" "$COPY" || verdict=bad
+expect "load-env-secret smoke: forces the dummies for the LLM, ASR and OAuth variables whatever .env says" "$verdict" "rc=$RC" "$OUT"
+
+load_secret mockauth "KIWI_OAUTH_CLIENT_ID=$REAL_OAUTH_ID" "KIWI_OAUTH_CLIENT_SECRET=$REAL_OAUTH_SECRET"
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+grep -qx 'KIWI_OAUTH_CLIENT_ID=mock' "$COPY" || verdict=bad
+grep -qx 'KIWI_OAUTH_CLIENT_SECRET=mock' "$COPY" || verdict=bad
+for real in "$REAL_OAUTH_ID" "$REAL_OAUTH_SECRET"; do
+  grep -qF -- "$real" "$COPY" && verdict=bad
+done
+grep -qx "KIWI_LLM_BASE_URL=$SECRET_LLM_URL" "$COPY" || verdict=bad
+grep -qx "KIWI_LLM_API_KEY=$PROBE_LLM" "$COPY" || verdict=bad
+grep -qx 'KIWI_LLM_MODEL_FLASH=flash-model' "$COPY" || verdict=bad
+grep -qx 'KIWI_LLM_MODEL_PRO=pro-model' "$COPY" || verdict=bad
+grep -qx 'KIWI_ASR_MODEL=asr-model' "$COPY" || verdict=bad
+expect "load-env-secret mockauth: forces the dummy OAuth pair but keeps the real LLM values (the live smoke uses them)" "$verdict" "rc=$RC" "$OUT"
+
+load_secret local "KIWI_OAUTH_CLIENT_ID=$REAL_OAUTH_ID" "KIWI_OAUTH_CLIENT_SECRET=$REAL_OAUTH_SECRET"
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+grep -qx "KIWI_OAUTH_CLIENT_ID=$REAL_OAUTH_ID" "$COPY" || verdict=bad
+grep -qx "KIWI_OAUTH_CLIENT_SECRET=$REAL_OAUTH_SECRET" "$COPY" || verdict=bad
+grep -qx "KIWI_LLM_API_KEY=$PROBE_LLM" "$COPY" || verdict=bad
+grep -qx "KIWI_LLM_BASE_URL=$SECRET_LLM_URL" "$COPY" || verdict=bad
+expect "load-env-secret local: keeps every real value (the Google client and the LLM)" "$verdict" "rc=$RC" "$OUT"
 
 load_secret smoke KIWI_DB_PASSWORD=
 verdict=ok

@@ -50,5 +50,20 @@
         }
       ]
     }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "misquoted"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "Staff get 20 days of annual leave [1].",
+              "citations": [{"chunk_id": "{{chunk:15 days of annual leave}}", "quote": "20 days of annual leave"}]
+            }
+          }
+        }
+      ]
+    }
   }
 ]

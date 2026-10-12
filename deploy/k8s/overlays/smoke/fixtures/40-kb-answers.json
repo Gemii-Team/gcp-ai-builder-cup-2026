@@ -1,0 +1,58 @@
+[
+  {
+    "match": {"schema": "kb_answer", "contains": "<question>\nHow full is the Bang Na warehouse right now?\n</question>"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "Bang Na is 85% full: 8,160 of its 9,600 pallet positions are occupied [1], and the team said the same in #q4-launch [2].",
+              "citations": [
+                {"chunk_id": "{{chunk:8,160 of them are occupied}}", "quote": "8,160 of them are occupied, which is 85% utilisation"},
+                {"chunk_id": "{{chunk:Bang Na is at 85% of its pallet positions today}}", "quote": "Bang Na is at 85% of its pallet positions today"}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "<question>\nคลังสินค้าบางนาใช้พื้นที่ไปแล้วกี่เปอร์เซ็นต์\n</question>"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "คลังสินค้าบางนาใช้งานอยู่ร้อยละ 85 ของพื้นที่วางพาเลท [1]",
+              "citations": [
+                {"chunk_id": "{{chunk:ขณะนี้ใช้งานอยู่ร้อยละ 85}}", "quote": "ขณะนี้ใช้งานอยู่ร้อยละ 85"}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": ["<question>\nWhat is the merit increase pool for 2027?\n</question>", "the merit increase pool for 2027 is 4.2% of payroll"]},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "answer_markdown": "The 2027 merit increase pool is 4.2% of payroll, to be announced after the board meeting on 20 November [1].",
+              "citations": [
+                {"chunk_id": "{{chunk:the merit increase pool for 2027 is 4.2% of payroll}}", "quote": "the merit increase pool for 2027 is 4.2% of payroll"}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "kb_answer", "contains": "<question>\nWhat is the merit increase pool for 2027?\n</question>"},
+    "response": {"choices": [{"message": {"content": {"answer_markdown": "", "citations": []}}}]}
+  }
+]

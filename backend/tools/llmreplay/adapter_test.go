@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -242,5 +244,48 @@ func TestAdapter_ADKToolRoundTripThroughTheReplay(t *testing.T) {
 	}
 	if log := logs.String(); !strings.Contains(log, `"fixture":"40-agent.json[0]"`) || !strings.Contains(log, `"fixture":"40-agent.json[1]"`) || strings.Contains(log, "placeholder-not-a-secret") {
 		t.Errorf("log = %s, want a line per matched request naming its fixture and no credential", log)
+	}
+}
+
+// A model call the replay cannot answer must stop the agent run with an error, never
+// hang it and never come back as an empty answer the run could post as a slip. openai-go
+// retries a status of 500 and over twice, so the replay sees an agent's miss up to three
+// times and logs a warning for each: the test counts none of them.
+func TestAdapter_AnAgentMissSurfacesAsAnError(t *testing.T) {
+	srv, logs := startReplay(t, fixtures)
+	m, err := adapterClient(t, srv.URL).ADKModel(llm.TierFlash)
+	if err != nil {
+		t.Fatalf("ADKModel: %v", err)
+	}
+	first, _ := adkTurns("a question no agent fixture answers")
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			var failure error
+			for resp, err := range m.GenerateContent(ctx, first, stream) {
+				if err != nil {
+					failure = err
+					break
+				}
+				if resp != nil && resp.Content != nil {
+					for _, p := range resp.Content.Parts {
+						if p.Text != "" || p.FunctionCall != nil {
+							t.Fatalf("an unmatched request produced %+v, want an error and nothing else", p)
+						}
+					}
+				}
+			}
+			if ctx.Err() != nil {
+				t.Fatal("the model call hung until the deadline")
+			}
+			if failure == nil || !strings.Contains(failure.Error(), "599") || !strings.Contains(failure.Error(), "stage=agent_tool") {
+				t.Fatalf("error = %v, want one that carries the 599 and names the stage", failure)
+			}
+		})
+	}
+	if !strings.Contains(logs.String(), `"msg":"unmatched request"`) {
+		t.Errorf("log = %s, want the unmatched request warned about", logs.String())
 	}
 }

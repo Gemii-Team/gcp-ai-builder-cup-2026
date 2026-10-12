@@ -41,6 +41,10 @@ func TestLoadFixtures_RefusesWhatItCannotServe(t *testing.T) {
 		{"an audio fixture with no text", `{"audio_sha256": "` + sha1 + `"}`, nil, "text"},
 		{"an audio fixture with a match", `{"audio_sha256": "` + sha1 + `", "text": "x", "match": {}}`, nil, "match"},
 		{"the same audio twice", `{"audio_sha256": "` + sha1 + `", "text": "x"}`, map[string]string{"00-first.json": `{"audio_sha256": "` + strings.ToUpper(sha1) + `", "text": "y"}`}, "00-first.json"},
+		{"a negative delay", `{"delay_ms": -1, "response": {"choices": [{"message": {"content": "ok"}}]}}`, nil, "delay_ms"},
+		{"a delay of over a minute", `{"delay_ms": 60001, "response": {"choices": [{"message": {"content": "ok"}}]}}`, nil, "delay_ms"},
+		{"a delay that is not a whole number of milliseconds", `{"delay_ms": 1.5, "response": {"choices": [{"message": {"content": "ok"}}]}}`, nil, "delay_ms"},
+		{"a negative delay of a transcription", `{"audio_sha256": "` + sha1 + `", "text": "x", "delay_ms": -5}`, nil, "delay_ms"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,6 +73,66 @@ func TestLoadFixtures_RefusesWhatItCannotServe(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "no-such-dir")
 		if _, err := loadFixtures(dir); err == nil || !strings.Contains(err.Error(), "no-such-dir") {
 			t.Errorf("error = %v, want the directory named", err)
+		}
+	})
+}
+
+// kbFixture is a kb_answer fixture whose content is content, a JSON object.
+func kbFixture(content string) string {
+	return `{"match": {"schema": "kb_answer"}, "response": {"choices": [{"message": {"content": ` + content + `}}]}}`
+}
+
+// A kb_answer is shown to people as an answer with its sources, and the product
+// quietly repairs a bad one (it drops a marker, renumbers the rest, swaps an absent
+// quote for the chunk's own words), so a typo in a fixture would change what the
+// screen says without any failure. The loader refuses what it can see in the file.
+func TestLoadFixtures_RefusesADishonestKBAnswer(t *testing.T) {
+	cite := func(chunk, quote string) string {
+		return `{"chunk_id": "{{chunk:` + chunk + `}}", "quote": "` + quote + `"}`
+	}
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"a marker beyond the citations", `{"answer_markdown": "Fifteen days [1] and five more [2].", "citations": [` + cite("15 days", "15 days") + `]}`, "[2]"},
+		{"a marker of zero", `{"answer_markdown": "Fifteen days [0].", "citations": [` + cite("15 days", "15 days") + `]}`, "[0]"},
+		{"a marker when there are no citations", `{"answer_markdown": "Fifteen days [1].", "citations": []}`, "[1]"},
+		{"a citation nothing marks", `{"answer_markdown": "Fifteen days [1].", "citations": [` + cite("15 days", "15 days") + `, ` + cite("five days", "five days") + `]}`, "citation 2"},
+		{"citations and no marker at all", `{"answer_markdown": "Fifteen days.", "citations": [` + cite("15 days", "15 days") + `]}`, "citation 1"},
+		{"citations but no answer text", `{"answer_markdown": "", "citations": [` + cite("15 days", "15 days") + `]}`, "answer_markdown"},
+		{"an answer that is not an object", `"just text"`, "kb_answer"},
+		{"a citation list that is missing", `{"answer_markdown": "Fifteen days [1]."}`, "citations"},
+		{"a citation with no quote", `{"answer_markdown": "Fifteen days [1].", "citations": [{"chunk_id": "{{chunk:15 days}}"}]}`, "quote"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadFixtures(writeFixtures(t, map[string]string{"50-bad.json": kbFixture(tc.content)}))
+			if err == nil {
+				t.Fatal("loadFixtures accepted the fixture")
+			}
+			if !strings.Contains(err.Error(), "50-bad.json") || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to name 50-bad.json and %q", err, tc.want)
+			}
+		})
+	}
+
+	honest := map[string]string{
+		"a not-found answer":              `{"answer_markdown": "", "citations": []}`,
+		"markers in any order, one twice": `{"answer_markdown": "Five [2] and fifteen [1], fifteen again [1].", "citations": [` + cite("15 days", "15 days") + `, ` + cite("five days", "five days") + `]}`,
+	}
+	for name, content := range honest {
+		t.Run("accepts "+name, func(t *testing.T) {
+			if _, err := loadFixtures(writeFixtures(t, map[string]string{"50-ok.json": kbFixture(content)})); err != nil {
+				t.Errorf("loadFixtures refused an honest answer: %v", err)
+			}
+		})
+	}
+
+	t.Run("only a kb_answer is held to it", func(t *testing.T) {
+		other := `{"match": {"schema": "file_summary"}, "response": {"choices": [{"message": {"content": {"summary": "See [3]", "key_points": []}}}]}}`
+		if _, err := loadFixtures(writeFixtures(t, map[string]string{"50-other.json": other})); err != nil {
+			t.Errorf("a file_summary with a bracketed number was refused: %v", err)
 		}
 	})
 }

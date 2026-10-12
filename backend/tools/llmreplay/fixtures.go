@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // What an agent request is, as far as a fixture can tell: a turn that may call a
@@ -60,13 +61,15 @@ func (l *stringList) UnmarshalJSON(b []byte) error {
 type chatFixture struct {
 	name     string // file name, with [n] when the file is a list
 	match    matchSpec
+	delay    time.Duration   // how long the answer is held back
 	response json.RawMessage // a chat.completion body; decoded afresh for every request
 }
 
 // audioFixture is the transcript of one audio file.
 type audioFixture struct {
-	name string
-	text string
+	name  string
+	text  string
+	delay time.Duration
 }
 
 // fixtureSet is everything a fixture directory holds. It is read-only once loaded.
@@ -75,12 +78,30 @@ type fixtureSet struct {
 	audio map[string]audioFixture // by the lower-case hex SHA-256 of the audio
 }
 
+// maxDelay is the longest a fixture can hold its answer back: far above what a screen
+// needs to show a pending state, far below the timeouts of the product's model calls.
+const maxDelay = time.Minute
+
 // entry is one fixture as the file writes it.
 type entry struct {
 	Match       *matchSpec      `json:"match"`
 	Response    json.RawMessage `json:"response"`
 	AudioSHA256 *string         `json:"audio_sha256"`
 	Text        *string         `json:"text"`
+	DelayMs     *int            `json:"delay_ms"`
+}
+
+// delay is how long the fixture holds its answer back, and an error when that is not a
+// time between none and maxDelay.
+func (e entry) delay() (time.Duration, error) {
+	if e.DelayMs == nil {
+		return 0, nil
+	}
+	d := time.Duration(*e.DelayMs) * time.Millisecond
+	if *e.DelayMs < 0 || d > maxDelay {
+		return 0, fmt.Errorf("delay_ms %d is not between 0 and %d", *e.DelayMs, maxDelay.Milliseconds())
+	}
+	return d, nil
 }
 
 var (
@@ -202,7 +223,16 @@ func (fs *fixtureSet) addChat(name string, e entry) error {
 	if err := checkResponse(e.Response); err != nil {
 		return fmt.Errorf("response: %w", err)
 	}
-	fs.chat = append(fs.chat, chatFixture{name: name, match: m, response: e.Response})
+	if m.Schema == kbAnswerSchema {
+		if err := checkKBAnswerResponse(e.Response); err != nil {
+			return err
+		}
+	}
+	delay, err := e.delay()
+	if err != nil {
+		return err
+	}
+	fs.chat = append(fs.chat, chatFixture{name: name, match: m, delay: delay, response: e.Response})
 	return nil
 }
 
@@ -220,7 +250,11 @@ func (fs *fixtureSet) addAudio(name string, e entry) error {
 	if prev, ok := fs.audio[key]; ok {
 		return fmt.Errorf("audio_sha256 %s is already the key of %s", key, prev.name)
 	}
-	fs.audio[key] = audioFixture{name: name, text: *e.Text}
+	delay, err := e.delay()
+	if err != nil {
+		return err
+	}
+	fs.audio[key] = audioFixture{name: name, text: *e.Text, delay: delay}
 	return nil
 }
 

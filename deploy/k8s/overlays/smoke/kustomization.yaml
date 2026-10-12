@@ -25,7 +25,11 @@ patches:
 configMapGenerator:
   - name: llmreplay-fixtures
     files:
-      - fixtures/00-example.json
+      - fixtures/10-file-summary.json
+      - fixtures/20-recordings.json
+      - fixtures/30-meeting-summary.json
+      - fixtures/40-kb-answers.json
+      - fixtures/50-agent.json
 
 # Where the image built by Tilt lives: the k3d registry (deploy/local/k3d.yaml), the
 # same mapping as ../mockauth/images.yaml. Tilt replaces the tag with the one it

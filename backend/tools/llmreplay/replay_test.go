@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -462,6 +463,20 @@ func TestReplay_KBAnswerCitesTheChunksTheRequestCarries(t *testing.T) {
 		e := asMap(t, got.body)["error"].(map[string]any)
 		if e["schema"] != "kb_answer" || !strings.Contains(e["looked_for"].(string), "text that no retrieved chunk holds") || !strings.Contains(e["looked_for"].(string), "30-kb-answer.json[3]") {
 			t.Errorf("error = %v, want the schema, the fixture and the passage it looked for", e)
+		}
+	})
+
+	t.Run("a quote the cited chunk does not hold is an unmatched request naming it", func(t *testing.T) {
+		// The product shows the chunk's own words when a quote is absent from it, so
+		// a misquoting fixture would pass unnoticed: the replay refuses to serve it.
+		_, got := ask(t, kbRequest("a misquoted question", [2]string{chunkA, "Every employee gets 15 days of annual leave a year."}))
+		if got.status != 599 {
+			t.Fatalf("status %d, want 599: the quote is not in the chunk it cites: %s", got.status, got.body)
+		}
+		e := asMap(t, got.body)["error"].(map[string]any)
+		looked, _ := e["looked_for"].(string)
+		if e["schema"] != "kb_answer" || !strings.Contains(looked, "20 days of annual leave") || !strings.Contains(looked, "30-kb-answer.json[4]") || !strings.Contains(e["message"].(string), "quote") {
+			t.Errorf("error = %v, want the schema, the fixture, its message naming the quote and the quote in looked_for", e)
 		}
 	})
 }
@@ -947,6 +962,66 @@ func TestEmbeddings_ShapeTheAdapterReads(t *testing.T) {
 	t.Run("no input is a 400, and nothing is a 599", func(t *testing.T) {
 		if got := postJSON(t, srv, embedPath, map[string]any{"model": "m", "input": []string{}}); got.status != http.StatusBadRequest {
 			t.Errorf("status %d for an empty batch, want 400", got.status)
+		}
+	})
+}
+
+// A model takes seconds, and the screens of K.I.W.I. show that wait (a pending slip); a
+// replay that answers in microseconds would let a pending state come and go between two
+// frames of a browser. A fixture can hold its answer back for delay_ms.
+func TestReplay_DelayMsHoldsTheAnswerBack(t *testing.T) {
+	const delay = 300 * time.Millisecond
+	speech := pcm16WAV(16000, 5)
+	dir := writeFixtures(t, map[string]string{
+		"10-slow.json": `[
+			{"match": {"schema": "file_summary", "contains": "slow"}, "delay_ms": 300, "response": {"choices": [{"message": {"content": "slow answer"}}]}},
+			{"match": {"schema": "file_summary"}, "response": {"choices": [{"message": {"content": "quick answer"}}]}}
+		]`,
+		"20-asr.json": fmt.Sprintf(`{"audio_sha256": %q, "text": "slow speech", "delay_ms": 300}`, sha(speech)),
+	})
+	srv, _ := startReplay(t, dir)
+
+	timed := func(f func() result) (result, time.Duration) {
+		start := time.Now()
+		got := f()
+		return got, time.Since(start)
+	}
+	chat := func(text string, o opts) func() result {
+		return func() result { return postJSON(t, srv, chatPath, chatRequest(o, user(text))) }
+	}
+
+	t.Run("a chat answer", func(t *testing.T) {
+		got, took := timed(chat("a slow file", opts{schema: "file_summary"}))
+		if got.status != 200 || content(t, got.body) != "slow answer" || took < delay {
+			t.Errorf("status %d, content %q after %v, want the slow answer after at least %v", got.status, got.body, took, delay)
+		}
+	})
+
+	t.Run("a streamed answer is held back before its first frame", func(t *testing.T) {
+		got, took := timed(chat("a slow file", opts{schema: "file_summary", stream: true}))
+		if got.status != 200 || took < delay || !strings.Contains(string(got.body), "slow answer"[:4]) {
+			t.Errorf("status %d after %v: %s", got.status, took, got.body)
+		}
+	})
+
+	t.Run("a transcription", func(t *testing.T) {
+		got, took := timed(func() result { return upload(t, srv, speech) })
+		if got.status != 200 || asMap(t, got.body)["text"] != "slow speech" || took < delay {
+			t.Errorf("status %d, body %s after %v, want the transcript after at least %v", got.status, got.body, took, delay)
+		}
+	})
+
+	t.Run("a fixture with no delay answers at once", func(t *testing.T) {
+		got, took := timed(chat("a file", opts{schema: "file_summary"}))
+		if got.status != 200 || content(t, got.body) != "quick answer" || took >= delay {
+			t.Errorf("status %d, content %q after %v, want the quick answer in under %v", got.status, got.body, took, delay)
+		}
+	})
+
+	t.Run("an unmatched request is never held back", func(t *testing.T) {
+		got, took := timed(chat("anything", opts{schema: "meeting_summary"}))
+		if got.status != 599 || took >= delay {
+			t.Errorf("status %d after %v, want an immediate 599", got.status, took)
 		}
 	})
 }

@@ -56,6 +56,9 @@
 // schema and are told apart by stage: "agent_tool" is a request that declares tools
 // and has no tool message yet (the model is to call a tool), "agent_final" is one with
 // a tool message in it (the model is to answer). A request with neither has no stage.
+// The schema name is response_format.json_schema.name; the pro tier sends
+// response_format json_object with no name, so such a request has the schema "none" and
+// a fixture for it must key on "contains".
 //
 // "response" is the body of a chat completion, as recorded from a real model or cut
 // down to what the product reads: choices[0].message.content (or tool_calls) and,
@@ -95,6 +98,13 @@
 // the fixture and the text it looked for in "looked_for"), so a retrieval that changed
 // is a loud failure and never a citation of the wrong chunk.
 //
+// The product repairs a bad answer silently (it drops a marker that names no citation,
+// and shows the chunk's own first words for a quote the chunk does not hold), so the
+// replay refuses a kb_answer that would need it: a file whose [n] marker is outside
+// 1..len(citations), whose citation no marker names, or whose citations have no answer
+// text, does not load; and a request whose chunk (the one a {{chunk:…}} resolves to)
+// does not contain a citation's quote as it is written is an unmatched one (HTTP 599).
+//
 // A transcription fixture answers /v1/audio/transcriptions, keyed by the lower- or
 // upper-case SHA-256 of the file bytes of the upload (the adapter sends 20 second
 // windows re-wrapped in a canonical 44-byte header, which is the same bytes as the
@@ -104,6 +114,14 @@
 //	{"audio_sha256": "<64 hex digits>", "text": "Good morning everyone."}
 //
 // The unmatched 599 for audio names the first 8 hex digits of the hash.
+//
+// A model takes seconds, and the screens show that wait (a pending slip); an answer in
+// microseconds would let a pending state come and go between two frames of a browser.
+// Either kind of fixture may therefore hold its answer back, with "delay_ms" (0 to
+// 60000, default 0), counted from the moment the fixture is found; a request that is
+// unmatched is never held back:
+//
+//	{"audio_sha256": "<64 hex digits>", "text": "Good morning everyone.", "delay_ms": 1500}
 package main
 
 import (

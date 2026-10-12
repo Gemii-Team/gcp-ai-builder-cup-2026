@@ -4,7 +4,9 @@
 # Builds the Secret kiwi-env in namespace kiwi from .env and applies it to the
 # local k3d cluster. It prints no value: the Secret is built from a private
 # temporary env file, never put on a command line, and kubectl's output is not
-# shown. Every missing required variable is named in one error.
+# shown. Every missing required variable is named in one error. Overlays that do not
+# reach the real LLM or the real Google client get dummies for them (see below), so
+# the real values of .env never leave it for those overlays.
 set -euo pipefail
 
 # Only .env may supply a value. A KIWI_* exported in the calling shell would
@@ -53,20 +55,31 @@ done <"$ENV_FILE"
 
 # Overlays that never reach a real service need no real value. smoke replays the
 # LLM too; mockauth signs in through the mock provider, which takes whatever
-# client id and secret it is presented, so the Google client of overlay local is
-# not needed (a value in .env is still used). The `: "${NAME:=mock}"` form keeps
+# client id and secret it is presented. The developer's .env holds the real Google
+# client and the real LLM key, so for these overlays the values of the services they
+# do not reach are not read from it at all: smoke gets the dummies for the LLM, ASR
+# and OAuth variables, mockauth the dummies for the OAuth pair (its LLM values stay
+# real: the live smoke run uses them), local keeps every real value. printf -v keeps
 # the placeholder from looking like an assignment of a secret.
-if [ "$overlay" = smoke ]; then
-  : "${KIWI_LLM_BASE_URL:=mock}"
-  : "${KIWI_LLM_API_KEY:=mock}"
-  : "${KIWI_LLM_MODEL_FLASH:=mock}"
-  : "${KIWI_LLM_MODEL_PRO:=mock}"
-  : "${KIWI_ASR_MODEL:=mock}"
-fi
-if [ "$overlay" = smoke ] || [ "$overlay" = mockauth ]; then
-  : "${KIWI_OAUTH_CLIENT_ID:=mock}"
-  : "${KIWI_OAUTH_CLIENT_SECRET:=mock}"
-fi
+# The two model ids must differ: the adapter treats a request whose model equals
+# KIWI_LLM_MODEL_PRO as a pro-tier one and sends json_object with no schema name
+# (so the replay could not tell a file summary from an answer); with both set to
+# `mock` every call would take that path.
+dummy=mock
+case "$overlay" in
+  smoke)
+    for name in KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_ASR_MODEL KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
+      printf -v "$name" '%s' "$dummy"
+    done
+    printf -v KIWI_LLM_MODEL_FLASH '%s' "$dummy-flash"
+    printf -v KIWI_LLM_MODEL_PRO '%s' "$dummy-pro"
+    ;;
+  mockauth)
+    for name in KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
+      printf -v "$name" '%s' "$dummy"
+    done
+    ;;
+esac
 
 required=(
   KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_LLM_MODEL_FLASH KIWI_LLM_MODEL_PRO KIWI_ASR_MODEL

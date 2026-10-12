@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -184,11 +186,21 @@ func (rp *replay) chat(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("%s answers this request, but its response cites %s, which the request does not carry", fixture.name, miss.what))
 		return
 	}
+	var badQuote *quoteError
+	if errors.As(err, &badQuote) {
+		rp.chatMiss(w, r, in,
+			"a fixture matches "+in.summary()+" but its quote is not in the chunk it cites",
+			fmt.Sprintf("%s answers this request, but the quote %q of its citation %d is not in the chunk it cites", fixture.name, head(badQuote.quote), badQuote.n))
+		return
+	}
 	if err != nil {
 		rp.fail(w, http.StatusInternalServerError, "render "+fixture.name+": "+err.Error())
 		return
 	}
-	rp.log.Info("replayed", "path", r.URL.Path, "fixture", fixture.name, "schema", cmp.Or(in.schema, "none"), "stage", in.stage, "stream", in.stream)
+	if !hold(r.Context(), fixture.delay) {
+		return
+	}
+	rp.log.Info("replayed", "path", r.URL.Path, "fixture", fixture.name, "schema", cmp.Or(in.schema, "none"), "stage", in.stage, "stream", in.stream, "delay_ms", fixture.delay.Milliseconds())
 	if !in.stream {
 		writeJSON(w, http.StatusOK, body)
 		return
@@ -252,15 +264,21 @@ func (r *resolver) expand(s string) (string, error) {
 	return out, first
 }
 
+// parse reads the <chunk id="…"> blocks of the request, once.
+func (r *resolver) parse() {
+	if r.parsed {
+		return
+	}
+	for _, m := range chunkBlock.FindAllStringSubmatch(r.text, -1) {
+		r.chunks = append(r.chunks, requestChunk{id: m[1], text: m[2]})
+	}
+	r.parsed = true
+}
+
 func (r *resolver) lookup(kind, arg string) (string, error) {
 	switch kind {
 	case "chunk":
-		if !r.parsed {
-			for _, m := range chunkBlock.FindAllStringSubmatch(r.text, -1) {
-				r.chunks = append(r.chunks, requestChunk{id: m[1], text: m[2]})
-			}
-			r.parsed = true
-		}
+		r.parse()
 		for _, c := range r.chunks {
 			if strings.Contains(c.text, arg) {
 				return c.id, nil
@@ -298,6 +316,12 @@ func (f *chatFixture) render(in request) (map[string]any, error) {
 	}
 	// checkResponse saw an object with one choice that has a message.
 	body := tree.(map[string]any)
+	if f.match.Schema == kbAnswerSchema {
+		msg := body["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
+		if err := r.checkQuotes(msg["content"]); err != nil {
+			return nil, err
+		}
+	}
 	setDefault(body, "id", "chatcmpl-replay")
 	setDefault(body, "object", "chat.completion")
 	setDefault(body, "model", in.model)
@@ -491,11 +515,30 @@ func (rp *replay) transcribe(w http.ResponseWriter, r *http.Request) {
 		}})
 		return
 	}
-	rp.log.Info("replayed", "path", r.URL.Path, "fixture", fixture.name)
+	if !hold(r.Context(), fixture.delay) {
+		return
+	}
+	rp.log.Info("replayed", "path", r.URL.Path, "fixture", fixture.name, "delay_ms", fixture.delay.Milliseconds())
 	writeJSON(w, http.StatusOK, map[string]string{"text": fixture.text})
 }
 
 // --- shared ---
+
+// hold waits for d, as a model that takes its time does, or until the client has gone
+// away; it reports whether to go on and answer.
+func hold(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
 // decode reads the JSON body of r into v, or answers the client with the problem.
 func (rp *replay) decode(w http.ResponseWriter, r *http.Request, v any) bool {

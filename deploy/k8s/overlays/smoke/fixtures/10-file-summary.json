@@ -1,0 +1,43 @@
+[
+  {
+    "match": {"schema": "file_summary", "contains": "<file_name>\nbang-na-warehouse-capacity.txt\n</file_name>"},
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "summary": "The note reviews capacity at the Bang Na warehouse for the 3 November Q4 launch: 8,160 of 9,600 pallet positions (85%) are in use, and a 20% rise in launch-week orders would fill Zone A by 28 October. It recommends moving slow-moving Zone B stock to a partner cross-dock now and renting the Samut Prakan overflow space only if pre-orders pass 18,000 on 23 October.",
+              "key_points": [
+                "9,600 pallet positions, 85% occupied",
+                "Zone A is full by 28 October if orders grow 20%",
+                "The cross-dock frees 500 positions for 85,000 THB a month",
+                "Rent the overflow space only if pre-orders pass 18,000"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "match": {"schema": "file_summary", "contains": "<file_name>\nwarehouse.txt\n</file_name>"},
+    "delay_ms": 1500,
+    "response": {
+      "choices": [
+        {
+          "message": {
+            "content": {
+              "summary": "The cross-dock trial moved 480 pallet positions of slow-moving Zone B stock to the partner warehouse in Lat Krabang during the week of 13 October, at 85,000 THB for the week. Zone B is now 68% full and Zone A is still 92% full.",
+              "key_points": [
+                "480 positions moved to Lat Krabang",
+                "Handling cost 85,000 THB for the week",
+                "Zone B is 68% full, Zone A 92% full",
+                "Confirm the partner's second dock slot by Friday"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+]
