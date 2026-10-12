@@ -26,11 +26,16 @@ export default defineConfig({
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
-    {
-      name: 'phone',
-      dependencies: ['desktop'],
-      grep: /@phone/,
-      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
-    },
+    // The live run is the three real-model flows on the desktop viewport; the phone project runs flows 1 and 3 on the recorded stack.
+    ...(live
+      ? []
+      : [
+          {
+            name: 'phone',
+            dependencies: ['desktop'],
+            grep: /@phone/,
+            use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+          },
+        ]),
   ],
 });

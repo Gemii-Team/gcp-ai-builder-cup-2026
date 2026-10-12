@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { account, fixtureFile, ghostsSeen, isPhone, signIn, signedIn, watchGhosts } from '../helpers';
+import { account, ask, attachFile, ghostsSeen, isPhone, signIn, signedIn, watchGhosts } from '../helpers';
 
 // The five flows the demo shows, in order, on the seeded workspace: each builds on the data the one before it left.
 test.describe.configure({ mode: 'serial' });
@@ -77,12 +77,7 @@ test('flow 2: a recording becomes a meeting summary', async ({ browser }) => {
   await expect(drafts).toContainText('3 to confirm');
 
   // The paperclip takes the recording: a calm wait, then the summary slip with its REF and tracks.
-  const attach = async (name: string) => {
-    const chooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: 'Attach file' }).click();
-    await (await chooser).setFiles(fixtureFile(name));
-  };
-  await attach('sample.wav');
+  await attachFile(page, 'sample.wav');
   await expect(log.getByText('Summarizing the recording…')).toBeVisible();
   const slip = log.locator('article').filter({ has: page.getByRole('heading', { level: 2, name: 'sample' }) });
   await expect(slip).toContainText(/REF MTG-\d{4}/);
@@ -94,7 +89,7 @@ test('flow 2: a recording becomes a meeting summary', async ({ browser }) => {
   await expect(drafts).toContainText('5 to confirm');
 
   // A recording whose transcript comes back empty fails with its reason and Retry, and issues no REF.
-  await attach('empty.wav');
+  await attachFile(page, 'empty.wav');
   const failed = log.locator('article').filter({ hasText: "Couldn't summarize empty" });
   await expect(failed).toContainText('no speech was found in the recording');
   await expect(failed.getByRole('button', { name: 'Retry' })).toBeVisible();
@@ -106,14 +101,35 @@ test('flow 2: a recording becomes a meeting summary', async ({ browser }) => {
 test('flow 3: AI drafts become tasks on the Board', { tag: '@phone' }, async ({ browser }, testInfo) => {
   const { context, page } = await signedIn(browser, 'alice');
   const phone = isPhone(page);
-  // Flow 2 left two more drafts than the seed has; the desktop run confirms two of the five, the phone run two of the rest.
-  const { ownerless, owned } =
+  // Flow 2 left two more drafts than the seed has, in the lane of the meeting it summarized (`sample`); the desktop run
+  // confirms two of the seed's, the phone run two of flow 2's.
+  const { ownerless, owned, lane } =
     testInfo.project.name === 'phone'
-      ? { ownerless: 'Book the weekend crew for the trial', owned: 'Send the pallet count to ops' }
-      : { ownerless: 'Draft the delivery promise for the landing page', owned: 'Update the launch checklist with the capacity numbers' };
+      ? { ownerless: 'Book the weekend crew for the trial', owned: 'Send the pallet count to ops', lane: 'sample' }
+      : { ownerless: 'Draft the delivery promise for the landing page', owned: 'Update the launch checklist with the capacity numbers', lane: 'Q4 launch sync' };
   await page.goto('/board');
 
-  const band = page.getByRole('complementary', { name: 'AI drafts' });
+  // Below 1024px the drafts are a bottom sheet behind a bar and a lane shows one status at a time; wide, the drafts are a
+  // band across the top of the Board and the three statuses sit side by side.
+  const dialog = page.getByRole('dialog', { name: 'AI drafts' });
+  const band = (phone ? dialog : page).getByRole('complementary', { name: 'AI drafts' });
+  const openDrafts = async () => {
+    if (phone && !(await dialog.isVisible())) {
+      await page.getByRole('button', { name: /drafts to confirm/ }).click();
+    }
+  };
+  const closeDrafts = async () => {
+    if (phone) {
+      await dialog.getByRole('button', { name: 'Close' }).click();
+      await expect(dialog).toBeHidden();
+    }
+  };
+  const showStatus = async (name: 'To do' | 'Doing') => {
+    if (phone) {
+      await page.getByRole('group', { name: 'Status' }).getByRole('button', { name: new RegExp(`^${name}`) }).click();
+    }
+  };
+  await openDrafts();
   const list = band.getByRole('list', { name: 'Drafts to confirm' });
   const draft = (title: string) => list.getByRole('listitem').filter({ has: page.getByRole('heading', { name: title }) });
   await expect(draft(ownerless)).toBeVisible();
@@ -130,31 +146,210 @@ test('flow 3: AI drafts become tasks on the Board', { tag: '@phone' }, async ({ 
   // Confirm tears the stub away and seals the slip; what is left is announced; the card lands in To do of its source.
   await watchGhosts(page);
   await confirm.click();
-  const todo = page.getByRole('group', { name: 'To do in Q4 launch sync' });
-  const card = todo.getByRole('listitem').filter({ hasText: ownerless });
-  await expect(card.locator('.torn')).toHaveCount(1);
-  await expect(card.locator('.kiwi-perf')).toHaveCount(0);
   const left = waiting - 1;
   await expect(band.getByRole('status')).toHaveText(`Confirmed: ${ownerless}. ${left} ${left === 1 ? 'draft' : 'drafts'} left.`);
   expect(await ghostsSeen(page)).toBeGreaterThan(0);
+  if (phone) {
+    const sealed = dialog.locator('.torn').filter({ hasText: ownerless });
+    await expect(sealed).toHaveCount(1);
+    await expect(sealed.locator('.kiwi-perf')).toHaveCount(0);
+    await closeDrafts();
+  }
+  const todo = page.getByRole('group', { name: `To do in ${lane}` });
+  const card = todo.getByRole('listitem').filter({ hasText: ownerless });
+  await expect(card.locator('.torn')).toHaveCount(1);
+  await expect(card.locator('.kiwi-perf')).toHaveCount(0);
 
   // The Move menu works from the keyboard; the moved card is a plain slip.
   await card.getByRole('button', { name: /^Move TSK-\d+: / }).focus();
   await page.keyboard.press('Enter');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  const doing = page.getByRole('group', { name: 'Doing in Q4 launch sync' });
-  await expect(doing.getByRole('listitem').filter({ hasText: ownerless })).toBeVisible();
-  await expect(doing.getByRole('listitem').filter({ hasText: ownerless }).locator('.torn')).toHaveCount(0);
   await expect(todo.getByRole('listitem').filter({ hasText: ownerless })).toHaveCount(0);
+  await showStatus('Doing');
+  const moved = page.getByRole('group', { name: `Doing in ${lane}` }).getByRole('listitem').filter({ hasText: ownerless });
+  await expect(moved).toBeVisible();
+  await expect(moved.locator('.torn')).toHaveCount(0);
 
   // With reduced motion nothing is torn away: no ghost ever appears.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await watchGhosts(page);
+  await openDrafts();
   await draft(owned).getByRole('button', { name: `Confirm: ${owned}` }).click();
-  await expect(page.getByRole('group', { name: 'To do in Q4 launch sync' }).getByRole('listitem').filter({ hasText: owned })).toBeVisible();
-  await expect(todo.getByRole('listitem').filter({ hasText: owned })).toBeVisible();
+  await expect(band.getByRole('status')).toContainText(`Confirmed: ${owned}`);
   expect(await ghostsSeen(page)).toBe(0);
-  void phone;
+  await closeDrafts();
+  await showStatus('To do');
+  await expect(page.getByRole('group', { name: `To do in ${lane}` }).getByRole('listitem').filter({ hasText: owned })).toBeVisible();
+  await context.close();
+});
+
+const QUESTION_EN = 'How full is the Bang Na warehouse right now?';
+const QUESTION_TH = 'คลังสินค้าบางนาใช้พื้นที่ไปแล้วกี่เปอร์เซ็นต์';
+const QUESTION_HR = 'What is the merit increase pool for 2027?';
+
+test('flow 4: cited answers in English and Thai, and the not-found answer', async ({ browser }) => {
+  const alice = await signedIn(browser, 'alice');
+  await alice.page.goto('/ask');
+  const thread = alice.page.getByRole('log', { name: 'Questions and answers' });
+  const sources = alice.page.getByRole('complementary', { name: 'Sources' });
+
+  // An English question: a slip with its REF; pressing [1] marks its source row and its slip in the Sources panel.
+  await ask(alice.page, QUESTION_EN);
+  const answer = thread.locator('.kiwi-slip').filter({ hasText: /REF ANS-\d{4}/ });
+  await expect(answer).toHaveCount(1);
+  await expect(answer).toContainText('85%');
+  const marker = answer.getByRole('button', { name: /^Source 1: / });
+  await expect(marker).toHaveAttribute('aria-pressed', 'false');
+  await marker.click();
+  await expect(marker).toHaveAttribute('aria-pressed', 'true');
+  await expect(answer.locator('.kiwi-src[data-hit]')).toHaveCount(1);
+  await expect(sources.locator('.ak-sp[data-hit]')).toHaveCount(1);
+
+  // A Thai question: the answer text is marked as Thai.
+  await ask(alice.page, QUESTION_TH);
+  const thai = thread.locator('.kiwi-slip').filter({ hasText: 'ร้อยละ 85' });
+  await expect(thai).toHaveCount(1);
+  await expect(thai).toContainText(/REF ANS-\d{4}/);
+  await expect(thai.locator('.kiwi-prose [lang="th"]').first()).toContainText('ร้อยละ 85');
+
+  // The same question about #hr-private: alice (a member) gets the answer; bob (not a member) a not-found slip.
+  await ask(alice.page, QUESTION_HR);
+  await expect(thread.locator('.kiwi-slip').filter({ hasText: /merit increase pool/ })).toContainText('4.2%');
+  await alice.context.close();
+
+  const bob = await signedIn(browser, 'bob');
+  await bob.page.goto('/ask');
+  await ask(bob.page, QUESTION_HR);
+  const bobThread = bob.page.getByRole('log', { name: 'Questions and answers' });
+  const notFound = bobThread.locator('.kiwi-slip').filter({ hasText: 'Not found in channels you can access' });
+  await expect(notFound).toHaveCount(1);
+  await expect(notFound).toContainText(/REF ANS-\d{4}/);
+  await expect(notFound).not.toContainText('4.2%');
+  // A completed answer, not a failure: its perforation is kept and it has no failed styling.
+  await expect(notFound.locator('.kiwi-perf')).toHaveCount(1);
+  await expect(bobThread.locator('[data-tone="failed"]')).toHaveCount(0);
+  // Its proof of scope: the channels searched, and never the private one.
+  const searched = notFound.getByRole('list', { name: 'Channels searched' });
+  await expect(searched).toContainText('general');
+  await expect(searched).toContainText('q4-launch');
+  await expect(searched).not.toContainText('hr-private');
+  await bob.context.close();
+});
+
+test('flow 5: a file becomes a summary, an unsupported one is refused, a scan fails', async ({ browser }) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.getByRole('link', { name: 'q4-launch' }).click();
+  const log = page.getByRole('log', { name: 'Messages in #q4-launch' });
+  await expect(log).toContainText('Q4 launch plan');
+
+  // A text file: a calm wait, then its summary slip with a REF.
+  await attachFile(page, 'warehouse.txt');
+  await expect(log.getByText('Summarizing file…')).toBeVisible();
+  const summary = log.locator('article').filter({ hasText: 'cross-dock trial moved' });
+  await expect(summary).toContainText(/REF DOC-\d{4}/);
+  await expect(log.getByText('Summarizing file…')).toHaveCount(0);
+
+  // A Word document is refused where it is attached, inline, and nothing is left pending. (CreateUpload refuses a type with
+  // a message of its own, not the `upload rejected (<reason>)` shape of CompleteUpload, so the notice gives no reason.)
+  await attachFile(page, 'notes.docx');
+  await expect(page.getByRole('alert').filter({ hasText: "Couldn't upload notes.docx" })).toHaveCount(1);
+  await expect(log.getByText('notes.docx')).toHaveCount(0);
+  await expect(log.getByText('Summarizing file…')).toHaveCount(0);
+
+  // A scan with no text layer fails with its reason and Retry, and issues no REF.
+  await attachFile(page, 'scan.pdf');
+  const failed = log.locator('article').filter({ hasText: "Couldn't summarize scan.pdf" });
+  await expect(failed).toContainText('no text could be read from it');
+  await expect(failed.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(failed).not.toContainText('REF ');
+  await context.close();
+});
+
+test('flow 3 (continued): a task from a message and a task by hand', { tag: '@phone' }, async ({ browser }, testInfo) => {
+  const { context, page } = await signedIn(browser, 'alice');
+  const phone = isPhone(page);
+  await page.getByRole('link', { name: 'general' }).or(page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Chat' })).first().click();
+  const log = page.getByRole('log', { name: 'Messages in #general' });
+  await expect(log).toContainText('Welcome to the K.I.W.I. demo workspace');
+
+  // Make a task sits on a person's message (hover-revealed wide, always there on a phone), never on the assistant's.
+  const source = log.locator('article').filter({ hasText: 'Reminder: the Q4 launch review' });
+  const make = source.getByRole('button', { name: /^Make a task from Bob's message/ });
+  await make.click();
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await expect(title).toHaveValue(/Q4 launch review/);
+  // At 390px the button is icon-only (32px wide; its words are clipped to a pixel, for assistive technology).
+  if (phone) {
+    expect((await make.boundingBox())?.width ?? Infinity).toBeLessThanOrEqual(34);
+  }
+  const unique = `Prepare the Q4 launch review ${testInfo.project.name}`;
+  await title.fill(unique);
+  await page.getByRole('button', { name: 'Create task' }).click();
+
+  // The created card: a plain slip with its REF and a way to the Board, no seal and no perforation, and no owner said neutrally.
+  const created = page.getByRole('group', { name: /^Task TSK-\d{4}$/ }).filter({ hasText: unique });
+  await expect(created).toContainText(unique);
+  await expect(created).toContainText(/REF TSK-\d{4}/);
+  await expect(created).toContainText('No owner');
+  await expect(created.getByRole('link', { name: 'View on Board' })).toBeVisible();
+  await expect(created.locator('.kiwi-seal, .kiwi-perf')).toHaveCount(0);
+
+  // On the Board it sits in To do of the lane of that channel's messages, with its source.
+  await page.goto('/board');
+  const lane = page.getByRole('region', { name: 'Messages in #general' });
+  await expect(lane).toBeVisible();
+  const todo = page.getByRole('group', { name: 'To do in Messages in #general' });
+  await expect(todo.getByRole('listitem').filter({ hasText: unique })).toContainText('From #general');
+  await expect(todo.getByRole('listitem').filter({ hasText: unique })).toContainText('No owner');
+
+  // A task by hand lands in To do of the Added by hand lane.
+  await page.getByRole('button', { name: 'New task' }).click();
+  const byHand = `Order the pallet labels ${testInfo.project.name}`;
+  await page.getByRole('textbox', { name: 'Title' }).fill(byHand);
+  await page.getByRole('button', { name: 'Create task' }).click();
+  const hand = page.getByRole('group', { name: 'To do in Added by hand' });
+  await expect(hand.getByRole('listitem').filter({ hasText: byHand })).toContainText(/REF TSK-\d{4}/);
+  await expect(hand.getByRole('listitem').filter({ hasText: byHand })).toContainText('No owner');
+  await context.close();
+});
+
+// The live run (KIWI_LIVE_E2E=1, overlay mockauth: the real LiteLLM and Ollama) checks structure only: a slip with its REF
+// appears, Thai text is marked as Thai. No assertion names a word the model wrote. Only one recording is transcribed.
+const LIVE_WAIT = 200_000;
+
+test('flow 2 live: a recording becomes a meeting summary', { tag: '@live' }, async ({ browser }) => {
+  test.setTimeout(240_000);
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.getByRole('link', { name: 'q4-launch' }).click();
+  const log = page.getByRole('log', { name: 'Messages in #q4-launch' });
+  await attachFile(page, 'sample.wav');
+  const slip = log.locator('article').filter({ has: page.getByRole('heading', { level: 2, name: 'sample' }) });
+  await expect(slip).toContainText(/REF MTG-\d{4}/, { timeout: LIVE_WAIT });
+  await context.close();
+});
+
+test('flow 4 live: questions get slips with a REF, a Thai one in Thai', { tag: '@live' }, async ({ browser }) => {
+  test.setTimeout(240_000);
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.goto('/ask');
+  const thread = page.getByRole('log', { name: 'Questions and answers' });
+  const slips = thread.locator('.kiwi-slip').filter({ hasText: /REF ANS-\d{4}/ });
+  await ask(page, QUESTION_EN);
+  await expect(slips).toHaveCount(1, { timeout: LIVE_WAIT });
+  await ask(page, QUESTION_TH);
+  await expect(slips).toHaveCount(2, { timeout: LIVE_WAIT });
+  await expect(slips.first().locator('.kiwi-prose [lang="th"]').first()).toBeVisible();
+  await context.close();
+});
+
+test('flow 5 live: a file becomes a summary with a REF', { tag: '@live' }, async ({ browser }) => {
+  test.setTimeout(240_000);
+  const { context, page } = await signedIn(browser, 'alice');
+  await page.getByRole('link', { name: 'q4-launch' }).click();
+  const log = page.getByRole('log', { name: 'Messages in #q4-launch' });
+  await attachFile(page, 'warehouse.txt');
+  const summary = log.locator('article').filter({ hasText: 'warehouse.txt' }).filter({ hasText: /REF DOC-\d{4}/ });
+  await expect(summary).toHaveCount(1, { timeout: LIVE_WAIT });
   await context.close();
 });

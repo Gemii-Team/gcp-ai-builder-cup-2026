@@ -60,3 +60,16 @@ export async function watchGhosts(page: Page): Promise<void> {
 
 /** How many ghosts `watchGhosts` has seen. */
 export const ghostsSeen = (page: Page): Promise<number> => page.evaluate(() => (window as unknown as Ghosts).__ghosts);
+
+/** Attaches a file through the paperclip, the way a person does (the picker is the page's file chooser). */
+export async function attachFile(page: Page, name: string): Promise<void> {
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Attach file' }).click();
+  await (await chooser).setFiles(fixtureFile(name));
+}
+
+/** Types a question into Ask and sends it. */
+export async function ask(page: Page, question: string): Promise<void> {
+  await page.getByRole('textbox', { name: 'Ask a question, in English or Thai' }).fill(question);
+  await page.getByRole('button', { name: 'Ask', exact: true }).click();
+}
