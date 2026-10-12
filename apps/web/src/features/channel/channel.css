@@ -1,0 +1,445 @@
+/*
+ * The channel screen: the header, the bottom-anchored stream with its message rows, and the composer with its mention
+ * list. Ported from .impeccable/prototype/channel.html; every colour, radius and size is a theme token, so nothing is
+ * hard-coded. Unlayered plain CSS like the shell's and the components' stylesheets.
+ */
+
+.chan {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* ===== Stream ===== */
+.stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px var(--pad) 4px;
+}
+
+.stream:focus-visible {
+  outline-offset: -3px;
+}
+
+.stream-in {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 100%;
+  margin: 0 auto;
+}
+
+.day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-carbon-copy);
+}
+
+.day::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-ledger-rule);
+}
+
+.earlier {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.notice-close {
+  margin-left: auto;
+  color: var(--color-returned-ink);
+}
+
+.notice-page {
+  padding: 16px var(--pad);
+}
+
+/* ===== A message ===== */
+.msg-h {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 24px;
+  padding-right: 17px;
+}
+
+.msg-h .txt {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg-h .who {
+  font-weight: 600;
+}
+
+.msg-h .txt .who,
+.msg-h .kind {
+  margin-right: 8px;
+}
+
+.msg-h .kind {
+  color: var(--color-carbon-copy);
+}
+
+.msg-chip {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.msg-time {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+  font-weight: var(--text-numeral--font-weight);
+  line-height: 24px;
+  color: var(--color-carbon-copy);
+  white-space: nowrap;
+}
+
+.msg-b {
+  margin: 4px 0 0 32px;
+}
+
+.at {
+  font-weight: 600;
+  color: var(--color-citation-teal);
+}
+
+.mini {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -3px;
+}
+
+/* A message the server has not stored yet: still being sent, waiting for the connection, or refused. */
+.delivery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.delivery[data-failed] {
+  color: var(--color-returned-ink);
+}
+
+.delivery[data-failed] svg {
+  color: var(--color-returned-red);
+}
+
+/* ===== Composer ===== */
+.composer {
+  position: relative;
+  flex: none;
+  padding: 0 var(--pad) 8px;
+}
+
+.composer .notice {
+  margin-bottom: 8px;
+}
+
+.cp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  max-width: 100%;
+  padding: 0 6px 0 16px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-slip-paper);
+  transition: border-color .15s;
+}
+
+.cp:hover {
+  border-color: var(--color-control-line-hover);
+}
+
+.cp:focus-within {
+  outline: 2px solid var(--color-focus-teal);
+  outline-offset: 2px;
+}
+
+.cp input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: none;
+  text-overflow: ellipsis;
+}
+
+.cp input::placeholder {
+  color: var(--color-carbon-copy);
+  opacity: 1;
+}
+
+.mention {
+  position: absolute;
+  left: var(--pad);
+  bottom: calc(100% + 4px);
+  z-index: 5;
+  min-width: min(300px, calc(100% - 2 * var(--pad)));
+  padding: 4px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-slip-paper);
+}
+
+.mention [role="option"] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.mention [role="option"]:hover,
+.mention [aria-selected="true"] {
+  background: var(--color-citation-wash);
+}
+
+.mention small {
+  margin-left: auto;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+/* ===== Phones and narrow (1023px and below): one stream, a 56px header, 44px controls ===== */
+@media (max-width: 1023px) {
+  .chan {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .stream {
+    padding: 8px var(--pad);
+  }
+
+  .stream-in {
+    width: 100%;
+    max-width: 720px;
+    gap: 12px;
+  }
+
+  .msg-b {
+    margin-left: 0;
+  }
+
+  .msg-h .kind {
+    font-size: 14px;
+  }
+
+  .msg-h .txt .who {
+    margin-right: 6px;
+  }
+
+  .delivery {
+    font-size: 15px;
+  }
+
+  .composer {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 12px 8px;
+  }
+
+  .cp {
+    padding: 0 4px 0 12px;
+  }
+
+  .mention {
+    left: 12px;
+    right: 12px;
+  }
+
+  .cp button[type="submit"] {
+    width: 44px;
+    padding: 0;
+  }
+
+  .send-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .stream-in {
+    gap: 8px;
+  }
+
+  /* A message that carries a file puts the file chip on its own second row. */
+  .msg-h[data-has-chip] {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    column-gap: 8px;
+  }
+
+  .msg-h[data-has-chip] .msg-chip {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: 2px;
+  }
+
+  .composer {
+    padding-bottom: 6px;
+  }
+}
+
+/* ===== Make a task: a small secondary button at the row's top right, left of the time ===== */
+.mact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-slip-paper);
+  color: var(--color-ledger-ink);
+  font-size: var(--text-label);
+  font-weight: var(--text-button--font-weight);
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s, opacity .15s;
+}
+
+.mact:hover {
+  background: var(--color-counter-hover);
+  border-color: var(--color-control-line-hover);
+}
+
+.mact:active,
+.mact[aria-expanded="true"] {
+  background: var(--color-citation-wash);
+  border-color: var(--color-control-line-hover);
+}
+
+.head-notice {
+  flex: none;
+  padding: 8px var(--pad) 0;
+}
+
+/* From 1024px the action floats at the row's right and the text keeps clear of it. */
+@media (min-width: 1024px) {
+  .msg-h[data-action] {
+    position: relative;
+  }
+
+  .msg-h[data-action] .mact {
+    position: absolute;
+    top: -4px;
+    right: 64px;
+  }
+
+  .msg-h[data-action] .txt {
+    padding-right: 148px;
+  }
+}
+
+/* With a mouse it is invisible until the row is hovered or focused, and while its form is open. */
+@media (min-width: 1024px) and (hover: hover) {
+  .mact {
+    opacity: 0;
+  }
+
+  .msg:hover .mact,
+  .msg:focus-within .mact,
+  .mact[aria-expanded="true"] {
+    opacity: 1;
+  }
+}
+
+/* With touch, and on phones, it is always there, and it is the icon alone: 32px with a hit area of about 46px. */
+@media (max-width: 1023px) {
+  .mact {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    margin: -4px 0 -4px auto;
+    padding: 0;
+    border-color: transparent;
+    background: none;
+    color: var(--color-primary);
+  }
+
+  .mact .lbl {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .mact::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+  }
+
+  .mact:hover {
+    background: var(--color-citation-wash);
+    border-color: transparent;
+  }
+
+  .mact:active,
+  .mact[aria-expanded="true"] {
+    background: var(--color-mint-press);
+    border-color: transparent;
+  }
+
+  .mact + .msg-time {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .msg-h[data-has-chip] {
+    grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  }
+}
+
+/* ===== The drafts panel: the channel's right column from 1024px, the phone sheet's content below ===== */
+@media (min-width: 1024px) {
+  .chan {
+    grid-template-columns: minmax(0, 1fr) var(--panel-w);
+  }
+}
+
+@media (max-width: 1023px) {
+  .chan > [data-drafts-root] {
+    display: none;
+  }
+}

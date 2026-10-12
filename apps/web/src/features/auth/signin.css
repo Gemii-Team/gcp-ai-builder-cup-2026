@@ -1,0 +1,275 @@
+/*
+ * The sign-in screen: the top bar with the language switch, the brand lockup, one perforated slip and the kiwi beside it.
+ * Ported from .impeccable/prototype/signin.html; every colour, radius and size is a theme token (`var(--color-*)`,
+ * `var(--radius-*)`, `var(--text-*)`), apart from the Google G, which is Google's own mark (GoogleButton.tsx).
+ *
+ * Every class here starts with `si-`: shell.css and channel.css name theirs short and app-wide (.main, .ch, .me, .av,
+ * .sheet, .scrim, .notice ...) and Vite ships all of them to every route, so a bare name would meet one of theirs.
+ * auth/css.test.ts pins the prefix. Unlayered plain CSS like the sheets of @kiwi/ui, so it wins over Tailwind utilities.
+ */
+
+.si-page {
+  --si-pad: 28px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+/* ===== Page frame ===== */
+.si-top {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 16px var(--si-pad) 0;
+}
+
+.si-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 16px var(--si-pad) 24px;
+}
+
+.si-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 44ch;
+  text-align: center;
+}
+
+.si-brand p {
+  color: var(--color-carbon-copy);
+  text-wrap: balance;
+}
+
+.si-lock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.si-lock svg {
+  flex: none;
+}
+
+.si-lock strong {
+  font-size: var(--text-wordmark);
+  font-weight: var(--text-wordmark--font-weight);
+  letter-spacing: var(--text-wordmark--letter-spacing);
+  line-height: var(--text-wordmark--line-height);
+  color: var(--color-primary);
+}
+
+.si-stage {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+}
+
+.si-kiwi {
+  position: absolute;
+  left: calc(100% + 8px);
+  bottom: -9px;
+}
+
+.si-demo {
+  position: fixed;
+  left: 16px;
+  bottom: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-carbon-copy);
+  pointer-events: none;
+}
+
+/* ===== The slip: the body above the perforation, the stub below ===== */
+.si-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 24px;
+}
+
+.si-title {
+  font-size: var(--text-headline);
+  font-weight: var(--text-headline--font-weight);
+  line-height: var(--text-headline--line-height);
+  letter-spacing: var(--text-headline--letter-spacing);
+}
+
+.si-hint {
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.si-stub {
+  padding: 12px 24px 20px;
+  font-size: var(--text-meta);
+}
+
+.si-stub h2 {
+  margin-bottom: 4px;
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  line-height: var(--text-label--line-height);
+  color: var(--color-primary);
+}
+
+.si-stub li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.si-bullet {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-hair);
+  background: var(--color-perforation-sage);
+  transform: translateY(-1px);
+}
+
+/* What K.I.W.I. will not do without asking: set apart by a hairline, at 600. */
+.si-stub .si-ask {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-track-rule);
+  font-weight: 600;
+  color: var(--color-ledger-ink);
+}
+
+/* ===== The Google button: Field White, Control Line, the official G ===== */
+.si-gbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+  color: var(--color-ledger-ink);
+  font-size: var(--text-button);
+  font-weight: var(--text-button--font-weight);
+  line-height: var(--text-button--line-height);
+  cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+
+.si-gbtn:hover:not(:disabled) {
+  background: var(--color-counter-hover);
+  border-color: var(--color-control-line-hover);
+}
+
+.si-gbtn:active:not(:disabled) {
+  background: var(--color-citation-wash);
+}
+
+.si-gbtn:disabled {
+  background: var(--color-disabled-fill);
+  border-color: var(--color-disabled-fill);
+  color: var(--color-disabled-ink);
+  cursor: not-allowed;
+}
+
+.si-gbtn svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.si-gbtn:disabled svg {
+  opacity: .5;
+}
+
+/* ===== States: the failed notice above the button, the signed-out notice above the heading ===== */
+.si-fail {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-returned-edge);
+  border-radius: var(--radius-lg);
+  background: var(--color-returned-wash);
+  color: var(--color-returned-ink);
+}
+
+.si-fail svg {
+  margin-top: 4px;
+  color: var(--color-returned-red);
+}
+
+.si-out {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-chip-edge);
+  border-radius: var(--radius-md);
+  background: var(--color-chip-fill);
+  color: var(--color-ledger-ink);
+  font-weight: 600;
+}
+
+.si-out svg {
+  color: var(--color-primary);
+}
+
+/* The kiwi stands beside the slip only where there is room for it. */
+@media (max-width: 1100px) {
+  .si-kiwi {
+    display: none;
+  }
+}
+
+/* ===== Phones: the stack aligns to the top and the slip loses its maximum width ===== */
+@media (max-width: 640px) {
+  .si-page {
+    --si-pad: 16px;
+  }
+
+  .si-main {
+    justify-content: flex-start;
+    gap: 20px;
+    padding-top: 12px;
+  }
+
+  .si-stage {
+    max-width: none;
+  }
+
+  .si-body {
+    padding: 16px 16px 20px;
+  }
+
+  .si-stub {
+    padding: 12px 16px 16px;
+    font-size: 15px;
+  }
+
+  .si-gbtn {
+    min-height: 48px;
+  }
+
+  .si-hint {
+    font-size: 15px;
+  }
+
+  .si-demo {
+    position: static;
+    order: -1;
+    padding: calc(env(safe-area-inset-top) + 2px) var(--si-pad) 0;
+    text-align: right;
+    pointer-events: auto;
+  }
+}

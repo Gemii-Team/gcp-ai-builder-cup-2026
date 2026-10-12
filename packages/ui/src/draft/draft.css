@@ -1,0 +1,549 @@
+/*
+ * Drafts and confirmed slips: the drafts panel and band, the draft slip and its owner select, the sealed slip, the
+ * tear-and-seal ghost, the empty state and the phone's drafts bar. Ported from the channel and board prototypes; every
+ * colour, radius and size is a theme token, like slip.css, which this builds on (a draft is a slip).
+ *
+ * This is unlayered plain CSS, so it beats Tailwind utilities: a variant of a slip.css rule overrides it here with a
+ * selector of equal or higher specificity (`.kiwi-slip.kiwi-sealed`), never with a utility class.
+ *
+ * The torn, sealed slip is the one thing in the system that casts a shadow, and its wrapper (`.torn`) is the only place
+ * the shadow token is used. The shadow is a filter, not a box shadow, so it follows the zigzag edge.
+ */
+
+/* ===== The drafts panel: the channel's right column, the Board's band and the phone sheet ===== */
+.kiwi-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-counter-mint);
+}
+
+.kiwi-ph {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 28px 8px 16px;
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.kiwi-ph h2 {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.kiwi-cap {
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-pc {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-draft-ink);
+}
+
+.kiwi-pc[data-zero] {
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-pbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px 40px;
+}
+
+.kiwi-slips {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kiwi-item {
+  position: relative;
+}
+
+/* ===== A draft: a slip with the Draft tag, so it keeps its perforation ===== */
+.kiwi-d-title {
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+  line-height: var(--text-item-title--line-height);
+}
+
+.kiwi-d-meta {
+  margin-top: 2px;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-draft .kiwi-d-title {
+  padding-right: 56px;
+}
+
+.kiwi-tag {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  padding: 0 8px;
+  border: 1px solid var(--color-draft-amber);
+  border-radius: var(--radius-sm);
+  background: var(--color-draft-tag);
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  line-height: 22px;
+  color: var(--color-draft-ink);
+}
+
+.kiwi-due {
+  white-space: nowrap;
+}
+
+.kiwi-draft[data-has-owner] .kiwi-due::before {
+  content: "· ";
+}
+
+/* The stub keys everything off its own class, so the ghost clone of it looks the same once it leaves the slip. */
+.kiwi-stub.kiwi-draft-stub {
+  padding: 6px 16px 8px;
+}
+
+.kiwi-draft-stub .kiwi-row {
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+
+.kiwi-from {
+  margin-left: auto;
+  color: var(--color-carbon-copy);
+  white-space: nowrap;
+}
+
+.kiwi-note {
+  margin-top: 2px;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+}
+
+.kiwi-acts {
+  display: flex;
+  gap: 8px;
+}
+
+.kiwi-draft-stub .kiwi-acts {
+  margin-top: 6px;
+}
+
+.kiwi-edit {
+  display: block;
+  width: calc(100% - 56px);
+  height: 32px;
+  margin: 4px 0 2px;
+  padding: 0 8px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+}
+
+.kiwi-edit:hover {
+  border-color: var(--color-control-line-hover);
+}
+
+.kiwi-edit[aria-invalid="true"] {
+  border-color: var(--color-returned-red);
+}
+
+.kiwi-err {
+  font-size: var(--text-meta);
+  color: var(--color-returned-ink);
+}
+
+/* ===== The owner select: a native select with its chevron; with no owner it takes the amber warning look ===== */
+.kiwi-sel {
+  position: relative;
+  display: inline-block;
+}
+
+.kiwi-sel-warn {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  margin-top: -9px;
+  pointer-events: none;
+  color: var(--color-draft-ink);
+}
+
+.kiwi-sel-chev {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  margin-top: -6px;
+  pointer-events: none;
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-sel[data-warn] .kiwi-sel-chev {
+  color: var(--color-draft-ink);
+}
+
+.kiwi-sel-ctl {
+  height: 32px;
+  max-width: 100%;
+  padding: 0 28px 0 8px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  appearance: none;
+  background-color: var(--color-slip-paper);
+  cursor: pointer;
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  color: var(--color-ledger-ink);
+  transition: background-color .15s, border-color .15s;
+}
+
+.kiwi-sel-ctl:hover {
+  background-color: var(--color-counter-hover);
+  border-color: var(--color-control-line-hover);
+}
+
+.kiwi-sel-ctl[data-warn] {
+  padding-left: 32px;
+  border-color: var(--color-draft-amber);
+  background-color: var(--color-draft-wash);
+  color: var(--color-draft-ink);
+}
+
+.kiwi-sel-ctl[data-warn]:hover {
+  background-color: var(--color-draft-hover);
+}
+
+/* ===== Confirmed: the stub is torn away; the slip ends in a zigzag and lifts off the page ===== */
+.torn {
+  filter: drop-shadow(var(--drop-shadow-torn));
+}
+
+/*
+ * No border, 12px top corners, no perforation. The mask is a solid block with a row of 16 by 8 triangles under it: the
+ * zigzag bottom edge, which only a confirmed slip has. The shapes are data URIs of two tiny SVGs.
+ */
+.kiwi-slip.kiwi-sealed {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 0;
+  padding: 12px 16px 22px;
+  border: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  -webkit-mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'%3E%3Crect width='1' height='1'/%3E%3C/svg%3E") top / 100% calc(100% - 8px) no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 8'%3E%3Cpath d='M0 0H16V0L8 8Z'/%3E%3C/svg%3E") bottom left / 16px 8px repeat-x;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'%3E%3Crect width='1' height='1'/%3E%3C/svg%3E") top / 100% calc(100% - 8px) no-repeat,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 8'%3E%3Cpath d='M0 0H16V0L8 8Z'/%3E%3C/svg%3E") bottom left / 16px 8px repeat-x;
+}
+
+.kiwi-sealed .kiwi-row {
+  gap: 8px;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-sealed .kiwi-row > span:first-child {
+  white-space: nowrap;
+}
+
+.kiwi-sealed .kiwi-srcs {
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-sealed .kiwi-d-title {
+  color: var(--color-ledger-ink);
+}
+
+.kiwi-sealed .kiwi-acts {
+  margin-top: 8px;
+}
+
+/* Between 1024px and 1180px the Board's columns are narrow: the seal shrinks to 56px. The channel's panel keeps 80px. */
+@media (min-width: 1024px) and (max-width: 1180px) {
+  .kiwi-slip.kiwi-sealed {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .kiwi-sealed .kiwi-seal {
+    width: 56px;
+    height: 56px;
+  }
+
+  .kiwi-panel[data-variant="panel"] .kiwi-slip.kiwi-sealed {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .kiwi-panel[data-variant="panel"] .kiwi-sealed .kiwi-seal {
+    width: 80px;
+    height: 80px;
+  }
+}
+
+/* The stub's clone, with a zigzag top edge: it slides down, tilts and fades while the seal stamps in. */
+.kiwi-ghost {
+  position: fixed;
+  z-index: 60;
+  margin: 0;
+  border: 1px solid var(--color-slip-edge);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--color-slip-paper);
+  pointer-events: none;
+  -webkit-mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 8'%3E%3Cpath d='M0 8L8 0L16 8Z'/%3E%3C/svg%3E") top left / 16px 8px repeat-x,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'%3E%3Crect width='1' height='1'/%3E%3C/svg%3E") bottom / 100% calc(100% - 8px) no-repeat;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 8'%3E%3Cpath d='M0 8L8 0L16 8Z'/%3E%3C/svg%3E") top left / 16px 8px repeat-x,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'%3E%3Crect width='1' height='1'/%3E%3C/svg%3E") bottom / 100% calc(100% - 8px) no-repeat;
+}
+
+/* ===== Nothing waits: the kiwi beside a sealed slip ===== */
+.kiwi-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 8px;
+  text-align: center;
+}
+
+.kiwi-empty:focus {
+  outline: none;
+}
+
+.kiwi-empty:focus-visible {
+  outline: 2px solid var(--color-focus-teal);
+}
+
+.kiwi-empty svg {
+  width: min(176px, 100%);
+  height: auto;
+}
+
+.kiwi-empty > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kiwi-empty h3 {
+  font-size: var(--text-title);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.kiwi-empty p {
+  color: var(--color-carbon-copy);
+}
+
+/* ===== The Board block at the foot of the channel's panel: the three counts and a bar as wide as they are ===== */
+.kiwi-board {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-ledger-rule);
+}
+
+.kiwi-board h3 {
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+  line-height: 1.5;
+}
+
+.kiwi-board li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-meta);
+}
+
+.kiwi-board li > :last-child {
+  margin-left: auto;
+  min-width: 3ch;
+  text-align: right;
+}
+
+.kiwi-board li > i {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-hair);
+  flex: none;
+}
+
+.kiwi-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin-top: 8px;
+}
+
+.kiwi-bar > i {
+  border-radius: var(--radius-pill);
+}
+
+.kiwi-board i[data-status="todo"] {
+  background: var(--color-perforation-sage);
+}
+
+.kiwi-board i[data-status="doing"] {
+  background: var(--color-doing-teal);
+}
+
+.kiwi-board i[data-status="done"] {
+  background: var(--color-seal-green);
+}
+
+/* ===== The Board's drafts band (desktop): the panel lies across the scroller, in the Board's columns ===== */
+.kiwi-draftbar {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .kiwi-panel[data-variant="band"] {
+    flex: none;
+  }
+
+  .kiwi-panel[data-variant="band"] .kiwi-ph {
+    min-height: 0;
+    padding: 16px 0 8px;
+    border-bottom: 0;
+  }
+
+  .kiwi-panel[data-variant="band"] .kiwi-pbody {
+    display: block;
+    overflow: visible;
+    padding: 0 0 8px;
+  }
+
+  .kiwi-panel[data-variant="band"] [data-drafts-list] {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .kiwi-panel[data-variant="band"] [data-drafts-list] > .kiwi-item {
+    display: flex;
+  }
+
+  .kiwi-panel[data-variant="band"] [data-drafts-list] .kiwi-draft {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .kiwi-panel[data-variant="band"] [data-drafts-list] .kiwi-slip-body {
+    flex: 1;
+  }
+
+  .kiwi-panel[data-variant="band"] .kiwi-empty {
+    flex-direction: row;
+    justify-content: center;
+    gap: 16px;
+    padding: 8px;
+    text-align: left;
+  }
+
+  .kiwi-panel[data-variant="band"] .kiwi-empty svg {
+    width: 132px;
+  }
+
+  /* The sealed slip lands in its Board lane; the list of the ones just confirmed is the phone sheet's. */
+  .kiwi-panel[data-variant="band"] [data-sealed-list] {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) and (max-width: 1180px) {
+  .kiwi-panel[data-variant="band"] [data-drafts-list] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ===== Phones and narrow (1023px and below): the panel is the drafts sheet, opened from the bar ===== */
+@media (max-width: 1023px) {
+  .kiwi-ph {
+    min-height: 56px;
+    padding: 6px 8px 6px 16px;
+  }
+
+  .kiwi-cap {
+    display: none;
+  }
+
+  .kiwi-pbody {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .kiwi-edit,
+  .kiwi-sel-ctl {
+    height: 44px;
+  }
+
+  .kiwi-d-meta {
+    font-size: 15px;
+  }
+
+  .kiwi-draftbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    height: 44px;
+    margin: 0 12px 8px;
+    padding: 0 12px;
+    border: 1px dashed var(--color-draft-amber);
+    border-radius: var(--radius-lg);
+    background: var(--color-draft-wash);
+    color: var(--color-draft-ink);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color .15s;
+  }
+
+  .kiwi-draftbar:hover {
+    background: var(--color-draft-hover);
+  }
+
+  .kiwi-draftbar:active {
+    background: var(--color-draft-press);
+  }
+
+  .kiwi-draftbar svg {
+    margin-left: auto;
+  }
+
+  .kiwi-draftbar[data-zero] {
+    border: 1px solid var(--color-control-line);
+    background: var(--color-slip-paper);
+    color: var(--color-carbon-copy);
+  }
+
+  .kiwi-draftbar[data-zero]:hover {
+    background: var(--color-counter-hover);
+  }
+}
+
+@media (max-width: 600px) {
+  .kiwi-draftbar {
+    height: 40px;
+    margin-bottom: 6px;
+  }
+}

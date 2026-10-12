@@ -1,0 +1,20 @@
+/*
+ * Self-hosted fonts: nothing is fetched from a CDN, so Thai renders offline once the shell is precached.
+ * Every face is font-display: swap.
+ *
+ * Anuphan, weights 400/500/600/700, Thai and Latin. Fontsource's per-weight files (400.css ...) declare one
+ * face per subset (thai, latin, plus latin-ext and vietnamese) each with its own unicode-range, so a page
+ * downloads only the subsets it draws. Its per-subset files (thai-400.css, latin-400.css) carry no
+ * unicode-range: importing two of them gives one family and weight two faces that both claim every
+ * code point, and the later one wins for all text.
+ *
+ * Noto Sans Mono, weights 400/500/600, Latin only: the package has no Thai subset, so a Thai character in
+ * a mono run falls through to Anuphan (see --font-mono in theme.css).
+ */
+@import "@fontsource/anuphan/400.css";
+@import "@fontsource/anuphan/500.css";
+@import "@fontsource/anuphan/600.css";
+@import "@fontsource/anuphan/700.css";
+@import "@fontsource/noto-sans-mono/latin-400.css";
+@import "@fontsource/noto-sans-mono/latin-500.css";
+@import "@fontsource/noto-sans-mono/latin-600.css";

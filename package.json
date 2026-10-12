@@ -12,6 +12,7 @@
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "sharp": "0.35.5",
     "turbo": "^2.11.7"
   }
 }

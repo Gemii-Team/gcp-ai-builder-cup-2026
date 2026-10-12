@@ -1,0 +1,431 @@
+/*
+ * The proof slip family: slip, perforation, stub, tracks, source rows, offset links, the transcript excerpt and the
+ * pending, steps and failed states. Ported from the channel prototype; every colour, radius and size is a theme token
+ * (`var(--color-*)`, `var(--radius-*)`, `var(--text-*)`), so nothing here is hard-coded and a palette change moves it.
+ *
+ * Unsealed slips keep the 1.5px dashed perforation and its notches. Nothing in this file casts a shadow: the torn,
+ * sealed slip is the only thing in the system that does, and it is not part of this family.
+ */
+
+/* ===== The slip ===== */
+.kiwi-slip {
+  position: relative;
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-lg);
+  background: var(--color-slip-paper);
+  color: var(--color-ledger-ink);
+}
+
+.kiwi-slip[data-tone="failed"] {
+  border-color: var(--color-returned-edge);
+  background: var(--color-returned-wash);
+}
+
+.kiwi-slip-body {
+  padding: 8px 16px;
+}
+
+.kiwi-slip-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 16px;
+}
+
+.kiwi-slip-title {
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  line-height: var(--text-title--line-height);
+}
+
+.kiwi-slip-meta {
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-prose {
+  max-width: 76ch;
+}
+
+/* ===== Perforation: a 1.5px dashed rule with two 7 x 13 notches cut in the ground colour ===== */
+.kiwi-perf {
+  position: relative;
+  height: 0;
+  border-top: 1.5px dashed var(--color-perforation-sage);
+}
+
+.kiwi-perf::before,
+.kiwi-perf::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--radius-notch) * -1);
+  width: var(--radius-notch);
+  height: 13px;
+  background: var(--color-counter-mint);
+  border: 1px solid var(--color-slip-edge);
+}
+
+.kiwi-perf::before {
+  left: -1px;
+  border-left: 0;
+  border-radius: 0 var(--radius-notch) var(--radius-notch) 0;
+}
+
+.kiwi-perf::after {
+  right: -1px;
+  border-right: 0;
+  border-radius: var(--radius-notch) 0 0 var(--radius-notch);
+}
+
+.kiwi-slip[data-tone="failed"] .kiwi-perf::before,
+.kiwi-slip[data-tone="failed"] .kiwi-perf::after {
+  border-color: var(--color-returned-edge);
+}
+
+/* ===== Stub: REF and time, then the sources ===== */
+.kiwi-stub {
+  padding: 4px 16px 6px;
+  font-size: var(--text-meta);
+}
+
+.kiwi-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kiwi-srcs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kiwi-src {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 -8px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  transition: background-color .2s;
+}
+
+.kiwi-src[data-hit] {
+  background: var(--color-citation-wash);
+}
+
+.kiwi-ft {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-track-rule);
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  line-height: var(--text-label--line-height);
+  color: var(--color-draft-ink);
+}
+
+.kiwi-ft[data-zero] {
+  color: var(--color-carbon-copy);
+}
+
+/* ===== Tracks: label | text | right-aligned offset ===== */
+.kiwi-tracks {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kiwi-track {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+.kiwi-track-label {
+  font-size: var(--text-label);
+  font-weight: var(--text-label--font-weight);
+  line-height: var(--text-label--line-height);
+  color: var(--color-primary);
+}
+
+.kiwi-track[data-kind="open_question"] .kiwi-track-label {
+  color: var(--color-draft-ink);
+}
+
+/* The Right Column Rule: offsets align right into one column. */
+.kiwi-track-offset {
+  text-align: right;
+}
+
+/* A repeated label stays for assistive tech and reappears on phones, where each row stands on its own. */
+.kiwi-dup {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ===== Offset, page and message links: controls, underlined in Perforation Sage ===== */
+.kiwi-ts {
+  position: relative;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--color-citation-teal);
+  text-decoration: underline;
+  text-decoration-color: var(--color-perforation-sage);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color .15s, background-color .15s;
+}
+
+.kiwi-ts::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.kiwi-ts:hover {
+  text-decoration-color: var(--color-citation-teal);
+}
+
+.kiwi-ts:active,
+.kiwi-ts[aria-expanded="true"] {
+  background: var(--color-citation-wash);
+  text-decoration-color: var(--color-citation-teal);
+}
+
+/* ===== Transcript excerpt: opens in place, directly under the row that asked for it ===== */
+.kiwi-ex {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  margin: 6px 0 2px;
+  padding: 8px 12px 4px;
+  border-top: 1px dashed var(--color-perforation-sage);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--color-counter-hover);
+  color: var(--color-ledger-ink);
+  font-size: var(--text-meta);
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+
+.kiwi-ex-h {
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.kiwi-ex-l {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 12px;
+  margin-top: 4px;
+}
+
+.kiwi-ex-l > b {
+  grid-column: 1;
+  font-weight: 600;
+}
+
+.kiwi-ex-off {
+  grid-column: 2;
+}
+
+.kiwi-ex-t {
+  grid-column: 1 / -1;
+}
+
+.kiwi-ex-m,
+.kiwi-ex-q {
+  margin-top: 4px;
+}
+
+.kiwi-ex-m {
+  color: var(--color-carbon-copy);
+}
+
+.kiwi-ex-x {
+  display: block;
+  min-height: 32px;
+  margin: 2px 0 0 auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-citation-teal);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color .15s;
+}
+
+.kiwi-ex-x:hover {
+  background: var(--color-citation-wash);
+}
+
+.kiwi-ex-x:active {
+  background: var(--color-mint-press);
+}
+
+.kiwi-ex-error {
+  color: var(--color-returned-ink);
+}
+
+/* ===== Pending: calm, no spinner ===== */
+.kiwi-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+}
+
+.kiwi-pbar {
+  flex: none;
+  width: 96px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-skeleton-sage);
+}
+
+.kiwi-pulse {
+  animation: kiwi-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes kiwi-pulse {
+  50% {
+    opacity: .5;
+  }
+}
+
+.kiwi-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+}
+
+.kiwi-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kiwi-steps [aria-current="step"] {
+  color: var(--color-ledger-ink);
+  font-weight: 600;
+}
+
+.kiwi-steps .kiwi-pbar {
+  margin-left: 4px;
+}
+
+/* ===== Failed: the one failure family; the stub carries Retry and the time, never a REF ===== */
+.kiwi-fmsg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--color-returned-ink);
+}
+
+.kiwi-fmsg svg {
+  margin-top: 4px;
+  color: var(--color-returned-red);
+}
+
+.kiwi-slip[data-tone="failed"] .kiwi-stub {
+  color: var(--color-returned-ink);
+}
+
+.kiwi-slip[data-tone="failed"] .kiwi-row {
+  align-items: center;
+}
+
+/* ===== Phones and narrow (1023px and below) ===== */
+@media (max-width: 1023px) {
+  .kiwi-stub,
+  .kiwi-pending,
+  .kiwi-steps,
+  .kiwi-slip-meta {
+    font-size: 15px;
+  }
+
+  .kiwi-stub .kiwi-row {
+    align-items: center;
+  }
+
+  .kiwi-track {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "label offset" "text text";
+    gap: 0 8px;
+    padding: 6px 0;
+  }
+
+  .kiwi-track-label {
+    grid-area: label;
+  }
+
+  .kiwi-track-offset {
+    grid-area: offset;
+  }
+
+  .kiwi-track-text {
+    grid-area: text;
+  }
+
+  .kiwi-dup {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    clip-path: none;
+    white-space: normal;
+  }
+
+  .kiwi-ts::after {
+    inset: -14px -10px;
+  }
+
+  .kiwi-ex-x {
+    min-height: 44px;
+  }
+
+  .kiwi-ft {
+    display: none;
+  }
+}
+
+/* The meta caption is the first thing a narrow phone drops. */
+@media (max-width: 600px) {
+  .kiwi-slip-meta {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kiwi-pulse {
+    animation: none;
+  }
+}

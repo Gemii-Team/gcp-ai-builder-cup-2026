@@ -1,0 +1,365 @@
+/*
+ * The Board: the filter bar, the scroller that holds the sticky column heads and the source lanes, the lanes' cells and
+ * the task cards. Ported from .impeccable/prototype/board.html; every colour, radius and size is a theme token, so
+ * nothing is hard-coded. The header and the main column are the shell's (`../shell/screen.css`). Unlayered plain CSS
+ * like the shell's and the components' stylesheets; every class starts with `bd-`.
+ */
+
+.bd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* The Board has no side panel, so its main column has no rule at the right. */
+.bd .main {
+  border-right: 0;
+}
+
+.bd-notice {
+  flex: none;
+  padding: 8px var(--pad) 0;
+}
+
+/* ===== Filters ===== */
+.bd-tool {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px var(--pad);
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.bd-tool-f {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ===== The scroller: sticky heads, then the lanes ===== */
+.bd-scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--pad) 48px;
+}
+
+.bd-scroller:focus-visible {
+  outline-offset: -3px;
+}
+
+.bd-cols {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 12px 0 8px;
+  background: var(--color-counter-mint);
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.bd-col-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+  line-height: 1.5;
+}
+
+.bd-col-h .bd-n {
+  margin-left: auto;
+  min-width: 3ch;
+  text-align: right;
+}
+
+.bd-sw {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-hair);
+  flex: none;
+}
+
+.bd-sw-todo {
+  background: var(--color-perforation-sage);
+}
+
+.bd-sw-doing {
+  background: var(--color-doing-teal);
+}
+
+.bd-sw-done {
+  background: var(--color-seal-green);
+}
+
+/* ===== A lane: one source, three status cells ===== */
+.bd-lane {
+  margin-top: 20px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-ledger-rule);
+}
+
+.bd-lanes > .bd-lane:first-child {
+  margin-top: 8px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* The lane's title is a plain heading: the kind icon, the source over its meta line, the REF and the count. */
+.bd-lane-h {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 12px;
+  min-height: 44px;
+  margin: 0;
+  padding: 9px 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: var(--color-ledger-ink);
+}
+
+.bd-kind {
+  margin-top: 4px;
+  color: var(--color-primary);
+}
+
+.bd-lane-h > [lang="en"] {
+  margin-top: 2px;
+}
+
+.bd-ln {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 12px;
+  min-width: 0;
+}
+
+.bd-lt {
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  line-height: var(--text-title--line-height);
+}
+
+.bd-lm {
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+}
+
+.bd-lcount {
+  min-width: 9ch;
+  margin-top: 1px;
+  text-align: right;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.bd-lane-b {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.bd-cell {
+  min-width: 0;
+  border-radius: var(--radius-lg);
+}
+
+.bd-cell ul {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An empty status is a quiet slot, not a slip: a dashed outline with no notches. */
+.bd-cell-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-perforation-sage);
+  border-radius: var(--radius-lg);
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+  text-align: center;
+}
+
+.bd-nomatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 48px 16px;
+  text-align: center;
+}
+
+.bd-nomatch h3 {
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  line-height: 1.5;
+}
+
+.bd-nomatch p {
+  margin-bottom: 12px;
+  color: var(--color-carbon-copy);
+}
+
+/* ===== Cards: a confirmed task is a plain slip, no perforation and no torn edge ===== */
+.bd-card {
+  position: relative;
+  min-width: 0;
+  scroll-margin-top: 64px;
+}
+
+.bd-card .kiwi-sealed {
+  position: relative;
+}
+
+.bd-tcard .kiwi-d-title {
+  overflow-wrap: anywhere;
+}
+
+.kiwi-stub.bd-tcard-stub {
+  padding: 6px 16px 8px;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+.bd-tcard-stub .kiwi-row {
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+
+.bd-tcard-stub .kiwi-acts {
+  margin-top: 6px;
+}
+
+.bd-src {
+  margin-left: auto;
+  color: var(--color-carbon-copy);
+  text-align: right;
+}
+
+.bd-nw {
+  white-space: nowrap;
+}
+
+/* Overdue: words, a clock icon and weight, never a state colour. */
+.bd-late {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--color-ledger-ink);
+}
+
+.bd-late svg {
+  flex: none;
+}
+
+.bd-okl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.bd-okl svg {
+  color: var(--color-seal-green);
+  flex: none;
+}
+
+/* ===== Phones and narrow (1023px and below): one status at a time ===== */
+@media (max-width: 1023px) {
+  .bd {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .bd-scroller {
+    padding: 0 16px 24px;
+  }
+
+  .bd-lane {
+    margin-top: 16px;
+    padding-top: 8px;
+  }
+
+  .bd-lane-h {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+
+  /* The REF drops to a second line under the title. */
+  .bd-lane-h > [lang="en"] {
+    grid-column: 2;
+    grid-row: 2;
+    margin-top: -6px;
+  }
+
+  .bd-lcount {
+    min-width: 0;
+  }
+
+  .bd-lane-b {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bd-lm {
+    font-size: 15px;
+  }
+}
+
+/* ===== New task: a person adds it directly, so it is confirmed at once: a plain card, never a draft and never sealed ===== */
+.bd-nfw {
+  padding-top: 16px;
+}
+
+/* ===== Filters and the status control, on phones ===== */
+@media (max-width: 1023px) {
+  .bd-nfw {
+    padding-top: 12px;
+  }
+
+  .bd-tool {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px 16px;
+  }
+
+  .bd-filt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* The selects wait behind the Filters button, two to a row (`hidden` closes them). */
+  .bd-tool-f {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .bd-tool-f .kiwi-sel {
+    display: block;
+  }
+
+  .bd-tool-f .kiwi-sel-ctl {
+    width: 100%;
+  }
+}

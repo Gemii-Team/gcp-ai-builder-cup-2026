@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="K.I.W.I.">
+  <!-- 4px cell grid: rounded tile, perforated seal ring, K built from a stem and a chevron -->
+  <rect x="2" y="2" width="44" height="44" rx="10" fill="#FBFAF6"/>
+  <circle cx="24" cy="24" r="18" fill="none" stroke="#0F3D3A" stroke-width="1.5" stroke-dasharray="3 2.2" stroke-linecap="round"/>
+  <rect x="14" y="12" width="4" height="24" rx="0.5" fill="#0F3D3A"/>
+  <path d="M18 24 L28 12 H34 L24 24 L34 36 H28 Z" fill="#0F3D3A"/>
+</svg>
