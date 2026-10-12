@@ -1,47 +1,14 @@
-import { CitationMarker, LangRuns, MarkSmall, Numeral, ProofSlip, useLabels, type Source } from '@kiwi/ui';
-import { Fragment, useState, type ReactNode } from 'react';
-import type { ArtifactView, CitationView } from '../../api/types';
+import { LangRuns, MarkSmall, Numeral, ProofSlip, useLabels, type Source } from '@kiwi/ui';
+import { useState } from 'react';
+import type { ArtifactView } from '../../api/types';
 import { useI18n } from '../../i18n';
+import { Markdown } from '../markdown/Markdown';
 
 /** A caption the server wrote, such as `Google Meet · 42 min · 6 people`, with its counts and times set in mono. */
 function Caption({ text }: { text: string }) {
   return text.split(/(\d+(?::\d+)*)/).map((part, index) =>
     index % 2 === 1 ? <Numeral key={index}>{part}</Numeral> : <LangRuns key={index} text={part} />,
   );
-}
-
-type CitedTextProps = {
-  text: string;
-  citations: readonly CitationView[];
-  pressed: number | null;
-  onPress: (n: number) => void;
-};
-
-/** An answer's paragraphs, in which each `[n]` that names a citation is a marker button and any other `[n]` stays text. */
-function CitedText({ text, citations, pressed, onPress }: CitedTextProps) {
-  const labels = useLabels();
-  const nameOf = (source: Source) => (source.page === undefined ? source.label : `${source.label}, ${labels.text('pageShort', { page: source.page })}`);
-  return text.split(/\n{2,}/).map((paragraph, index) => (
-    <p key={index}>
-      {paragraph.split(/(\[\d+\])/).map((part, at) => {
-        const citation = /^\[(\d+)\]$/.exec(part)?.[1];
-        const cited = citation === undefined ? undefined : citations.find((c) => c.n === Number(citation));
-        return cited === undefined ? (
-          <LangRuns key={at} text={part} />
-        ) : (
-          <CitationMarker
-            key={at}
-            n={cited.n}
-            label={nameOf(cited.source)}
-            pressed={pressed === cited.n}
-            onPress={() => {
-              onPress(cited.n);
-            }}
-          />
-        );
-      })}
-    </p>
-  ));
 }
 
 type ArtifactSlipProps = {
@@ -53,16 +20,19 @@ type ArtifactSlipProps = {
 /**
  * The proof slip of a message that carries an artifact, whatever its kind: a meeting summary with its tracks, a file
  * summary under its small mark, a cited answer whose markers press their source rows, a not-found answer (a completed
- * answer, with its REF) or a channel summary. Every one carries its REF and its sources.
+ * answer, with its REF) or a channel summary. Every one carries its REF and its sources, and the body of every one is the
+ * model's markdown, shown through `Markdown`: a list is a list, never one paragraph of dashes.
  */
 export function ArtifactSlip({ artifact, draftCount }: ArtifactSlipProps) {
   const { plain } = useI18n();
+  const labels = useLabels();
   const [pressed, setPressed] = useState<number | null>(null);
   const common = { ref: artifact.ref, generatedAt: artifact.generatedAt };
   const heading = {
     ...(artifact.title === '' ? {} : { title: artifact.title }),
     ...(artifact.meta === '' ? {} : { meta: <Caption text={artifact.meta} /> }),
   };
+  const body = <Markdown markdown={artifact.bodyMarkdown} />;
 
   switch (artifact.kind) {
     case 'meeting_summary':
@@ -70,34 +40,42 @@ export function ArtifactSlip({ artifact, draftCount }: ArtifactSlipProps) {
         <ProofSlip
           {...common}
           {...heading}
-          summary={artifact.bodyMarkdown}
+          summary={body}
           tracks={artifact.tracks}
           sources={artifact.sources}
           {...(artifact.meetingId === undefined ? {} : { meetingId: artifact.meetingId })}
           {...(draftCount === undefined ? {} : { draftCount })}
         />
       );
-    case 'doc_summary': {
-      const summary: ReactNode = (
-        <Fragment>
-          <MarkSmall size={16} label={plain('summarizedBy')} className="mini" />
-          <LangRuns text={artifact.bodyMarkdown} />
-        </Fragment>
-      );
-      return <ProofSlip {...common} summary={summary} sources={artifact.sources} />;
-    }
-    case 'answer': {
-      const cited = [...artifact.citations].sort((a, b) => a.n - b.n);
+    case 'doc_summary':
       return (
         <ProofSlip
           {...common}
           summary={
-            <CitedText
-              text={artifact.bodyMarkdown}
-              citations={cited}
-              pressed={pressed}
-              onPress={(n) => {
-                setPressed(pressed === n ? null : n);
+            <div className="doc-summary">
+              <MarkSmall size={16} label={plain('summarizedBy')} className="mini" />
+              {body}
+            </div>
+          }
+          sources={artifact.sources}
+        />
+      );
+    case 'answer': {
+      const cited = [...artifact.citations].sort((a, b) => a.n - b.n);
+      const nameOf = (source: Source) => (source.page === undefined ? source.label : `${source.label}, ${labels.text('pageShort', { page: source.page })}`);
+      return (
+        <ProofSlip
+          {...common}
+          summary={
+            <Markdown
+              markdown={artifact.bodyMarkdown}
+              cited={{
+                citations: cited,
+                pressed,
+                onPress: (n) => {
+                  setPressed(pressed === n ? null : n);
+                },
+                labelOf: (citation) => nameOf(citation.source),
               }}
             />
           }
@@ -108,8 +86,8 @@ export function ArtifactSlip({ artifact, draftCount }: ArtifactSlipProps) {
       );
     }
     case 'not_found':
-      return <ProofSlip {...common} summary={artifact.bodyMarkdown} sources={[]} />;
+      return <ProofSlip {...common} summary={body} sources={[]} />;
     case 'channel_summary':
-      return <ProofSlip {...common} {...heading} summary={artifact.bodyMarkdown} sources={artifact.sources} />;
+      return <ProofSlip {...common} {...heading} summary={body} sources={artifact.sources} />;
   }
 }

@@ -253,50 +253,6 @@
   margin-left: 32px;
 }
 
-/* ===== An answer's markdown: paragraphs, lists, bold labels, links ===== */
-.am > * + * {
-  margin-top: 8px;
-}
-
-.am ul,
-.am ol {
-  padding-left: 20px;
-}
-
-.am ul {
-  list-style: disc;
-}
-
-.am ol {
-  list-style: decimal;
-}
-
-.am strong,
-.am-heading {
-  font-weight: 600;
-}
-
-.am a {
-  color: var(--color-citation-teal);
-  text-decoration: underline;
-  text-decoration-color: var(--color-perforation-sage);
-  text-underline-offset: 3px;
-  transition: text-decoration-color .15s;
-}
-
-.am a:hover {
-  text-decoration-color: var(--color-citation-teal);
-}
-
-.am code {
-  font-family: var(--font-mono);
-  font-size: var(--text-numeral);
-}
-
-.am pre {
-  overflow-x: auto;
-}
-
 /* The slip of the answer whose sources are on show steps its border up to Control Line. */
 .ak-qa[data-selected] .kiwi-slip {
   border-color: var(--color-control-line);

@@ -188,6 +188,41 @@ describe('MessageRow', () => {
     expect(screen.getByText('Sure, drafting now.')).toBeInTheDocument();
     expect(screen.queryByText(/REF /)).not.toBeInTheDocument();
   });
+
+  // What the model writes in a slip is markdown: a list is a list, bold is bold, a link is a safe link. The file summary
+  // of the first real run showed its bullets inline in one paragraph; each kind of slip is held to the same renderer.
+  const MODEL_MARKDOWN = 'Key points:\n\n- first **bold** point\n- second point with `code`\n\nSee [the docs](https://example.com/a) and ![x](https://evil.example/p.png).';
+  const KINDS: { name: string; kind: ArtifactKind; extra?: Parameters<typeof artifact>[0] }[] = [
+    { name: 'file summary', kind: ArtifactKind.DOC_SUMMARY },
+    { name: 'meeting summary', kind: ArtifactKind.MEETING_SUMMARY, extra: { meetingId: 'meeting-1', title: 'Q4 launch weekly sync' } },
+    { name: 'channel summary', kind: ArtifactKind.CHANNEL_SUMMARY, extra: { title: 'q4-launch' } },
+    { name: 'agent answer', kind: ArtifactKind.ANSWER },
+    { name: 'not-found answer', kind: ArtifactKind.NOT_FOUND },
+  ];
+  for (const { name, kind, extra } of KINDS) {
+    it(`MessageRow_${name.replaceAll(/\W+/g, '')}_RendersTheModelsMarkdown`, () => {
+      renderPlain(
+        <ExcerptProvider load={noExcerpt}>
+          <MessageRow message={mapMessage(agentMessage({ seq: 7, artifact: artifact({ kind, ref: 'DOC-1001', bodyMarkdown: MODEL_MARKDOWN, ...extra }) }))} authorName="" />
+        </ExcerptProvider>,
+      );
+
+      const row = screen.getByRole('article');
+      expect(within(row).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['first bold point', 'second point with code']);
+      expect(within(row).getByText('bold').tagName).toBe('STRONG');
+      expect(within(row).getByText('code').tagName).toBe('CODE');
+      const link = within(row).getByRole('link', { name: 'the docs' });
+      expect(link).toHaveAttribute('href', 'https://example.com/a');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      // No picture is ever fetched on a model's say-so: the description stands in for it.
+      expect(row.querySelector('img')).toBeNull();
+      expect(row).toHaveTextContent('and x.');
+      // None of the markup the model wrote is left as characters.
+      expect(row).not.toHaveTextContent('**');
+      expect(row).not.toHaveTextContent('- first');
+    });
+  }
 });
 
 describe('Composer', () => {

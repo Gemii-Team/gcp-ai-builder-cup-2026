@@ -2,7 +2,7 @@ import { ProofSlip } from '@kiwi/ui';
 import type { ReactNode } from 'react';
 import type { ArtifactView } from '../../api/types';
 import { useI18n } from '../../i18n';
-import { AnswerMarkdown } from './AnswerMarkdown';
+import { Markdown } from '../markdown/Markdown';
 import { displaySource, markerLabel } from './sources';
 
 type AnswerSlipProps = {
@@ -29,12 +29,9 @@ export function AnswerSlip({ answer, channelNames, pressed, onPress, actions }: 
     <ProofSlip
       {...common}
       summary={
-        <AnswerMarkdown
+        <Markdown
           markdown={answer.bodyMarkdown}
-          citations={cited}
-          pressed={pressed}
-          onPress={onPress}
-          labelOf={(citation) => markerLabel(displaySource(citation, channelNames, plain), plain)}
+          cited={{ citations: cited, pressed, onPress, labelOf: (citation) => markerLabel(displaySource(citation, channelNames, plain), plain) }}
         />
       }
       sources={cited.map((citation) => displaySource(citation, channelNames, plain))}

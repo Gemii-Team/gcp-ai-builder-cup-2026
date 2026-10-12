@@ -115,12 +115,23 @@
   color: var(--color-citation-teal);
 }
 
+/* A file summary: the small mark stands at the start of the first line, the body beside it. */
+.doc-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.doc-summary > .md {
+  flex: 1;
+  min-width: 0;
+}
+
 .mini {
-  display: inline-block;
+  flex: none;
   width: 16px;
   height: 16px;
-  margin-right: 8px;
-  vertical-align: -3px;
+  margin-top: 4px;
 }
 
 /* A message the server has not stored yet: still being sent, waiting for the connection, or refused. */

@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CitationView } from '../../api/types';
-import { AnswerMarkdown } from './AnswerMarkdown';
+import { Markdown } from './Markdown';
 
 const CITATIONS: CitationView[] = [
   { n: 1, chunkId: 'c1', quote: 'q1', source: { kind: 'meeting', id: 'meeting-1', label: 'Q4 launch weekly sync', channelId: 'ch-q4', entryIdx: 12, offsetMs: 761000 } },
@@ -10,15 +10,7 @@ const CITATIONS: CitationView[] = [
 ];
 
 function show(markdown: string, { pressed = null, onPress = vi.fn() }: { pressed?: number | null; onPress?: (n: number) => void } = {}) {
-  const view = render(
-    <AnswerMarkdown
-      markdown={markdown}
-      citations={CITATIONS}
-      pressed={pressed}
-      onPress={onPress}
-      labelOf={(citation) => citation.source.label}
-    />,
-  );
+  const view = render(<Markdown markdown={markdown} cited={{ citations: CITATIONS, pressed, onPress, labelOf: (citation) => citation.source.label }} />);
   return { ...view, onPress };
 }
 
@@ -26,7 +18,9 @@ afterEach(() => {
   Reflect.deleteProperty(window, 'pwned');
 });
 
-describe('AnswerMarkdown', () => {
+// The one renderer of every slip that shows model text (the Ask answer, the file and meeting summaries, the agent's answers
+// and channel summaries). The test names that start with AnswerMarkdown_ are those of the Ask answer's first renderer.
+describe('Markdown', () => {
   it('AnswerMarkdown_StripsScriptAndRawHtml', () => {
     const { container } = show(
       [
@@ -49,13 +43,13 @@ describe('AnswerMarkdown', () => {
     expect(container).toHaveTextContent('Hello there');
   });
 
-  it('keeps a link only when it is http(s) or mailto, opens it safely, and shows any other link as its text', () => {
+  it('keeps a link only when it is http(s), opens it safely, and shows any other link as its text', () => {
     const { container } = show(
       '[docs](https://example.com/a) [mail](mailto:a@example.com) [bad](javascript:alert(1)) [data](data:text/html;base64,PHNjcmlwdD4=) ![pixel](https://evil.example/p.png)',
     );
 
     const links = container.querySelectorAll('a');
-    expect([...links].map((link) => link.getAttribute('href'))).toEqual(['https://example.com/a', 'mailto:a@example.com']);
+    expect([...links].map((link) => link.getAttribute('href'))).toEqual(['https://example.com/a']);
     for (const link of links) {
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
       expect(link).toHaveAttribute('target', '_blank');
@@ -71,7 +65,78 @@ describe('AnswerMarkdown', () => {
     const { container } = show('# Big\n\n###### Small\n\nBody');
 
     expect(container.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull();
-    expect([...container.querySelectorAll('.am-heading')].map((heading) => heading.textContent)).toEqual(['Big', 'Small']);
+    expect([...container.querySelectorAll('.md-heading')].map((heading) => heading.textContent)).toEqual(['Big', 'Small']);
+  });
+
+  it('Markdown_List_RendersAListWithItsItems', () => {
+    const { container } = show('Key points:\n\n- first\n- second\n- third\n\n1. one\n2. two');
+
+    const [bullets, numbered] = [...container.querySelectorAll('ul, ol')];
+    expect(bullets.tagName).toBe('UL');
+    expect([...bullets.querySelectorAll(':scope > li')].map((item) => item.textContent)).toEqual(['first', 'second', 'third']);
+    expect(numbered.tagName).toBe('OL');
+    expect([...numbered.querySelectorAll(':scope > li')].map((item) => item.textContent)).toEqual(['one', 'two']);
+    // The dashes were the markup, not the words.
+    expect(container).not.toHaveTextContent('- first');
+  });
+
+  it('Markdown_Emphasis_RendersBoldItalicAndInlineCode', () => {
+    const { container } = show('A **bold** word, an *italic* one and `inline()` code.');
+
+    expect(container.querySelector('strong')).toHaveTextContent('bold');
+    expect(container.querySelector('em')).toHaveTextContent('italic');
+    expect(container.querySelector('code')).toHaveTextContent('inline()');
+    expect(container).not.toHaveTextContent('**');
+  });
+
+  it('Markdown_LineBreaks_Survive', () => {
+    const { container } = show('First line\nSecond line\n\nNew paragraph\\\nafter a hard break');
+
+    const [first, second] = [...container.querySelectorAll('p')];
+    // HTML folds a newline into a space, so each line break the model wrote is a <br>.
+    expect(first.querySelectorAll('br')).toHaveLength(1);
+    expect(first.innerHTML).toBe('First line<br>Second line');
+    expect(second.querySelectorAll('br')).toHaveLength(1);
+    expect(second).toHaveTextContent('New paragraphafter a hard break');
+  });
+
+  it('Markdown_Code_KeepsItsOwnNewlinesWithoutBreakTags', () => {
+    const { container } = show('```\nline one\nline two\n```');
+
+    expect(container.querySelector('pre code')?.textContent).toBe('line one\nline two\n');
+    expect(container.querySelector('pre br')).toBeNull();
+  });
+
+  it('Markdown_Image_RendersItsDescriptionAndStartsNoRequest', () => {
+    const fetchStub = vi.fn<typeof fetch>(() => Promise.reject(new Error('no request expected')));
+    vi.stubGlobal('fetch', fetchStub);
+    const imageSrc = vi.spyOn(HTMLImageElement.prototype, 'src', 'set');
+    try {
+      const { container } = show('Before ![A chart of the quarter](https://evil.example/pixel.png?q=secret) after, and a second ![](https://evil.example/2.png).');
+
+      expect(container.querySelector('img')).toBeNull();
+      expect(container).toHaveTextContent('Before A chart of the quarter after, and a second .');
+      expect(fetchStub).not.toHaveBeenCalled();
+      expect(imageSrc).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      imageSrc.mockRestore();
+    }
+  });
+
+  it('Markdown_ScriptAndJavascriptLink_AreNeitherElementsNorLinks', () => {
+    const { container } = show('<script>window.pwned = true</script>\n\n[click](javascript:window.pwned=true)\n\n<a href="javascript:window.pwned=true">raw</a>');
+
+    expect(container.querySelector('script, a')).toBeNull();
+    expect(container).toHaveTextContent('click');
+    expect('pwned' in window).toBe(false);
+  });
+
+  it('says nothing of citations when it is given none: [n] stays text', () => {
+    const { container } = render(<Markdown markdown="A summary.[1]" />);
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(container).toHaveTextContent('A summary.[1]');
   });
 
   it('AnswerMarkdown_CitationMarkersBecomeButtonsWithLangEn', async () => {

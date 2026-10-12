@@ -240,6 +240,26 @@ describe('a question and its run', () => {
     expect(within(article).getByText(/สัญญา ACME สิ้นสุด/)).toHaveAttribute('lang', 'th');
   });
 
+  it('Ask_Answer_RendersTheModelsMarkdown: a list is a list, a picture is its description and a line break is kept', async () => {
+    const opened = openAsk();
+    await screen.findByText(/Searching/);
+    await askQuestion(opened);
+    emit(opened, {
+      state: AgentRunState.DONE,
+      answer: artifact({ ...ANSWER, bodyMarkdown: 'The launch moved.[1]\nThe contract is unchanged.\n\n- **Date:** 15 Nov 2026\n- Owner: Pim\n\n![chart](https://evil.example/c.png)' }),
+    });
+
+    const article = screen.getByRole('article');
+    const body = article.querySelector('.md');
+    expect(body?.querySelectorAll('ul > li')).toHaveLength(2);
+    expect(within(article).getByText('Date:').tagName).toBe('STRONG');
+    expect(body?.querySelector('p br')).not.toBeNull();
+    expect(article.querySelector('img')).toBeNull();
+    expect(body).toHaveTextContent('chart');
+    // The marker still presses its source.
+    expect(within(article).getByRole('button', { name: /^Source 1/ })).toBeInTheDocument();
+  });
+
   it('NotFoundSlip_IsNotAFailure_KeepsPerforationIssuesRefAndListsSearchedChannels', async () => {
     const opened = openAsk();
     await screen.findByText(/Searching/);
