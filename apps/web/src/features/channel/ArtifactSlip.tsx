@@ -15,6 +15,8 @@ type ArtifactSlipProps = {
   artifact: ArtifactView;
   /** For a meeting summary: how many drafts it made that still wait on a person; unknown until the tasks have loaded. */
   draftCount?: number;
+  /** Leaves the slip's own title off, where the place that shows it already says it (the Ask thread titles a row with the question). */
+  omitTitle?: boolean;
 };
 
 /**
@@ -23,13 +25,13 @@ type ArtifactSlipProps = {
  * answer, with its REF) or a channel summary. Every one carries its REF and its sources, and the body of every one is the
  * model's markdown, shown through `Markdown`: a list is a list, never one paragraph of dashes.
  */
-export function ArtifactSlip({ artifact, draftCount }: ArtifactSlipProps) {
+export function ArtifactSlip({ artifact, draftCount, omitTitle = false }: ArtifactSlipProps) {
   const { plain } = useI18n();
   const labels = useLabels();
   const [pressed, setPressed] = useState<number | null>(null);
   const common = { ref: artifact.ref, generatedAt: artifact.generatedAt };
   const heading = {
-    ...(artifact.title === '' ? {} : { title: artifact.title }),
+    ...(artifact.title === '' || omitTitle ? {} : { title: artifact.title }),
     ...(artifact.meta === '' ? {} : { meta: <Caption text={artifact.meta} /> }),
   };
   const body = <Markdown markdown={artifact.bodyMarkdown} />;

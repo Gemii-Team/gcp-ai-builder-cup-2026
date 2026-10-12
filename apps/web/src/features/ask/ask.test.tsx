@@ -327,6 +327,34 @@ describe('a question and its run', () => {
     expect(await screen.findByText('Answer ready, ANS-2212: 2 sources.', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
+  it('writes the question of a channel summary once, as the title line of its row: the slip does not title itself with it again', async () => {
+    const opened = openAsk();
+    await screen.findByText(/Searching/);
+    await askQuestion(opened);
+    emit(opened, {
+      state: AgentRunState.DONE,
+      answer: artifact({
+        kind: ArtifactKind.CHANNEL_SUMMARY,
+        ref: 'ANS-2212',
+        title: QUESTION,
+        meta: '2 messages',
+        bodyMarkdown: 'The launch moves to **Friday**.',
+        scopeChannelIds: ['ch-q4'],
+        generatedAt: timestampFromDate(at('14:57')),
+        sources: [{ kind: SourceKind.MESSAGE, id: 'msg-41', anchor: '41', label: 'Arthit K.', channelId: 'ch-q4', at: timestampFromDate(at('14:02')) }],
+      }),
+    });
+
+    const article = screen.getByRole('article');
+    expect(within(article).getAllByText(QUESTION)).toHaveLength(1);
+    expect(within(article).getByRole('heading', { level: 2, name: QUESTION })).toBeInTheDocument();
+    // The rest of the slip stays: its REF, its body, its meta line and its sources.
+    expect(within(article).getByText('REF ANS-2212')).toBeInTheDocument();
+    expect(within(article).getByText('Friday').tagName).toBe('STRONG');
+    expect(article).toHaveTextContent('2 messages');
+    expect(within(article).getByText(/Arthit K\./)).toBeInTheDocument();
+  });
+
   it('says in words why a finished run with nothing to show has no answer, not that something went wrong', async () => {
     const opened = openAsk();
     await screen.findByText(/Searching/);

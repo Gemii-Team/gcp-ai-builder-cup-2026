@@ -115,7 +115,8 @@ export function Exchange({ exchange, asker, channelNames, channelCount, pressed,
         {answer?.kind === 'answer' && (
           <AnswerBlock answer={answer} channelNames={channelNames} pressed={pressed} onPress={onPress} selected={selected} onSources={onSources} say={say} />
         )}
-        {answer?.kind === 'channel_summary' && <ArtifactSlip artifact={answer} />}
+        {/* The server titles a slip with the question, which this row's title line already shows. */}
+        {answer?.kind === 'channel_summary' && <ArtifactSlip artifact={answer} omitTitle />}
       </div>
     </article>
   );
