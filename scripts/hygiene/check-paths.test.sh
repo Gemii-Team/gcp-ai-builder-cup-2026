@@ -112,6 +112,12 @@ staged "tfplan" 1 tfplan
 staged "a.tfvars" 1 a.tfvars
 staged ".terraform/ at the root" 1 .terraform/providers/x
 staged ".terraform/ nested" 1 deploy/terraform/.terraform/providers/x
+staged ".superpowers/ at the root" 1 .superpowers/sdd/x/progress.md
+staged ".superpowers/ file at the root" 1 .superpowers/notes.md
+staged "client_secret.json" 1 client_secret.json
+staged "client_secret_<id>.apps.googleusercontent.com.json" 1 client_secret_1234567890-abc.apps.googleusercontent.com.json
+staged "client_secret_<id>.apps.googleusercontent.com.json nested" 1 deploy/oauth/client_secret_1234567890-abc.apps.googleusercontent.com.json
+staged "client_secrets.json" 1 client_secrets.json
 
 # --- path cases: must be allowed (exit 0) -------------------------------------
 staged ".env.example" 0 .env.example
@@ -121,6 +127,9 @@ staged "backend/internal/docs/service.go (Go package named docs)" 0 backend/inte
 staged "packages/ui/docs/README.md (only the root docs/ is private)" 0 packages/ui/docs/README.md
 staged "packages/ui/DESIGN.md (only the root DESIGN.md is private)" 0 packages/ui/DESIGN.md
 staged "deploy/.env.example" 0 deploy/.env.example
+staged "packages/ui/.superpowers/x.md (only the root .superpowers/ is private)" 0 packages/ui/.superpowers/x.md
+staged "client_secret.go (only the .json files are credentials)" 0 backend/internal/identity/client_secret.go
+staged "client_secret_rotation.md" 0 client_secret_rotation.md
 
 # --- --staged edge cases -------------------------------------------------------
 repo=$(new_repo)

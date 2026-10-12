@@ -80,6 +80,38 @@ scan "indented KIWI_LLM_API_KEY=<value> is a leak" 2 kiwi-env-assignment-with-va
 printf '%sLLM_API_KEY = abc\n' KIWI_ | sample
 scan "spaces around = are still a leak" 2 kiwi-env-assignment-with-value
 
+# A shell `export` and a YAML mapping carry the same secrets as a .env line.
+{ printf 'export '; assign LLM_API_KEY abc; } | sample
+scan "export KIWI_LLM_API_KEY=<value> is a leak" 2 kiwi-env-assignment-with-value
+
+{ printf 'export   '; assign DB_PASSWORD abc; } | sample
+scan "export with several spaces KIWI_DB_PASSWORD=<value> is a leak" 2 kiwi-env-assignment-with-value
+
+{ printf '  export '; assign TOKEN_ENC_KEY abc; } | sample
+scan "indented export KIWI_TOKEN_ENC_KEY=<value> is a leak" 2 kiwi-env-assignment-with-value
+
+{ printf 'export '; assign LLM_API_KEY; } | sample
+scan "export KIWI_LLM_API_KEY= (empty) is clean" 0
+
+printf '%sLLM_API_KEY: abc\n' KIWI_ | sample
+scan "YAML KIWI_LLM_API_KEY: <value> is a leak" 2 kiwi-env-assignment-with-value
+
+printf '  %sDB_PASSWORD: abc\n' KIWI_ | sample
+scan "indented YAML KIWI_DB_PASSWORD: <value> is a leak" 2 kiwi-env-assignment-with-value
+
+printf '%sOAUTH_CLIENT_SECRET:   abc\n' KIWI_ | sample
+scan "YAML with several spaces after the colon is a leak" 2 kiwi-env-assignment-with-value
+
+printf '%sLLM_API_KEY:\n' KIWI_ | sample
+scan "YAML KIWI_LLM_API_KEY: (empty) is clean" 0
+
+{ printf '%sLLM_API_KEY:\n' KIWI_; printf '  other: x\n'; } | sample
+scan "YAML empty value followed by an indented key is clean" 0
+
+# A reference to a name is not an assignment: a manifest names the variable and reads the value elsewhere.
+{ printf '    - name: %sLLM_API_KEY\n' KIWI_; printf '      valueFrom:\n'; printf '        secretKeyRef:\n'; printf '          key: %sLLM_API_KEY\n' KIWI_; } | sample
+scan "a manifest that names the variable (name: / key:) is clean" 0
+
 { for v in $vars; do assign "$v"; done; } | sample
 scan ".env.example shape (every name, empty value) is clean" 0
 

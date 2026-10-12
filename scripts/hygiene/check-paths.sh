@@ -10,7 +10,7 @@
 # Exit 0: nothing offending. Exit 1: offending paths printed, one per line, to
 # stderr. Exit 2: usage or git error (never a silent pass).
 #
-# Anchoring mirrors .gitignore: docs/, .impeccable/, DESIGN.md and PRODUCT.md are
+# Anchoring mirrors .gitignore: docs/, .impeccable/, .superpowers/, DESIGN.md and PRODUCT.md are
 # private only at the repository root (backend/internal/docs is a Go package);
 # credential-shaped file names are refused at any depth.
 set -euo pipefail
@@ -24,13 +24,16 @@ usage() {
 blocked() {
   local path=$1 base=${1##*/}
   case $path in
-    docs/* | .impeccable/* | DESIGN.md | PRODUCT.md) return 0 ;;
+    docs/* | .impeccable/* | .superpowers/* | DESIGN.md | PRODUCT.md) return 0 ;;
     .terraform/* | */.terraform/*) return 0 ;;
   esac
   case $base in
     .env.example) return 1 ;;
     .env | .env.* | kubeconfig* | *.kubeconfig | *.pem | *.key | *.p12) return 0 ;;
     *-credentials.json | *-sa-key.json | service-account*.json | application_default_credentials.json) return 0 ;;
+    # The OAuth client file the Google console offers for download, named explicitly and then
+    # by its prefix (client_secrets.json and renamed copies).
+    client_secret_*.apps.googleusercontent.com.json | client_secret*.json) return 0 ;;
     *.tfstate* | *.tfplan | tfplan | *.tfvars) return 0 ;;
   esac
   return 1
