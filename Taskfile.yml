@@ -53,6 +53,11 @@ tasks:
     cmds:
       - bash scripts/check-gen-drift.sh
 
+  iac:check:
+    desc: "Check deploy/terraform offline, with every Google credential removed: terraform fmt, init, validate and test of each module (mocked google provider), tflint, a trivy configuration scan, and a render, init and validate of the Terragrunt stack against mock outputs. Plans and applies nothing and never initialises the state backend. Needs terraform (>= 1.11), terragrunt, tflint and trivy on PATH and network access (provider and ruleset downloads)"
+    cmds:
+      - bash scripts/iac/check.sh
+
   local:up:
     desc: Create the k3d cluster, load .env into Secret kiwi-env and start Tilt (OVERLAY=mockauth signs in through the mock provider; OVERLAY=local through Google)
     vars:
