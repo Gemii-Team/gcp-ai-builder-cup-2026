@@ -23,7 +23,7 @@ caddy = "2.11"
 terraform = "1.14"
 terragrunt = "0.93"
 tflint = "0.59"
-trivy = "0.66"
+trivy = "0.75"
 
 # Repository checks
 lefthook = "1.13"

@@ -91,3 +91,12 @@ run "bucket_name_defaults_to_the_project_id_and_uploads" {
     error_message = "the default bucket name is <project>-kiwi-uploads"
   }
 }
+
+run "deleted_and_overwritten_objects_are_recoverable_for_seven_days" {
+  command = plan
+
+  assert {
+    condition     = one(google_storage_bucket.uploads.soft_delete_policy).retention_duration_seconds == 604800
+    error_message = "versioning is off on purpose: soft delete must keep deleted and overwritten objects for seven days"
+  }
+}

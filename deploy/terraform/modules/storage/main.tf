@@ -5,7 +5,12 @@
 # Google-managed encryption is deliberate: a customer-managed key adds a Cloud KMS key to run and
 # pay for and a way to make every upload unreadable by losing it, for a demo workspace's documents.
 # The bucket is private, uniform-access and encrypted at rest by Google.
+# Object versioning is off on purpose (newer Trivy reports it as GCP-0078, older ones do not):
+# uploads are written once, and what versioning protects against, an accidental delete or an
+# overwrite, is covered by the soft delete policy below, which keeps the previous bytes for seven
+# days; versioning would keep every overwritten generation, billed, for ever without a rule to expire it.
 #trivy:ignore:AVD-GCP-0066
+#trivy:ignore:AVD-GCP-0078
 resource "google_storage_bucket" "uploads" {
   project  = var.project_id
   name     = coalesce(var.bucket_name, "${var.project_id}-kiwi-uploads")
@@ -19,6 +24,12 @@ resource "google_storage_bucket" "uploads" {
   # a signed URL, which is IAM acting through a service account.
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
+
+  # Deleted and overwritten objects stay recoverable for seven days (the Cloud Storage default,
+  # written out so the choice is visible and the reasoning above holds).
+  soft_delete_policy {
+    retention_duration_seconds = 604800
+  }
 
   # Browser PUT (upload) and GET/HEAD (download) of signed URLs, from the app's own origin only.
   cors {

@@ -179,7 +179,8 @@ jobs:
       TERRAFORM_VERSION: 1.14.0
       TERRAGRUNT_VERSION: 0.93.8
       TFLINT_VERSION: v0.59.1
-      TRIVY_VERSION: v0.66.0
+      # v0.66.0 is no longer published (its release page is gone, so the installer cannot fetch it).
+      TRIVY_VERSION: v0.75.0
     steps:
       - name: Check out
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
