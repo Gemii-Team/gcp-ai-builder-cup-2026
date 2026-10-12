@@ -4,9 +4,17 @@
 	auto_https off
 }
 
-:80 {
+:8080 {
 	root * /usr/share/caddy
 	encode zstd gzip
+
+	# The safe browser headers on every response of the app. A Content-Security-Policy is not
+	# among them: it needs a pass in a real browser (PWA, service worker, self-hosted fonts).
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+	}
 
 	# Kubernetes probes: this process is up, and it has no dependencies to wait for.
 	handle /healthz {

@@ -155,25 +155,18 @@ k8s_resource(
 )
 
 if web_enabled:
-    # The host builds the bundle; a change is synced into the running Caddy
-    # container (apps/web/Dockerfile serves /usr/share/caddy) instead of rebuilding the image.
-    local_resource(
-        'web-build',
-        cmd='pnpm --filter web build',
-        deps=['apps/web/src', 'apps/web/public', 'apps/web/index.html', 'apps/web/vite.config.ts', 'packages'],
-        ignore=['**/node_modules', '**/dist'],
-        labels=['web'],
-    )
+    # The Vite build runs inside the image build (apps/web/Dockerfile), so a change under
+    # apps/web or packages rebuilds the image. There is no live_update: the container runs as
+    # an unprivileged user with a read-only root filesystem, so nothing can be synced into
+    # it; the rebuild is the path.
     docker_build(
         REGISTRY + '/web',
         '.',
         dockerfile='apps/web/Dockerfile',
         only=['apps/web', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json'],
-        ignore=['**/node_modules'],
-        live_update=[sync('apps/web/dist', '/usr/share/caddy')],
+        ignore=['**/node_modules', '**/dist'],
     )
     k8s_resource(
         'web',
-        resource_deps=['web-build'],
         labels=['app'],
     )

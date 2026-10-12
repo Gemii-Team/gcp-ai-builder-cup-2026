@@ -1,4 +1,4 @@
-# The web image: the Vite build, served by Caddy on port 80.
+# The web image: the Vite build, served by Caddy on port 8080 as user 65532.
 # The build context is the repository root, because the app depends on the workspace packages:
 #   docker build -f apps/web/Dockerfile .
 
@@ -17,6 +17,14 @@ RUN pnpm install --offline --frozen-lockfile --filter web...
 RUN pnpm --filter web build
 
 FROM caddy:2-alpine
+# The base image gives /usr/bin/caddy the file capability cap_net_bind_service=ep so that it can
+# bind port 80 as a non-root user. Port 8080 needs none, and a container that drops ALL
+# capabilities cannot exec a binary that carries one (the kernel answers EPERM).
+RUN setcap -r /usr/bin/caddy \
+ && chown -R 65532:65532 /data /config
 COPY apps/web/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/apps/web/dist /usr/share/caddy
-EXPOSE 80
+# Caddy writes only to /data, /config and /tmp (the Deployment mounts emptyDirs there and
+# keeps the root filesystem read-only).
+USER 65532:65532
+EXPOSE 8080

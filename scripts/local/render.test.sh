@@ -217,6 +217,71 @@ ingress_routes() {
 }
 check "Ingress (class traefik) routes /api and /ws to kiwi and / to web" ingress_routes
 
+# web: Caddy runs as the unprivileged user on 8080 with a read-only root filesystem, like kiwi,
+# mockoidc and llmreplay. Its own state (/data, /config) and /tmp are emptyDirs; the Ingress
+# still sends / to Service port 80, which targets the named container port.
+web_workload() {
+  local dep svc rc=0 mount
+  dep=$(doc Deployment web)
+  svc=$(doc Service web)
+  [ -n "$dep" ] || { echo "no Deployment web"; return 1; }
+  [ -n "$svc" ] || { echo "no Service web"; return 1; }
+  printf '%s\n' "$dep" | grep -qE '^ *(- )?containerPort: 8080$' || { echo "the container does not listen on 8080"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *(- )?containerPort: 80$' && { echo "the container still declares port 80"; rc=1; }
+  printf '%s\n' "$svc" | awk '/^ *port: 80$/ { p = 1 } /^ *targetPort: http$/ { t = 1 } END { exit !(p && t) }' || { echo "the Service is not port 80 -> targetPort http"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *runAsNonRoot: true$' || { echo "the container may run as root"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *runAsUser: 65532$' || { echo "the user is not 65532"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *runAsGroup: 65532$' || { echo "the group is not 65532"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *readOnlyRootFilesystem: true$' || { echo "the root filesystem is not read-only"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *allowPrivilegeEscalation: false$' || { echo "the container may escalate privileges"; rc=1; }
+  printf '%s\n' "$dep" | grep -qE '^ *type: RuntimeDefault$' || { echo "no seccomp profile"; rc=1; }
+  printf '%s\n' "$dep" | awk '/^ *drop:$/ { d = 1; next } d && /^ *- ALL$/ { ok = 1 } END { exit !ok }' || { echo "the capabilities are not dropped"; rc=1; }
+  [ "$(printf '%s\n' "$dep" | grep -cE '^ *port: http$')" -eq 2 ] || { echo "the readiness and liveness probes do not both use the named port"; rc=1; }
+  for mount in /data /config /tmp; do
+    printf '%s\n' "$dep" | awk -v mp="$mount" '
+      $0 ~ "^ *- mountPath: " mp "$" { want = 1; next }
+      want && /^ *name: / { vol = $2; want = 0 }
+      /^ *- emptyDir: \{\}$/ { pend = 1; next }
+      pend && /^ *name: / { empty[$2] = 1; pend = 0 }
+      END { exit !(vol != "" && empty[vol]) }
+    ' || { echo "$mount is not an emptyDir mount"; rc=1; }
+  done
+  return "$rc"
+}
+check "web: Deployment on 8080 as 65532, read-only root with emptyDirs at /data /config /tmp, no capabilities, seccomp; Service 80 -> http" web_workload
+
+# The image the Deployment runs: what Dockerfile and Caddyfile promise must match the manifest.
+web_image_sources() {
+  local rc=0 code
+  grep -qxE 'USER 65532(:65532)?' apps/web/Dockerfile || { echo "the Dockerfile does not run as 65532"; rc=1; }
+  grep -qxE 'EXPOSE 8080' apps/web/Dockerfile || { echo "the Dockerfile does not expose 8080"; rc=1; }
+  grep -qE '^EXPOSE 80$' apps/web/Dockerfile && { echo "the Dockerfile still exposes 80"; rc=1; }
+  # caddy:2-alpine puts cap_net_bind_service=ep on the binary: once the container drops ALL
+  # capabilities, exec of such a binary fails with EPERM.
+  grep -qE '^RUN .*setcap -r /usr/bin/caddy' apps/web/Dockerfile || { echo "the Dockerfile leaves the file capability on /usr/bin/caddy"; rc=1; }
+  code=$(grep -vE '^[[:space:]]*#' apps/web/Caddyfile)
+  printf '%s\n' "$code" | grep -qE '^:8080 \{$' || { echo "the Caddyfile does not serve :8080"; rc=1; }
+  printf '%s\n' "$code" | grep -qE '^:80 \{$' && { echo "the Caddyfile still serves :80"; rc=1; }
+  printf '%s\n' "$code" | grep -qE '^[[:space:]]+X-Content-Type-Options +nosniff$' || { echo "no X-Content-Type-Options: nosniff"; rc=1; }
+  printf '%s\n' "$code" | grep -qE '^[[:space:]]+X-Frame-Options +DENY$' || { echo "no X-Frame-Options: DENY"; rc=1; }
+  printf '%s\n' "$code" | grep -qE '^[[:space:]]+Referrer-Policy +same-origin$' || { echo "no Referrer-Policy: same-origin"; rc=1; }
+  # A Content-Security-Policy needs a pass in a real browser (PWA, service worker, fonts): not added blind.
+  printf '%s\n' "$code" | grep -qi 'Content-Security-Policy' && { echo "a Content-Security-Policy that no browser has been tried with"; rc=1; }
+  return "$rc"
+}
+check "web image: Dockerfile and Caddyfile run as 65532 on 8080 without the file capability, with the safe headers and no CSP" web_image_sources
+
+if command -v caddy >/dev/null 2>&1; then
+  check "web image: caddy validate accepts the Caddyfile" caddy validate --config apps/web/Caddyfile --adapter caddyfile
+else
+  printf 'SKIP web image: caddy is not installed, the Caddyfile is not validated\n'
+fi
+
+# The Tilt live_update copies the bundle into the running container, which a read-only root
+# filesystem refuses: the web image is rebuilt instead.
+tilt_web_has_no_live_update() { ! grep -vE '^[[:space:]]*#' Tiltfile | grep -q 'live_update'; }
+check "Tiltfile: the web image has no live_update (its root filesystem is read-only)" tilt_web_has_no_live_update
+
 # --- the mockauth overlay -------------------------------------------------------------
 # The default stack signs in through the mock provider (backend/tools/mockoidc):
 # `local` plus mockoidc, and a kiwi that differs from `local` only in the two

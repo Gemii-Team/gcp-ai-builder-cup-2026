@@ -1,5 +1,6 @@
-# The web image (Caddy serving the Vite build) on port 80. The kiwi API and the
-# WebSocket are reached through the Ingress, never through this Service.
+# The web image (Caddy serving the Vite build) on port 8080 as an unprivileged user with a
+# read-only root filesystem, like kiwi. The Service keeps port 80 for the Ingress. The kiwi
+# API and the WebSocket are reached through the Ingress, never through this Service.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,12 +19,19 @@ spec:
         app.kubernetes.io/name: web
         app.kubernetes.io/part-of: kiwi
     spec:
+      securityContext:
+        # The image runs as 65532 (apps/web/Dockerfile).
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: web
           image: web
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
           readinessProbe:
             httpGet:
               path: /
@@ -40,6 +48,26 @@ spec:
               memory: 32Mi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Caddy keeps its state under XDG_DATA_HOME (/data) and XDG_CONFIG_HOME (/config)
+          # and uses /tmp; nothing else is written.
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
