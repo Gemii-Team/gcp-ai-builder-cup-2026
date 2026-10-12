@@ -55,7 +55,7 @@ tasks:
       - k3d cluster delete kiwi
 
   seed:
-    desc: "Seed a workspace in the running cluster (flags after --: none seeds demo.example with alice and bob; --members a@gmail.com alone, the one workspace without a domain; --domain x.com)"
+    desc: "Seed a workspace in the running cluster (flags after --: none seeds demo.example with alice and bob; --members a@gmail.com alone, the one workspace without a domain, with demo people Nok and Pim in front of a@gmail.com; --domain x.com)"
     cmds:
       - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi seed {{.CLI_ARGS}}
 

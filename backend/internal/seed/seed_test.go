@@ -629,15 +629,21 @@ func (h *harness) workspaces() (n int) {
 }
 
 // A team whose Google accounts carry no hd is seeded without a domain: the one
-// workspace without one, its members the invitations the sign-in rule reads, the
-// first of them owning the channels. A single member works.
-func TestSeed_WithoutADomain_SeedsTheWorkspaceWithoutOne(t *testing.T) {
+// workspace without one, its members the invitations the sign-in rule reads. The seed
+// puts its two fixed demo people in front of the members given, so the first of them
+// owns the channels and the conversation is not all the real member's.
+func TestSeed_WithoutADomain_PutsTwoDemoPeopleBeforeTheMembersGiven(t *testing.T) {
 	const first, second = "owner@gmail.example", "Second@Gmail.example"
 	h := newHarness(t)
 
 	h.mustRun(Options{MemberEmails: []string{first, second}, IndexInline: true})
 
-	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), h.db, "", []string{first, second})
+	// The demo people are fixed, and on the reserved TLD no Google account can have.
+	if want := []string{"nok@kiwi-demo.invalid", "pim@kiwi-demo.invalid"}; !slices.Equal(DemoPeople, want) {
+		t.Fatalf("DemoPeople = %v, want %v", DemoPeople, want)
+	}
+	everyone := slices.Concat(DemoPeople, []string{first, "second@gmail.example"})
+	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), h.db, "", everyone)
 	if err != nil {
 		t.Fatalf("EnsureSeedWorkspace: %v", err)
 	}
@@ -647,14 +653,20 @@ func TestSeed_WithoutADomain_SeedsTheWorkspaceWithoutOne(t *testing.T) {
 	if n := h.count(ws, `SELECT count(*) FROM identity.workspaces WHERE google_domain IS NULL`); n != 1 {
 		t.Errorf("%d workspaces without a domain, want 1", n)
 	}
-	if n := h.count(ws, `SELECT count(*) FROM identity.users WHERE google_sub = 'seed:' || email AND email IN ('owner@gmail.example', 'second@gmail.example')`); n != 2 {
-		t.Errorf("%d placeholder users with the lowercased addresses, want 2", n)
+	if n := h.count(ws, `SELECT count(*) FROM identity.users`); n != 4 {
+		t.Errorf("%d users, want the 2 demo people and the 2 given", n)
+	}
+	if n := h.count(ws, `SELECT count(*) FROM identity.users WHERE google_sub = 'seed:' || email
+		AND email IN ('nok@kiwi-demo.invalid', 'pim@kiwi-demo.invalid', 'owner@gmail.example', 'second@gmail.example')`); n != 4 {
+		t.Errorf("%d placeholder users with the lowercased addresses, want 4", n)
 	}
 	if hr, ok := h.channels(ws, ids[0])["hr-private"]; !ok || hr.GetKind() != chatv1.ChannelKind_CHANNEL_KIND_PRIVATE {
-		t.Errorf("the owner sees %v, want the private hr-private", h.channels(ws, ids[0]))
+		t.Errorf("the first demo person sees %v, want the private hr-private", h.channels(ws, ids[0]))
 	}
-	if _, ok := h.channels(ws, ids[1])["hr-private"]; ok {
-		t.Error("the second member sees hr-private")
+	for i, id := range ids[1:] {
+		if _, ok := h.channels(ws, id)["hr-private"]; ok {
+			t.Errorf("member %d sees hr-private", i+1)
+		}
 	}
 	first1 := h.counts(ws)
 
@@ -662,14 +674,84 @@ func TestSeed_WithoutADomain_SeedsTheWorkspaceWithoutOne(t *testing.T) {
 	if again := h.counts(ws); !mapsEqual(first1, again) {
 		t.Errorf("row counts changed on the second run:\n first  %v\n second %v", first1, again)
 	}
+}
 
-	solo := newHarness(t)
-	solo.mustRun(Options{MemberEmails: []string{first}, IndexInline: true})
-	soloWS, soloIDs, err := identity.EnsureSeedWorkspace(t.Context(), solo.db, "", []string{first})
+// The member given is a plain member of the public channels: Nok and Pim write the
+// conversation and own what the meeting drafted, and the member cannot read the one
+// channel they are not in, which is a real access demonstration.
+func TestSeed_WithoutADomain_TheMemberGivenAuthorsAndOwnsNothing(t *testing.T) {
+	const given = "Owner@Gmail.example"
+	h := newHarness(t)
+	h.mustRun(Options{MemberEmails: []string{given}, IndexInline: true})
+	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), h.db, "", slices.Concat(DemoPeople, []string{given}))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("EnsureSeedWorkspace: %v", err)
 	}
-	if n := solo.count(soloWS, `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id <> $1`, soloIDs[0]); n != 0 {
-		t.Errorf("%d messages by another author, want every message by the one member", n)
+	nok, pim, owner := ids[0], ids[1], ids[2]
+
+	for what, query := range map[string]string{
+		"messages":            `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id = $1`,
+		"channels they own":   `SELECT count(*) FROM chat.channel_members WHERE role = 'owner' AND user_id = $1`,
+		"drafts they own":     `SELECT count(*) FROM tasks.tasks WHERE assignee_id = $1`,
+		"uploaded files":      `SELECT count(*) FROM files.files WHERE uploaded_by = $1`,
+		"meetings they own":   `SELECT count(*) FROM meetings.meetings WHERE owner_user_id = $1`,
+		"private memberships": `SELECT count(*) FROM chat.channel_members m JOIN chat.channels c ON c.id = m.channel_id WHERE c.kind = 'private' AND m.user_id = $1`,
+	} {
+		if n := h.count(ws, query, owner); n != 0 {
+			t.Errorf("the member given has %d %s, want none: they did nothing in the demo", n, what)
+		}
+	}
+	for _, demo := range []uuid.UUID{nok, pim} {
+		if n := h.count(ws, `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id = $1`, demo); n == 0 {
+			t.Errorf("demo person %s wrote no message", demo)
+		}
+		if n := h.count(ws, `SELECT count(*) FROM tasks.tasks WHERE assignee_id = $1`, demo); n != 1 {
+			t.Errorf("demo person %s owns %d drafts, want 1 of the 2 that have an owner", demo, n)
+		}
+	}
+	if n := h.count(ws, `SELECT count(*) FROM chat.channel_members WHERE role = 'owner' AND user_id = $1`, nok); n != 3 {
+		t.Errorf("the first demo person owns %d channels, want all 3", n)
+	}
+	for _, name := range []string{"general", "q4-launch"} {
+		if c, ok := h.channels(ws, owner)[name]; !ok || c.GetKind() != chatv1.ChannelKind_CHANNEL_KIND_PUBLIC {
+			t.Errorf("the member given does not see the public #%s", name)
+		}
+	}
+
+	retr := h.retriever()
+	search := func(who uuid.UUID, text string) []knowledge.Hit {
+		t.Helper()
+		hits, err := retr.Search(t.Context(), user(ws, who), knowledge.Query{Text: text, Lang: "en", Limit: 100})
+		if err != nil {
+			t.Fatalf("Search(%q): %v", text, err)
+		}
+		return hits
+	}
+	contains := func(hits []knowledge.Hit, phrase string) bool {
+		return slices.ContainsFunc(hits, func(h knowledge.Hit) bool { return strings.Contains(h.Content, phrase) })
+	}
+	const private = "merit increase pool"
+	if hits := search(nok, private); !contains(hits, private) {
+		t.Fatalf("the first demo person did not find #hr-private: %v", hits)
+	}
+	if hits := search(owner, private); contains(hits, private) || contains(hits, "performance review calibration") {
+		t.Errorf("the member given retrieved what is said in #hr-private: %v", hits)
+	}
+	if hits := search(owner, "Bang Na warehouse capacity"); !contains(hits, "9,600 pallet positions") {
+		t.Errorf("the member given did not find the warehouse document in #q4-launch: %v", hits)
+	}
+}
+
+// A seed with a domain is what it was: the members given, and only them.
+func TestSeed_WithADomain_AddsNoDemoPeople(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun(inline(members...))
+	ws, _ := h.workspace(members...)
+
+	if n := h.count(ws, `SELECT count(*) FROM identity.users`); n != len(members) {
+		t.Errorf("%d users, want only the %d given", n, len(members))
+	}
+	if n := h.count(ws, `SELECT count(*) FROM identity.users WHERE email LIKE '%@kiwi-demo.invalid'`); n != 0 {
+		t.Errorf("%d demo people in a workspace with a domain, want none", n)
 	}
 }

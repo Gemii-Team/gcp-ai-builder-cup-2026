@@ -12,7 +12,8 @@
 //
 // The workspace is that of a Google domain (its members sign in with hd) or, with no
 // domain, the one workspace without a domain: its members are personal Google accounts
-// that sign in because the seed listed them (identity.EnsureSeedWorkspace).
+// that sign in because the seed listed them (identity.EnsureSeedWorkspace), behind
+// DemoPeople, two placeholders nobody can sign in as, who write the conversation.
 package seed
 
 import (
@@ -47,6 +48,13 @@ import (
 // namespace derives the ids of seeded things (UUIDv5), so they are the same on every run.
 var namespace = uuid.NewSHA1(uuid.NameSpaceDNS, []byte("seed.kiwi.local"))
 
+// DemoPeople are the two people a seed of the workspace without a domain puts in front
+// of the members it is given, so the demo conversation reads as a team and not as one
+// person talking to themselves: they own the channels and write the messages. The
+// addresses are on the .invalid top-level domain (RFC 6761), which no Google account
+// can have, so a placeholder user made for one can never be claimed by anybody.
+var DemoPeople = []string{"nok@kiwi-demo.invalid", "pim@kiwi-demo.invalid"}
+
 const (
 	// analyzeTimeout bounds the model's summary of the document; the adapter has no
 	// timeout of its own.
@@ -72,7 +80,10 @@ type Deps struct {
 // are listed here. MemberEmails are its members, in order: the first one owns the
 // channels and is the only member of the private one, the first two write the messages
 // and are named as owners of the drafts (a single member writes every message and owns
-// the drafts that have an owner).
+// the drafts that have an owner). The workspace without a domain gets DemoPeople in
+// front of them, so with it the demo people own the channels and write the
+// conversation, and the members given are plain members of the public channels who do
+// and own nothing.
 // Each is a placeholder user until that email signs in. With
 // IndexInline Run analyses the document and indexes everything itself, and the workspace
 // can be searched when it returns; without it Run leaves both to the doc.analyze and
@@ -84,11 +95,15 @@ type Options struct {
 }
 
 // clean checks Options and returns the domain (empty for the workspace without one) and
-// the emails the way identity keeps them.
+// the emails the way identity keeps them: for the workspace without a domain the
+// DemoPeople first, then the members given.
 func (o Options) clean() (domain string, emails []string, err error) {
 	domain = strings.ToLower(strings.TrimSpace(o.Domain))
 	if len(o.MemberEmails) == 0 {
 		return "", nil, errors.New("seed: at least one member is required: the first one owns the channels")
+	}
+	if domain == "" {
+		emails = slices.Clone(DemoPeople)
 	}
 	for _, raw := range o.MemberEmails {
 		email := strings.ToLower(strings.TrimSpace(raw))

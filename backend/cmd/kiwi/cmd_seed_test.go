@@ -76,6 +76,9 @@ func TestSeed_TakesNoArgumentsAndKnowsItsFlags(t *testing.T) {
 		"any Google account that proves that exact address can claim it",
 		"placeholders never expire",
 		"already belongs to another workspace is refused",
+		"nok@kiwi-demo.invalid and pim@kiwi-demo.invalid are added in front of them",
+		"which no Google account can have",
+		"the members given are plain members of the public channels, who cannot read #hr-private",
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("seed -h does not say %q:\n%s", want, help)
@@ -234,50 +237,20 @@ func TestSeed_DefaultsSeedTheMockUsersAndKeepHRPrivate(t *testing.T) {
 		t.Fatalf("seeded %v with users %v, want demo.example with exactly alice and bob", domains, emails)
 	}
 
-	cfg, err := config.Load(nil, os.Getenv)
+	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), openDB(t), "demo.example", []string{"alice@demo.example", "bob@demo.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := llmfactory.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := db.Open(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(d.Close)
-	c, err := cache.Open(t.Context(), cfg.ValkeyURL, cache.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), d, "demo.example", []string{"alice@demo.example", "bob@demo.example"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	az := authz.New(chat.NewMembership(d, c))
-	retr := knowledge.NewRetriever(knowledge.Deps{DB: d, LLM: model, Authz: az, Chat: chat.New(chat.Deps{DB: d, Authz: az, Cache: c})})
-	search := func(who uuid.UUID, text string) []knowledge.Hit {
-		t.Helper()
-		hits, err := retr.Search(t.Context(), authz.Actor{Kind: authz.ActorUser, WorkspaceID: ws, UserID: who}, knowledge.Query{Text: text, Lang: "en", Limit: 100})
-		if err != nil {
-			t.Fatalf("Search(%q): %v", text, err)
-		}
-		return hits
-	}
-	mentions := func(hits []knowledge.Hit, phrase string) bool {
-		return slices.ContainsFunc(hits, func(h knowledge.Hit) bool { return strings.Contains(h.Content, phrase) })
-	}
+	search := searcher(t)
 
 	const private = "merit increase pool"
-	if hits := search(ids[0], private); !mentions(hits, private) {
+	if hits := search(ws, ids[0], private); !mentions(hits, private) {
 		t.Fatalf("alice, the first member, did not find #hr-private: %v", hits)
 	}
-	if hits := search(ids[1], private); mentions(hits, private) || mentions(hits, "performance review calibration") {
+	if hits := search(ws, ids[1], private); mentions(hits, private) || mentions(hits, "performance review calibration") {
 		t.Errorf("bob retrieved what is said in #hr-private: %v", hits)
 	}
-	if hits := search(ids[1], "Bang Na warehouse capacity"); !mentions(hits, "9,600 pallet positions") {
+	if hits := search(ws, ids[1], "Bang Na warehouse capacity"); !mentions(hits, "9,600 pallet positions") {
 		t.Errorf("bob did not find the warehouse document in #q4-launch: %v", hits)
 	}
 
@@ -309,8 +282,9 @@ func TestSeed_FlagsOverrideTheDefaults(t *testing.T) {
 
 // TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne is how the real Google sign-in
 // is prepared when the team has no Workspace domain: `task seed -- --members <address>`.
-// The one workspace has no domain, the member is a placeholder with the lowercased
-// address, and running it again changes nothing. An empty --domain says the same thing.
+// The one workspace has no domain, the demo people come first and the member is a
+// placeholder with the lowercased address after them, and running it again changes
+// nothing. An empty --domain says the same thing.
 func TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne(t *testing.T) {
 	env := seedPod(t)
 
@@ -318,9 +292,10 @@ func TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne(t *testing.T) {
 	if code := run(t.Context(), []string{"seed", "--members", " Pat@Gmail.example "}, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr: %s", code, stderr.String())
 	}
+	want := []string{"nok@kiwi-demo.invalid", "pat@gmail.example", "pim@kiwi-demo.invalid"}
 	domains, emails := seededUsers(t, env)
-	if !slices.Equal(domains, []string{noDomain}) || !slices.Equal(emails, []string{"pat@gmail.example"}) {
-		t.Fatalf("seeded %v with users %v, want the workspace without a domain with pat only", domains, emails)
+	if !slices.Equal(domains, []string{noDomain}) || !slices.Equal(emails, want) {
+		t.Fatalf("seeded %v with users %v, want the workspace without a domain with nok, pat and pim", domains, emails)
 	}
 
 	if code := run(t.Context(), []string{"seed", "--domain", "", "--members", "pat@gmail.example"}, &stderr); code != 0 {
@@ -329,6 +304,123 @@ func TestSeed_MembersWithoutDomainSeedTheWorkspaceWithoutOne(t *testing.T) {
 	if domains2, emails2 := seededUsers(t, env); !slices.Equal(domains2, domains) || !slices.Equal(emails2, emails) {
 		t.Errorf("after a second run: %v with users %v, want %v with %v", domains2, emails2, domains, emails)
 	}
+}
+
+// TestSeed_WithoutDomainTheDemoPeopleWriteAndTheMemberGivenCannotReadHRPrivate is the
+// shape a real Google sign-in demo takes: Nok and Pim own the channels and write the
+// conversation, so the person who signs in reads it as a team, wrote none of it, and
+// owns none of what the meeting drafted. Asking about #hr-private, which only Nok is
+// in, finds nothing for them: a real access boundary on show.
+func TestSeed_WithoutDomainTheDemoPeopleWriteAndTheMemberGivenCannotReadHRPrivate(t *testing.T) {
+	env := seedPod(t)
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"seed", "--members", "pat@gmail.example"}, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr: %s", code, stderr.String())
+	}
+
+	ws, ids, err := identity.EnsureSeedWorkspace(t.Context(), openDB(t), "", []string{"nok@kiwi-demo.invalid", "pim@kiwi-demo.invalid", "pat@gmail.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nok, pat := ids[0], ids[2]
+	for what, query := range map[string]string{
+		"messages":          `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id = $1`,
+		"channels they own": `SELECT count(*) FROM chat.channel_members WHERE role = 'owner' AND user_id = $1`,
+		"drafts they own":   `SELECT count(*) FROM tasks.tasks WHERE assignee_id = $1`,
+	} {
+		if n := countAsOwner(t, env, ws, query, pat); n != 0 {
+			t.Errorf("the member given has %d %s, want none", n, what)
+		}
+	}
+	if n := countAsOwner(t, env, ws, `SELECT count(*) FROM chat.messages WHERE author_kind = 'user' AND author_id <> $1`, pat); n == 0 {
+		t.Error("the demo people wrote no message")
+	}
+
+	search := searcher(t)
+	const private = "merit increase pool"
+	if hits := search(ws, nok, private); !mentions(hits, private) {
+		t.Fatalf("nok, the first member, did not find #hr-private: %v", hits)
+	}
+	if hits := search(ws, pat, private); mentions(hits, private) || mentions(hits, "performance review calibration") {
+		t.Errorf("the member given retrieved what is said in #hr-private: %v", hits)
+	}
+	if hits := search(ws, pat, "Bang Na warehouse capacity"); !mentions(hits, "9,600 pallet positions") {
+		t.Errorf("the member given did not find the warehouse document in #q4-launch: %v", hits)
+	}
+}
+
+// openDB opens the pod's database as `kiwi seed` does, and closes it with the test.
+func openDB(t *testing.T) *db.DB {
+	t.Helper()
+	cfg, err := config.Load(nil, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
+	return d
+}
+
+// countAsOwner runs a count as kiwi_owner in a transaction bound to ws, which is how the
+// tests read tenant rows.
+func countAsOwner(t *testing.T, env *dbtest.Env, ws uuid.UUID, sql string, args ...any) (n int) {
+	t.Helper()
+	ctx := t.Context()
+	conn, err := pgx.Connect(ctx, env.OwnerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('kiwi.workspace_id', $1, true)`, ws.String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+	return n
+}
+
+// searcher returns a search of the seeded workspace as one of its users, through the
+// model and the database the pod's environment names.
+func searcher(t *testing.T) func(ws, who uuid.UUID, text string) []knowledge.Hit {
+	t.Helper()
+	cfg, err := config.Load(nil, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := llmfactory.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := openDB(t)
+	c, err := cache.Open(t.Context(), cfg.ValkeyURL, cache.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	az := authz.New(chat.NewMembership(d, c))
+	retr := knowledge.NewRetriever(knowledge.Deps{DB: d, LLM: model, Authz: az, Chat: chat.New(chat.Deps{DB: d, Authz: az, Cache: c})})
+	return func(ws, who uuid.UUID, text string) []knowledge.Hit {
+		t.Helper()
+		hits, err := retr.Search(t.Context(), authz.Actor{Kind: authz.ActorUser, WorkspaceID: ws, UserID: who}, knowledge.Query{Text: text, Lang: "en", Limit: 100})
+		if err != nil {
+			t.Fatalf("Search(%q): %v", text, err)
+		}
+		return hits
+	}
+}
+
+// mentions reports whether any hit says phrase.
+func mentions(hits []knowledge.Hit, phrase string) bool {
+	return slices.ContainsFunc(hits, func(h knowledge.Hit) bool { return strings.Contains(h.Content, phrase) })
 }
 
 func TestSeed_DomainFlagRules(t *testing.T) {

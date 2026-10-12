@@ -54,7 +54,8 @@ func seedDomain(domain string, given map[string]bool) (string, error) {
 // returns (seed.Options.IndexInline), and can be run again: a second run changes nothing.
 //
 // What is seeded follows the flags (seedDomain): none, the mock sign-in's workspace;
-// --domain, that Google domain; --members alone, the one workspace without a domain.
+// --domain, that Google domain; --members alone, the one workspace without a domain, where
+// seed.DemoPeople come first and the members given follow.
 func runSeed(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
 	var usage bytes.Buffer
@@ -63,7 +64,10 @@ func runSeed(ctx context.Context, args []string) error {
 	members := fs.String("members", defaultMembers, "comma-separated member emails; the first owns the channels and is the only member of #hr-private. "+
 		"Each is invited: an account without hd signs in as its address's placeholder user, in any workspace (also one with a domain), "+
 		"and until that first sign-in binds it any Google account that proves that exact address can claim it; placeholders never expire. "+
-		"An address that already belongs to another workspace is refused")
+		"An address that already belongs to another workspace is refused. "+
+		"In the one workspace without a domain "+strings.Join(seed.DemoPeople, " and ")+" are added in front of them: demo people on a reserved .invalid address, "+
+		"which no Google account can have, so nobody can sign in as them or claim them. They own the channels and write the demo conversation, "+
+		"and the members given are plain members of the public channels, who cannot read #hr-private")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, werr := io.WriteString(os.Stdout, usage.String())
