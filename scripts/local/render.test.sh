@@ -257,8 +257,14 @@ web_image_sources() {
   grep -qxE 'EXPOSE 8080' apps/web/Dockerfile || { echo "the Dockerfile does not expose 8080"; rc=1; }
   grep -qE '^EXPOSE 80$' apps/web/Dockerfile && { echo "the Dockerfile still exposes 80"; rc=1; }
   # caddy:2-alpine puts cap_net_bind_service=ep on the binary: once the container drops ALL
-  # capabilities, exec of such a binary fails with EPERM.
-  grep -qE '^RUN .*setcap -r /usr/bin/caddy' apps/web/Dockerfile || { echo "the Dockerfile leaves the file capability on /usr/bin/caddy"; rc=1; }
+  # capabilities, exec of such a binary fails with EPERM. The base tag floats, so the removal
+  # runs only where getcap finds a capability (a later base without one still builds), and a
+  # setcap that fails is never swallowed.
+  local docker
+  docker=$(grep -vE '^[[:space:]]*#' apps/web/Dockerfile)
+  printf '%s\n' "$docker" | grep -qF 'setcap -r /usr/bin/caddy' || { echo "the Dockerfile leaves the file capability on /usr/bin/caddy"; rc=1; }
+  printf '%s\n' "$docker" | grep -qF 'getcap /usr/bin/caddy' || { echo "the capability removal does not first ask getcap whether there is one"; rc=1; }
+  printf '%s\n' "$docker" | grep -E 'setcap|getcap' | grep -qE '\|\| *(true|:)' && { echo "a failing setcap/getcap is swallowed with || true"; rc=1; }
   code=$(grep -vE '^[[:space:]]*#' apps/web/Caddyfile)
   printf '%s\n' "$code" | grep -qE '^:8080 \{$' || { echo "the Caddyfile does not serve :8080"; rc=1; }
   printf '%s\n' "$code" | grep -qE '^:80 \{$' && { echo "the Caddyfile still serves :80"; rc=1; }

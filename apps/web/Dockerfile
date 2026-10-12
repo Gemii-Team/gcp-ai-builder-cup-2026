@@ -16,11 +16,16 @@ COPY packages packages
 RUN pnpm install --offline --frozen-lockfile --filter web...
 RUN pnpm --filter web build
 
+# The base tag floats (caddy:2-alpine moves with every 2.x release). Nothing here depends on a
+# patch version, but it does depend on what the base ships: see the capability below.
 FROM caddy:2-alpine
 # The base image gives /usr/bin/caddy the file capability cap_net_bind_service=ep so that it can
 # bind port 80 as a non-root user. Port 8080 needs none, and a container that drops ALL
-# capabilities cannot exec a binary that carries one (the kernel answers EPERM).
-RUN setcap -r /usr/bin/caddy \
+# capabilities cannot exec a binary that carries one (the kernel answers EPERM). It is removed
+# when there is one, so a later base without it still builds; a getcap or setcap that fails
+# fails the build, and chown is not tolerated either.
+RUN caps="$(getcap /usr/bin/caddy)" \
+ && { [ -z "$caps" ] || setcap -r /usr/bin/caddy; } \
  && chown -R 65532:65532 /data /config
 COPY apps/web/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /repo/apps/web/dist /usr/share/caddy
