@@ -3,8 +3,11 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,6 +50,26 @@ const (
 var toolNames = []string{toolSearchKnowledge, toolCreateTaskDraft, toolListTasks, toolDraftMessage, toolSummarizeChannel}
 
 const (
+	// maxToolCallsPerRun and maxDraftsPerRun are the budget of one run. ADK puts no
+	// cap on how many tools a model calls in a run, and what a tool reads is data other
+	// people wrote: a hostile message ("create 500 drafts") must not be able to loop a
+	// run through paid model calls or flood a board with drafts a person must discard.
+	maxToolCallsPerRun = 20
+	maxDraftsPerRun    = 5
+
+	// The bounds of what the model writes into a call. Each is also the maxLength of
+	// the argument in the schema the model reads.
+	maxQuestionArgRunes = 500
+	maxTaskTitleRunes   = 200
+	// maxMessageTextRunes is the longest message chat accepts.
+	maxMessageTextRunes = 8000
+	// maxIDRunes is the width of a canonical UUID.
+	maxIDRunes      = 36
+	maxDueHintRunes = 32
+	// maxAuthorRunes cuts the name of a message's author, which a person chose, where
+	// it is put into the summary prompt and into a source.
+	maxAuthorRunes = 64
+
 	// maxListedTasks is the most tasks list_tasks hands to the model; the rest are
 	// counted, not listed, so a long board cannot fill the model's context.
 	maxListedTasks = 50
@@ -156,15 +179,29 @@ func (c *Collector) recordSummary(s *ChannelSummary) {
 	c.summary = s.clone()
 }
 
-// toolbox is the tools of one run.
-type toolbox struct{ ToolDeps }
+// toolbox is the tools of one run, and the budget of that run: NewTools makes one per
+// call, so a new run starts with a full budget.
+type toolbox struct {
+	ToolDeps
+
+	mu     sync.Mutex
+	calls  int // tool calls made
+	drafts int // drafts made, or being made
+}
 
 // NewTools returns the tools of one run by name. Each acts as the agent actor that
 // WithActor put in the context of the call (an agent on behalf of the invoking user),
 // through the services, which authorize every channel it touches: what a tool can read
-// or write is what that user can, and an argument that names a user, a workspace or an
-// actor is not a parameter of any tool and is ignored. NewTools panics when a service
-// is missing, which is a mistake of the program that wires it.
+// or write is what that user can. The actor is never an argument: no tool has a
+// parameter that names who acts, and one that a call adds anyway is ignored. The only
+// person a call can name is the owner of a draft, an assignee that tasks checks is a
+// member of the draft's channel.
+//
+// A run may make at most maxToolCallsPerRun calls and propose at most maxDraftsPerRun
+// drafts; a call beyond that is refused with errs.ErrInvalid and does nothing. Errors
+// reach the model as the tools word them (see forModel): never as an upstream service
+// worded them. NewTools panics when a service is missing, which is a mistake of the
+// program that wires it.
 func NewTools(d ToolDeps) map[string]tool.Tool {
 	switch {
 	case d.Knowledge == nil:
@@ -178,63 +215,231 @@ func NewTools(d ToolDeps) map[string]tool.Tool {
 	case d.Collector == nil:
 		panic("agents: ToolDeps.Collector is required")
 	}
-	tb := &toolbox{d}
+	tb := &toolbox{ToolDeps: d}
 	return map[string]tool.Tool{
 		toolSearchKnowledge: newTool(toolSearchKnowledge,
 			"Answer a question from what the channels, meetings and documents of the person you act for say. "+
 				"Returns the answer with numbered citations, or found=false when nothing they can read answers it.",
+			map[string]int{"question": maxQuestionArgRunes},
 			tb.searchKnowledge),
 		toolCreateTaskDraft: newTool(toolCreateTaskDraft,
 			"Propose a task as a DRAFT on the board of one channel the person belongs to. A person must confirm it before it is a task; "+
 				"this call never assigns, starts or confirms anything. The draft cites the message that called you.",
+			map[string]int{"channel_id": maxIDRunes, "title": maxTaskTitleRunes, "owner_user_id": maxIDRunes, "due_hint": maxDueHintRunes},
 			tb.createTaskDraft),
 		toolListTasks: newTool(toolListTasks,
 			"List the tasks of one channel the person belongs to, confirmed tasks and drafts, with status and owner.",
+			map[string]int{"channel_id": maxIDRunes},
 			tb.listTasks),
 		toolDraftMessage: newTool(toolDraftMessage,
 			"Write a message for the person to post in a channel they belong to. It sends nothing: the text comes back to you to show to the person.",
+			map[string]int{"channel_id": maxIDRunes, "text": maxMessageTextRunes},
 			tb.draftMessage),
 		toolSummarizeChannel: newTool(toolSummarizeChannel,
 			"Summarize the latest messages of one channel the person belongs to.",
+			map[string]int{"channel_id": maxIDRunes},
 			tb.summarizeChannel),
 	}
 }
 
 // newTool wraps handler as an ADK function tool. The schema of the arguments is the one
-// the arguments type implies, minus its ban on other properties: a call that adds an
-// argument the tool does not declare (a user id, say) has it ignored, as the arguments
-// type has no field to hold it, instead of being refused.
-func newTool[A, R any](name, description string, handler functiontool.Func[A, R]) tool.Tool {
+// the arguments type implies, minus its ban on other properties and with the maxLength
+// of each argument in limits: a call that adds an argument the tool does not declare (a
+// user id, say) has it ignored, as the arguments type has no field to hold it, instead
+// of being refused. The handler runs under safely.
+func newTool[A, R any](name, description string, limits map[string]int, handler functiontool.Func[A, R]) tool.Tool {
 	schema, err := jsonschema.For[A](nil)
 	if err != nil {
 		panic(fmt.Sprintf("agents: arguments of tool %s: %v", name, err))
 	}
 	schema.AdditionalProperties = nil
-	t, err := functiontool.New(functiontool.Config{Name: name, Description: description, InputSchema: schema}, handler)
+	for field, n := range limits {
+		p, ok := schema.Properties[field]
+		if !ok {
+			panic(fmt.Sprintf("agents: tool %s has no argument %q to bound", name, field))
+		}
+		p.MaxLength = jsonschema.Ptr(n)
+	}
+	t, err := functiontool.New(functiontool.Config{Name: name, Description: description, InputSchema: schema}, safely(name, handler))
 	if err != nil {
 		panic(fmt.Sprintf("agents: tool %s: %v", name, err))
 	}
 	return t
 }
 
-// invoker is the actor of the run, from the context and nowhere else. A context
-// without an agent actor acting for a user gets nothing from any tool.
-func invoker(ctx context.Context) (authz.Actor, error) {
-	a, ok := ActorFrom(ctx)
+// safely is the boundary between a tool and the model: ADK hands a failing tool's
+// error text to the model as {"error": ...}, and the model may repeat it to the person.
+// An error from a service can carry what the service knows (the URL of the model
+// provider, part of its reply, a database message), so what leaves a tool is forModel's
+// version of it, and a panic, which ADK would send with its stack, is one too.
+func safely[A, R any](name string, handler functiontool.Func[A, R]) functiontool.Func[A, R] {
+	return func(ctx agent.Context, in A) (out R, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.ErrorContext(ctx, "agents: a tool panicked", "tool", name, "panic", r, "stack", string(debug.Stack()))
+				out, err = *new(R), fixedInternal
+			}
+		}()
+		out, err = handler(ctx, in)
+		if err != nil {
+			return *new(R), forModel(ctx, name, err)
+		}
+		return out, nil
+	}
+}
+
+// toolError is an error the model may read: its text is written by this package, never
+// by a service, and its kind is the errs sentinel (or the errModelCall and errInternal
+// marks below) that errors.Is finds.
+type toolError struct {
+	text string
+	kind error
+}
+
+func (e *toolError) Error() string { return e.text }
+func (e *toolError) Unwrap() error { return e.kind }
+
+// refuse is the error of a call that breaks a rule of the tool: what the rule is, then
+// the kind.
+func refuse(kind error, format string, a ...any) error {
+	return &toolError{text: fmt.Sprintf(format, a...) + ": " + kind.Error(), kind: kind}
+}
+
+var (
+	// errModelCall and errInternal mark what is not a refusal: a model that failed, and
+	// anything else.
+	errModelCall = errors.New("the model call failed")
+	errInternal  = errors.New("internal error")
+
+	// What the model reads of an error that came from a service. A sentinel keeps its
+	// kind and loses its detail, which names ids and may name what a service wrapped.
+	fixedForbidden = &toolError{"forbidden: the person you act for may not do this", errs.ErrForbidden}
+	fixedInvalid   = &toolError{"invalid: the call was refused; check its arguments", errs.ErrInvalid}
+	fixedNotFound  = &toolError{"not found: what the call names does not exist or is out of reach", errs.ErrNotFound}
+	fixedConflict  = &toolError{"conflict: the call clashes with the current state", errs.ErrConflict}
+	fixedModel     = &toolError{"the model call failed", errModelCall}
+	fixedInternal  = &toolError{"internal error", errInternal}
+)
+
+// modelCallError marks an error of a call this package made to the model.
+type modelCallError struct{ err error }
+
+func (e *modelCallError) Error() string { return e.err.Error() }
+func (e *modelCallError) Unwrap() error { return e.err }
+
+// llmFailure reports an error that the model port or its provider caused: a limit, a
+// refusal of the provider or a call that ran out of time.
+func llmFailure(err error) bool {
+	var refused *llm.HTTPError
+	return errors.As(err, &refused) || errors.Is(err, llm.ErrTruncated) || errors.Is(err, llm.ErrUnsupportedByProvider) ||
+		errors.Is(err, llm.ErrBudgetExhausted) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// forModel is err as the model may read it. An error of this package's own wording is
+// kept. An errs sentinel from a service keeps its kind, so errors.Is still finds it, and
+// is worded here. A failure of the model, of the embedding behind a search or of the
+// provider is "the model call failed", and anything else "internal error": the real error
+// goes to the log of the server and nowhere else.
+func forModel(ctx context.Context, name string, err error) error {
+	var own *toolError
 	switch {
-	case !ok:
-		return authz.Actor{}, fmt.Errorf("agents: the tool was called outside an agent run: %w", errs.ErrForbidden)
-	case a.Kind != authz.ActorAgent || a.WorkspaceID == uuid.Nil || a.OnBehalfOf == uuid.Nil:
-		return authz.Actor{}, fmt.Errorf("agents: tools run only as an agent acting for a user: %w", errs.ErrForbidden)
+	case errors.As(err, &own):
+		return own
+	case errors.Is(err, errs.ErrForbidden):
+		return fixedForbidden
+	case errors.Is(err, errs.ErrInvalid):
+		return fixedInvalid
+	case errors.Is(err, errs.ErrNotFound):
+		return fixedNotFound
+	case errors.Is(err, errs.ErrConflict):
+		return fixedConflict
+	}
+	slog.WarnContext(ctx, "agents: a tool failed", "tool", name, "error", err)
+	var called *modelCallError
+	if errors.As(err, &called) || llmFailure(err) {
+		return fixedModel
+	}
+	return fixedInternal
+}
+
+// errBudget is the refusal of a call beyond the budget of the run.
+func errBudget() error {
+	return refuse(errs.ErrInvalid, "tool budget exhausted (at most %d tool calls and %d drafts per run)", maxToolCallsPerRun, maxDraftsPerRun)
+}
+
+// spendCall takes one call from the budget of the run, or refuses it.
+func (tb *toolbox) spendCall() error {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.calls >= maxToolCallsPerRun {
+		return errBudget()
+	}
+	tb.calls++
+	return nil
+}
+
+// reserveDraft takes one draft from the budget before the draft is made, so that calls
+// running at once cannot all find a draft left. The function it returns gives the draft
+// back when none was made.
+func (tb *toolbox) reserveDraft() (release func(), err error) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.drafts >= maxDraftsPerRun {
+		return nil, errBudget()
+	}
+	tb.drafts++
+	return func() {
+		tb.mu.Lock()
+		defer tb.mu.Unlock()
+		tb.drafts--
+	}, nil
+}
+
+// begin starts a call of a tool: it finds who acts and spends one call of the budget.
+func (tb *toolbox) begin(ctx context.Context) (authz.Actor, error) {
+	a, err := invoker(ctx)
+	if err != nil {
+		return authz.Actor{}, err
+	}
+	if err := tb.spendCall(); err != nil {
+		return authz.Actor{}, err
 	}
 	return a, nil
 }
 
+// invoker is the actor of the run, from the context and nowhere else. A context
+// without a named agent acting for a user in a workspace gets nothing from any tool: an
+// agent with no name would have its drafts recorded as made by a background job.
+func invoker(ctx context.Context) (authz.Actor, error) {
+	a, ok := ActorFrom(ctx)
+	switch {
+	case !ok:
+		return authz.Actor{}, refuse(errs.ErrForbidden, "the tool was called outside an agent run")
+	case a.Kind != authz.ActorAgent || a.WorkspaceID == uuid.Nil || a.OnBehalfOf == uuid.Nil:
+		return authz.Actor{}, refuse(errs.ErrForbidden, "tools run only as an agent acting for a user")
+	case a.Agent == "":
+		return authz.Actor{}, refuse(errs.ErrForbidden, "tools run only as a named agent")
+	}
+	return a, nil
+}
+
+// tooLong refuses s when it has more than limit characters.
+func tooLong(what, s string, limit int) error {
+	if utf8.RuneCountInString(s) > limit {
+		return refuse(errs.ErrInvalid, "%s has more than %d characters", what, limit)
+	}
+	return nil
+}
+
 // idArg reads an id the model wrote.
 func idArg(raw, what string) (uuid.UUID, error) {
-	id, err := uuid.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	if err := tooLong(what, raw, maxIDRunes); err != nil {
+		return uuid.Nil, err
+	}
+	id, err := uuid.Parse(raw)
 	if err != nil || id == uuid.Nil {
-		return uuid.Nil, fmt.Errorf("agents: %s must be an id like 0198a8c8-2e5f-7a3b-9c4d-5e6f70819203: %w", what, errs.ErrInvalid)
+		return uuid.Nil, refuse(errs.ErrInvalid, "%s must be an id like 0198a8c8-2e5f-7a3b-9c4d-5e6f70819203", what)
 	}
 	return id, nil
 }
@@ -263,13 +468,16 @@ type citationView struct {
 // the channels of the invoking user and no others, and keeps the validated answer for
 // the slip. A not-found answer is kept as well: it is a completed search.
 func (tb *toolbox) searchKnowledge(ctx agent.Context, in searchKnowledgeArgs) (searchKnowledgeResult, error) {
-	a, err := invoker(ctx)
+	a, err := tb.begin(ctx)
 	if err != nil {
 		return searchKnowledgeResult{}, err
 	}
 	question := strings.TrimSpace(in.Question)
 	if question == "" {
-		return searchKnowledgeResult{}, fmt.Errorf("agents: search_knowledge needs a question: %w", errs.ErrInvalid)
+		return searchKnowledgeResult{}, refuse(errs.ErrInvalid, "search_knowledge needs a question")
+	}
+	if err := tooLong("question", question, maxQuestionArgRunes); err != nil {
+		return searchKnowledgeResult{}, err
 	}
 	ans, err := tb.Knowledge.Ask(ctx, a, knowledge.AskInput{Question: question})
 	if err != nil {
@@ -309,7 +517,7 @@ type createTaskDraftResult struct {
 // call and CreateTask and ConfirmDraft it may not; tasks refuses a channel the user is
 // not in, an owner who is not in it and a source from another channel.
 func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (createTaskDraftResult, error) {
-	a, err := invoker(ctx)
+	a, err := tb.begin(ctx)
 	if err != nil {
 		return createTaskDraftResult{}, err
 	}
@@ -317,14 +525,21 @@ func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (c
 	if err != nil {
 		return createTaskDraftResult{}, err
 	}
+	title := strings.TrimSpace(in.Title)
+	if err := tooLong("title", title, maxTaskTitleRunes); err != nil {
+		return createTaskDraftResult{}, err
+	}
+	if err := tooLong("due_hint", in.DueHint, maxDueHintRunes); err != nil {
+		return createTaskDraftResult{}, err
+	}
 	trigger := tb.Trigger
 	if trigger == nil || trigger.MessageID == uuid.Nil {
-		return createTaskDraftResult{}, fmt.Errorf("agents: a draft cites the message that started the run, and this run has none: %w", errs.ErrInvalid)
+		return createTaskDraftResult{}, refuse(errs.ErrInvalid, "a draft cites the message that started the run, and this run has none")
 	}
 
 	req := &tasksv1.CreateTaskRequest{
 		ChannelId: channel.String(),
-		Title:     in.Title,
+		Title:     title,
 		Source: &chatv1.Source{
 			Kind: chatv1.SourceKind_SOURCE_KIND_MESSAGE, Id: trigger.MessageID.String(), Anchor: strconv.FormatInt(trigger.Seq, 10),
 			Label: trigger.Author, ChannelId: trigger.ChannelID.String(), At: timestamppb.New(trigger.At),
@@ -346,8 +561,13 @@ func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (c
 		}
 	}
 
+	release, err := tb.reserveDraft()
+	if err != nil {
+		return createTaskDraftResult{}, err
+	}
 	task, err := tb.Tasks.CreateDraft(ctx, a, req)
 	if err != nil {
+		release() // a refused draft is not one of the run's
 		return createTaskDraftResult{}, err
 	}
 	return createTaskDraftResult{
@@ -382,7 +602,7 @@ type taskView struct {
 // listTasks lists one channel. It never asks for the whole workspace: the channel is a
 // required argument and tasks refuses one the user is not in.
 func (tb *toolbox) listTasks(ctx agent.Context, in listTasksArgs) (listTasksResult, error) {
-	a, err := invoker(ctx)
+	a, err := tb.begin(ctx)
 	if err != nil {
 		return listTasksResult{}, err
 	}
@@ -426,7 +646,7 @@ type draftMessageResult struct {
 // draftMessage hands the text back and posts nothing: no tool of an agent sends. The
 // channel must be one the invoking user can read, which reading its members proves.
 func (tb *toolbox) draftMessage(ctx agent.Context, in draftMessageArgs) (draftMessageResult, error) {
-	a, err := invoker(ctx)
+	a, err := tb.begin(ctx)
 	if err != nil {
 		return draftMessageResult{}, err
 	}
@@ -436,7 +656,10 @@ func (tb *toolbox) draftMessage(ctx agent.Context, in draftMessageArgs) (draftMe
 	}
 	text := strings.TrimSpace(in.Text)
 	if text == "" {
-		return draftMessageResult{}, fmt.Errorf("agents: draft_message needs the text of the message: %w", errs.ErrInvalid)
+		return draftMessageResult{}, refuse(errs.ErrInvalid, "draft_message needs the text of the message")
+	}
+	if err := tooLong("text", text, maxMessageTextRunes); err != nil {
+		return draftMessageResult{}, err
 	}
 	if _, err := tb.Chat.ListMembers(ctx, a, channel); err != nil {
 		return draftMessageResult{}, err
@@ -490,7 +713,7 @@ type modelSummary struct {
 // messages it was shown become sources, and a summary that rests on none is returned
 // to the model but not kept for a slip, which would have nothing to cite.
 func (tb *toolbox) summarizeChannel(ctx agent.Context, in summarizeChannelArgs) (summarizeChannelResult, error) {
-	a, err := invoker(ctx)
+	a, err := tb.begin(ctx)
 	if err != nil {
 		return summarizeChannelResult{}, err
 	}
@@ -527,7 +750,7 @@ func (tb *toolbox) summarizeChannel(ctx agent.Context, in summarizeChannelArgs) 
 		case m.GetAuthorKind() == chatv1.AuthorKind_AUTHOR_KIND_AGENT:
 			return "assistant"
 		case strings.TrimSpace(names[m.GetAuthorId()]) != "":
-			return strings.TrimSpace(names[m.GetAuthorId()])
+			return clip(strings.TrimSpace(names[m.GetAuthorId()]), maxAuthorRunes-1)
 		}
 		return "unknown"
 	}
@@ -574,14 +797,14 @@ func (tb *toolbox) summarize(ctx context.Context, msgs []*chatv1.Message, author
 		MaxOutputTokens: summaryMaxTokens,
 	})
 	if err != nil {
-		return modelSummary{}, fmt.Errorf("agents: summarize_channel: %w", err)
+		return modelSummary{}, &modelCallError{fmt.Errorf("summarize_channel: %w", err)}
 	}
 	var out modelSummary
 	if err := json.Unmarshal([]byte(res.Text), &out); err != nil {
-		return modelSummary{}, fmt.Errorf("agents: summarize_channel: the model's summary is not the requested JSON: %w", err)
+		return modelSummary{}, &modelCallError{fmt.Errorf("summarize_channel: the model's summary is not the requested JSON: %w", err)}
 	}
 	if strings.TrimSpace(out.Summary) == "" {
-		return modelSummary{}, fmt.Errorf("agents: summarize_channel: the model returned no summary")
+		return modelSummary{}, &modelCallError{errors.New("summarize_channel: the model returned no summary")}
 	}
 	return out, nil
 }
@@ -604,12 +827,13 @@ func defang(text string) string {
 	return delimiter.ReplaceAllStringFunc(text, func(tag string) string { return "<\u200b" + tag[1:] })
 }
 
-// attribute makes a name safe to put in a tag attribute.
+// attribute makes a name safe to put in a tag attribute: no longer than maxAuthorRunes
+// and without the characters that end an attribute or a line.
 func attribute(name string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '"' || r == '<' || r == '>' || r == '\n' || r == '\r' {
 			return ' '
 		}
 		return r
-	}, name)
+	}, clip(name, maxAuthorRunes-1))
 }
