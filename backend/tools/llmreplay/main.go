@@ -51,11 +51,16 @@
 //
 // Every field of "match" is optional and all that are set must hold; no "match" fits
 // every request. "contains" is searched in the text of all the request's messages
-// (system, user, assistant and tool, joined by newlines), case-sensitively. The names
+// (system, user, assistant and tool, joined by newlines), case-sensitively, except for
+// a request that declares tools (an agent's), where it is searched in the last turn
+// only: the last user message and what follows it. The names
 // are file_summary, meeting_summary, kb_answer and channel_summary; the agents send no
 // schema and are told apart by stage: "agent_tool" is a request that declares tools
-// and has no tool message yet (the model is to call a tool), "agent_final" is one with
-// a tool message in it (the model is to answer). A request with neither has no stage.
+// and has no tool message yet in its last turn (the model is to call a tool),
+// "agent_final" is one with a tool message in its last turn (the model is to answer).
+// A request with neither has no stage. An agent keeps its session, so the request of its
+// second question carries the first one with its tool call and result: only the last
+// turn counts, or the first question's fixture would answer the second.
 // The schema name is response_format.json_schema.name; the pro tier sends
 // response_format json_object with no name, so such a request has the schema "none" and
 // a fixture for it must key on "contains".

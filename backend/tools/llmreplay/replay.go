@@ -98,15 +98,21 @@ func (m chatMessage) text() string {
 
 // request is what a fixture is matched against.
 type request struct {
-	model        string
-	schema       string // "" when the request names none
-	stage        string
-	text         string // the text of every message, joined by newlines
-	lastUser     string // the text of the last user message
-	stream       bool
+	model    string
+	schema   string // "" when the request names none
+	stage    string
+	text     string // the text of the messages a fixture's contains is searched in, joined by newlines
+	lastUser string // the text of the last user message
+	stream   bool
+
 	includeUsage bool
 }
 
+// newRequest reads what a fixture is matched against. An agent keeps its session, so the request of its second question
+// carries the first one, with its tool call and its tool result: what the model is asked now is the last turn, from the
+// last user message on. A tool message of an earlier turn therefore does not make a request the one after a tool ran,
+// and the text a request that declares tools is matched on is that turn alone, so an earlier question cannot make the
+// fixture of that question answer this one. Every other request (one question, one answer) is matched on all its messages.
 func newRequest(c chatPayload) request {
 	in := request{
 		model:        c.Model,
@@ -118,16 +124,21 @@ func newRequest(c chatPayload) request {
 	if len(c.Tools) > 0 {
 		in.stage = stageAgentTool
 	}
-	texts := make([]string, 0, len(c.Messages))
-	for _, m := range c.Messages {
-		text := m.text()
-		texts = append(texts, text)
-		switch m.Role {
-		case "tool":
-			in.stage = stageAgentFinal
-		case "user":
-			in.lastUser = text
+	texts := make([]string, len(c.Messages))
+	turn := 0
+	for i, m := range c.Messages {
+		texts[i] = m.text()
+		if m.Role == "user" {
+			in.lastUser, turn = texts[i], i
 		}
+	}
+	for _, m := range c.Messages[turn:] {
+		if m.Role == "tool" {
+			in.stage = stageAgentFinal
+		}
+	}
+	if len(c.Tools) > 0 {
+		texts = texts[turn:]
 	}
 	in.text = strings.Join(texts, "\n")
 	return in

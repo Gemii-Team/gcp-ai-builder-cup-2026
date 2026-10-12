@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1022,6 +1023,47 @@ func TestReplay_DelayMsHoldsTheAnswerBack(t *testing.T) {
 		got, took := timed(chat("anything", opts{schema: "meeting_summary"}))
 		if got.status != 599 || took >= delay {
 			t.Errorf("status %d after %v, want an immediate 599", got.status, took)
+		}
+	})
+}
+
+// An agent conversation has several turns: the ADK keeps the session, so the request of the second question carries
+// the first one, its tool call and its tool result. What the model is asked now is the last turn (from the last user
+// message on): a tool message of an earlier turn does not make this request the one after a tool ran, and an earlier
+// question must not make a fixture of that question answer this one.
+func TestReplay_AgentStagesAndMatchesInTheLastTurnOfAConversation(t *testing.T) {
+	srv, _ := startReplay(t, fixtures)
+	earlier := []map[string]any{
+		system("You are @assistant."),
+		user("What did we decide about dark mode?"),
+		assistantCall("call_1", "search_knowledge", `{"question":"What did we decide about dark mode?"}`),
+		toolResult("call_1", `{"found":true,"answer":"dark mode moves to v1.1"}`),
+		{"role": "assistant", "content": "We moved dark mode out of v1.0 and into v1.1."},
+	}
+	second := append(slices.Clone(earlier), user("[Context for your tools: this message was posted in the channel with id "+channel+". People it mentions, with their ids: Nok = "+nokUser+".]\n\nPlease draft a task to update the release notes"))
+
+	t.Run("the first call of the second turn is an agent_tool request, answered by the fixture of the second question", func(t *testing.T) {
+		got := postJSON(t, srv, chatPath, chatRequest(opts{tools: true}, second...))
+		if got.status != 200 {
+			t.Fatalf("status %d: %s", got.status, got.body)
+		}
+		call := dig(t, asMap(t, got.body), "choices", 0, "message", "tool_calls", 0, "function")
+		if name := dig(t, call, "name"); name != "create_task_draft" {
+			t.Errorf("tool = %v, want create_task_draft (the fixture of the second question), not the earlier question's answer: %s", name, got.body)
+		}
+		if args := dig(t, call, "arguments").(string); !strings.Contains(args, channel) {
+			t.Errorf("arguments = %s, want the channel id of the last turn", args)
+		}
+	})
+
+	t.Run("after the tool of the second turn it is an agent_final request", func(t *testing.T) {
+		turn := append(slices.Clone(second), assistantCall("call_2", "create_task_draft", `{}`), toolResult("call_2", `{"state":"DRAFT"}`))
+		got := postJSON(t, srv, chatPath, chatRequest(opts{tools: true}, turn...))
+		if got.status != 599 {
+			t.Fatalf("status %d: %s, want 599: there is no agent_final fixture for the second question, and the first question's must not answer it", got.status, got.body)
+		}
+		if e := asMap(t, got.body)["error"].(map[string]any); e["stage"] != "agent_final" {
+			t.Errorf("stage = %v, want agent_final", e["stage"])
 		}
 	})
 }
