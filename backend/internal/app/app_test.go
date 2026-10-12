@@ -1552,6 +1552,36 @@ func TestApp_PollsMeetOnItsInterval(t *testing.T) {
 	})
 }
 
+// A panic in one pass of the Meet poll must not take the process down: the meeting that
+// caused it stays pollable, so a restart would poll it first and crash again. The pass is
+// logged with its stack and the next one is made on time.
+func TestApp_PollMeet_APanicIsLoggedAndThePollGoesOn(t *testing.T) {
+	r := newRig(t, withOption(WithPollInterval(20*time.Millisecond)))
+	r.google.QueueCreateMeetSpace(fakegoogle.SpaceReply{Space: google.Space{
+		Name: "spaces/abc123", MeetingURI: "https://meet.example/abc-defg-hij", Code: "abc-defg-hij"}})
+	var asked atomic.Int32
+	r.google.HandleListConferences(func(context.Context, uuid.UUID, string) ([]google.Conference, error) {
+		if asked.Add(1) == 1 {
+			panic("poison meeting")
+		}
+		return nil, nil
+	})
+	r.start()
+	alice := r.signIn(fakeoidc.AliceEmail)
+	channel := alice.newChannel("meet")
+	if _, err := alice.meetings().StartMeeting(t.Context(), connect.NewRequest(&meetingsv1.StartMeetingRequest{ChannelId: channel})); err != nil {
+		t.Fatalf("StartMeeting: %v", err)
+	}
+
+	eventually(t, "the poll to ask Meet again after the pass that panicked", func() bool { return asked.Load() >= 3 })
+	out := r.logs()
+	for _, want := range []string{"poison meeting", "goroutine"} { // the panic value and its stack
+		if !strings.Contains(out, want) {
+			t.Errorf("the log does not carry %q:\n%s", want, out)
+		}
+	}
+}
+
 // The composed server answers a StartMeeting that Meet refuses with the typed answer
 // of its cause, never as unknown or as the opaque internal error, with a text that
 // carries nothing of Google's own message.

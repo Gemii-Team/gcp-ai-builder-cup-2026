@@ -487,6 +487,59 @@ func TestRelay_RouterAndFanoutFailuresAlsoMoveNotBefore(t *testing.T) {
 	}
 }
 
+// A router or a bus that panics on a row must not take the process down: the row stays in
+// the outbox, so a restart would claim it and crash again. The panic is that row's failed
+// delivery, which pushes it back like any other, and the rows behind it flow.
+func TestRelay_PanicInDelivery_PostponesTheRowAndOthersFlow(t *testing.T) {
+	cases := map[string]struct {
+		router    routerFunc
+		busPanics bool
+	}{
+		"the router panics": {
+			router: func(ev outbox.Stored) ([]bus.Message, []outbox.Fanout, error) {
+				if ev.Key == "poison" {
+					panic("poison row")
+				}
+				return nil, nil, nil
+			},
+		},
+		"the bus panics": {router: noRoute, busPanics: true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := start(t)
+			ids := f.enqueue(t, f.event("job.poison", "poison"), f.event("job.good", "good"))
+			before := f.dbNow(t)
+			published := make(chan bus.Message, 4)
+			pub := pubFunc(func(_ context.Context, m bus.Message) error {
+				if c.busPanics && m.Key == "poison" {
+					panic("poison row")
+				}
+				published <- m
+				return nil
+			})
+			run(t, outbox.NewRelay(f.db, pub, noFan, c.router, outbox.RelayOptions{Poll: poll, RetryAfter: neverRetry}))
+
+			if m := recv(t, published, "the row behind the poison row"); m.Key != "good" {
+				t.Fatalf("published key %q, want good", m.Key)
+			}
+			eventually(t, "the good row to be marked published", func() bool { return f.row(t, ids[1]).Published })
+			eventually(t, "not_before of the poison row to move past RetryAfter", func() bool {
+				return !f.row(t, ids[0]).NotBefore.Before(before.Add(neverRetry))
+			})
+			if f.row(t, ids[0]).Published {
+				t.Error("a row whose delivery panicked was marked published")
+			}
+			out := f.logs.String()
+			for _, want := range []string{"level=ERROR", "poison row", "goroutine"} { // the panic value and its stack are logged
+				if !strings.Contains(out, want) {
+					t.Errorf("the log does not carry %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
 func TestRelay_RouterExtrasAndFanoutPublished(t *testing.T) {
 	f := start(t)
 	ev := f.event("chat.message.created", "msg-1")

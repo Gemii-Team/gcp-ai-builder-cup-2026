@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"kiwi/internal/agents"
@@ -65,8 +66,20 @@ func (a *App) pollMeet(ctx context.Context) {
 			return
 		case <-tick.C:
 		}
-		if err := meetings.PollMeetings(ctx, a.db, a.google, time.Now()); err != nil && ctx.Err() == nil {
-			slog.Error("app: the Meet poll failed", "error", err)
+		a.pollMeetOnce(ctx)
+	}
+}
+
+// pollMeetOnce makes one pass of the poll. A panic ends that pass only: it is logged
+// with its stack, because the meeting that caused it stays pollable and a crash would
+// poll it first again after every restart.
+func (a *App) pollMeetOnce(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "app: the Meet poll panicked", "panic", r, "stack", string(debug.Stack()))
 		}
+	}()
+	if err := meetings.PollMeetings(ctx, a.db, a.google, time.Now()); err != nil && ctx.Err() == nil {
+		slog.Error("app: the Meet poll failed", "error", err)
 	}
 }

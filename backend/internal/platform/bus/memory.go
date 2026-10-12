@@ -2,7 +2,9 @@ package bus
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -156,7 +158,7 @@ func (m *Memory) deliver(ctx context.Context, s *subscription, msg Message) bool
 			return false
 		}
 		msg.Attempt = attempt
-		err := s.handler(ctx, msg)
+		err := s.call(ctx, msg)
 		if err == nil {
 			return true
 		}
@@ -171,6 +173,22 @@ func (m *Memory) deliver(ctx context.Context, s *subscription, msg Message) bool
 			return false
 		}
 	}
+}
+
+// call runs the handler once. A panic is a failed delivery like any returned error: it
+// is logged with its stack (the message's data is not logged) and returned, so it counts
+// toward MaxAttempts and the message is dead-lettered instead of crashing the process,
+// which would replay it on every restart.
+func (s *subscription) call(ctx context.Context, msg Message) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "bus: consumer panicked",
+				"consumer", s.name, "topic", msg.Topic, "message_id", msg.ID, "attempt", msg.Attempt,
+				"panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("bus: consumer %s panicked: %v", s.name, r)
+		}
+	}()
+	return s.handler(ctx, msg)
 }
 
 // sleep waits d and reports false when ctx ends first.

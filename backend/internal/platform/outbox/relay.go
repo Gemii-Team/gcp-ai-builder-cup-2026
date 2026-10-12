@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -127,7 +128,7 @@ func (r *Relay) relayOne(ctx context.Context) (claimed bool, err error) {
 		}
 		claimed = true
 
-		if err := r.deliver(ctx, st); err != nil {
+		if err := r.deliverSafely(ctx, st); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -138,6 +139,21 @@ func (r *Relay) relayOne(ctx context.Context) (claimed bool, err error) {
 		return mark(ctx, tx, st.ID)
 	})
 	return claimed, err
+}
+
+// deliverSafely is deliver with a panic turned into that row's failed delivery: the
+// router and the publisher are not this package's code, and a panic in either would
+// crash the process while the row stays claimable, so it would crash it again after
+// every restart. The panic is logged with its stack, never with the row's payload.
+func (r *Relay) deliverSafely(ctx context.Context, st Stored) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.ErrorContext(ctx, "outbox: delivery panicked",
+				"outbox_id", st.ID, "topic", st.Topic, "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("deliver %s panicked: %v", st.Topic, p)
+		}
+	}()
+	return r.deliver(ctx, st)
 }
 
 // claim locks the oldest unpublished row that is due; pgx.ErrNoRows means none is.

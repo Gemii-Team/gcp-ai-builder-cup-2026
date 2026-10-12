@@ -1,9 +1,12 @@
 package bus_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -335,4 +338,68 @@ func TestMemory_Subscribe_RegistersUntilContextIsDone(t *testing.T) {
 			t.Fatalf("calls after unsubscribe = %d, want still 1", got)
 		}
 	})
+}
+
+// A consumer that panics on a message must not take the process down: with the held-row
+// outbox a poison message would crash the process, be claimed again after the restart
+// and crash it again. The panic is a failed delivery: it is retried up to MaxAttempts
+// and then dead-lettered, and every other message and consumer goes on.
+func TestMemory_PanickingHandler_IsRetriedToMaxAttemptsAndDeadLettered(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var mu sync.Mutex
+	var dead []string
+	var deadErr error
+	opt := instant(t)
+	opt.OnDead = func(consumer string, _ bus.Message, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		dead = append(dead, consumer)
+		deadErr = err
+	}
+	m := bus.NewMemory(opt)
+	var poisonAttempts []int
+	m.Register("poison", []string{"t"}, func(_ context.Context, msg bus.Message) error {
+		poisonAttempts = append(poisonAttempts, msg.Attempt)
+		panic("handler bug")
+	})
+	var healthy atomic.Int32
+	m.Register("healthy", []string{"t", "other"}, func(context.Context, bus.Message) error {
+		healthy.Add(1)
+		return nil
+	})
+
+	if err := m.Publish(context.Background(), bus.Message{ID: "1", Topic: "t", Data: []byte("payload-secret-bytes")}); err != nil {
+		t.Fatalf("Publish must settle a consumer that panicked without an error: %v", err)
+	}
+	if err := m.Publish(context.Background(), bus.Message{ID: "2", Topic: "other"}); err != nil {
+		t.Fatalf("Publish of the next message: %v", err)
+	}
+
+	if want := []int{1, 2, 3, 4, 5}; !slices.Equal(poisonAttempts, want) {
+		t.Errorf("attempts of the panicking consumer = %v, want %v", poisonAttempts, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(dead, []string{"poison"}) {
+		t.Errorf("dead-lettered consumers = %v, want [poison]", dead)
+	}
+	if deadErr == nil || !strings.Contains(deadErr.Error(), "panic") {
+		t.Errorf("dead-letter error = %v, want one that says the consumer panicked", deadErr)
+	}
+	if got := healthy.Load(); got != 2 {
+		t.Errorf("the other consumer handled %d messages, want 2: the panic must not stop what runs beside it or after it", got)
+	}
+	out := logs.String()
+	for _, want := range []string{"handler bug", "poison", "goroutine"} { // the panic value, the consumer and the stack
+		if !strings.Contains(out, want) {
+			t.Errorf("the log does not carry %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "payload-secret-bytes") {
+		t.Errorf("the log carries the payload of the message:\n%s", out)
+	}
 }
