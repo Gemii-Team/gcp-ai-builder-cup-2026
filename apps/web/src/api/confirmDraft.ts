@@ -20,6 +20,10 @@ export async function confirmDraft(api: Api, queryClient: QueryClient, draft: { 
       throw new Error('ConfirmDraft answered without a task.');
     }
     const view = mapTask(task);
+    // A list of the tasks that was asked for before the confirmation was answered from before it: if it lands after the
+    // write it would put the draft back (and nothing repairs it until the next load). It is dropped first; `cancelQueries`
+    // must be awaited, since it restores the query's state from before that fetch when it settles.
+    await queryClient.cancelQueries({ queryKey: keys.tasks() });
     writeTask(queryClient, view);
     return view;
   } catch (error) {
