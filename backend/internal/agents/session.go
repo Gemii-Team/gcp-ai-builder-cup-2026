@@ -19,6 +19,7 @@ import (
 	"google.golang.org/adk/v2/platform"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/genai"
 
 	"kiwi/internal/agents/internal/store"
 	"kiwi/internal/platform/db"
@@ -35,6 +36,10 @@ const (
 	// conversation lives as long as a person keeps asking in a channel, and every
 	// event of it would otherwise ride along in every prompt for ever.
 	maxHistoryEvents = 40
+	// maxHistoryBytes bounds the history by what it weighs as well as by its events: the
+	// stored results of tools are as large as the tools made them, and a few of them
+	// would fill the prompt. The oldest turns that do not fit are left out.
+	maxHistoryBytes = 64 << 10
 	// maxLoadedEvents bounds what a caller may ask for with GetRequest.NumRecentEvents.
 	maxLoadedEvents = 1000
 
@@ -54,6 +59,11 @@ type Session struct {
 	// Tools are the tools of this run by name, with the run's collector and trigger
 	// behind them. The spec decides which of them the agent is given.
 	Tools map[string]tool.Tool
+	// Record, when set, is told of each tool call as it ends. The runtime calls it for
+	// every call, in order, and stops the run with its error: the calls of a run are its
+	// audit trail and the budget its later attempts share. It is nil in a Session built
+	// for no run.
+	Record func(ToolCall) error
 }
 
 // sessionID is the id of the conversation of user with agent in channel, or in the
@@ -150,10 +160,10 @@ func (s *sessionService) Create(ctx context.Context, req *session.CreateRequest)
 	return &session.CreateResponse{Session: sess}, nil
 }
 
-// Get implements session.Service. It loads the newest events of the session, from
-// the start of the oldest turn they hold: a window that began with a tool's response
-// would hand the model an answer to a call it never made, which providers refuse.
-// A request that names NumRecentEvents asks for exactly that many and gets them.
+// Get implements session.Service. Without NumRecentEvents it loads what a run may read
+// of the past: the newest events of the session, cut to whole turns that finished (see
+// conversation). A request that names NumRecentEvents asks for exactly that many events
+// and gets them as they are stored.
 func (s *sessionService) Get(ctx context.Context, req *session.GetRequest) (*session.GetResponse, error) {
 	if req.AppName == "" || req.UserID == "" || req.SessionID == "" {
 		return nil, fmt.Errorf("agents: app_name, user_id, session_id are required, got app_name: %q, user_id: %q, session_id: %q: %w", req.AppName, req.UserID, req.SessionID, errs.ErrInvalid)
@@ -162,9 +172,9 @@ func (s *sessionService) Get(ctx context.Context, req *session.GetRequest) (*ses
 	if err != nil {
 		return nil, err
 	}
-	limit, whole := maxHistoryEvents, true
+	limit, history := maxHistoryEvents, true
 	if req.NumRecentEvents > 0 {
-		limit, whole = min(req.NumRecentEvents, maxLoadedEvents), false
+		limit, history = min(req.NumRecentEvents, maxLoadedEvents), false
 	}
 
 	var sess *pgSession
@@ -174,7 +184,7 @@ func (s *sessionService) Get(ctx context.Context, req *session.GetRequest) (*ses
 		if err != nil {
 			return err
 		}
-		sess, err = s.load(ctx, q, row, limit, whole, req.After)
+		sess, err = s.load(ctx, q, row, limit, history, req.After)
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -186,10 +196,15 @@ func (s *sessionService) Get(ctx context.Context, req *session.GetRequest) (*ses
 	return &session.GetResponse{Session: sess}, nil
 }
 
-// load reads the newest limit events of row's session, oldest first. When wholeTurns
-// is set the first event is a user's: leading events of a turn whose start is out of
-// the window are dropped. Events before after are dropped too.
-func (s *sessionService) load(ctx context.Context, q *store.Queries, row store.AgentsSession, limit int, wholeTurns bool, after time.Time) (*pgSession, error) {
+// stored is an event as it was read, with the bytes it takes in the database.
+type stored struct {
+	ev   *session.Event
+	size int
+}
+
+// load reads the newest limit events of row's session, oldest first, leaving out those
+// before after. When history is set they are cut to the conversation a run may read.
+func (s *sessionService) load(ctx context.Context, q *store.Queries, row store.AgentsSession, limit int, history bool, after time.Time) (*pgSession, error) {
 	var rows []store.ListRecentSessionEventsRow
 	if limit > 0 {
 		var err error
@@ -197,23 +212,23 @@ func (s *sessionService) load(ctx context.Context, q *store.Queries, row store.A
 			return nil, err
 		}
 	}
-	evs := make([]*session.Event, 0, len(rows))
+	items := make([]stored, 0, len(rows))
 	for _, r := range rows {
 		var ev session.Event
 		if err := json.Unmarshal(r.Event, &ev); err != nil {
 			return nil, fmt.Errorf("decode event %d of session %s: %w", r.ID, row.ID, err)
 		}
-		evs = append(evs, &ev)
-	}
-	if wholeTurns {
-		i := slices.IndexFunc(evs, func(ev *session.Event) bool { return ev.Author == "user" })
-		if i < 0 {
-			i = len(evs)
+		if !after.IsZero() && ev.Timestamp.Before(after) {
+			continue
 		}
-		evs = evs[i:]
+		items = append(items, stored{ev: &ev, size: len(r.Event)})
 	}
-	if !after.IsZero() {
-		evs = slices.DeleteFunc(evs, func(ev *session.Event) bool { return ev.Timestamp.Before(after) })
+	if history {
+		items = conversation(items)
+	}
+	evs := make([]*session.Event, len(items))
+	for i, it := range items {
+		evs[i] = it.ev
 	}
 	state := map[string]any{}
 	if len(row.State) > 0 {
@@ -442,4 +457,142 @@ func (e eventList) At(i int) *session.Event {
 		return nil
 	}
 	return e[i]
+}
+
+// conversation is what a run may read of a session's past. A turn is a user's message and
+// everything the agent did in answer, up to its reply; only turns that finished are kept:
+//
+//   - A turn that never finished (a run that failed, timed out, was stopped or was cut
+//     short by a restart) is left out whole. ADK appends the agent's call of a tool
+//     before the tool runs, so such a turn can hold a call that has no response, which
+//     providers refuse, and the question it asked was never answered.
+//   - Turns that interleave are left out as well, for the same reason: their calls and
+//     responses do not pair up inside one turn.
+//   - Of the turns that remain, the newest that fit in maxHistoryBytes are kept: the
+//     oldest are dropped, never a turn from the middle.
+func conversation(items []stored) []stored {
+	var turns [][]stored
+	for _, it := range items {
+		if it.ev.Author == "user" || len(turns) == 0 {
+			turns = append(turns, nil)
+		}
+		turns[len(turns)-1] = append(turns[len(turns)-1], it)
+	}
+	turns = slices.DeleteFunc(turns, func(t []stored) bool { return !finished(t) })
+
+	var kept []stored
+	bytes := 0
+	for i := len(turns) - 1; i >= 0; i-- {
+		w := 0
+		for _, it := range turns[i] {
+			w += it.size
+		}
+		if bytes+w > maxHistoryBytes {
+			break
+		}
+		bytes += w
+		kept = append(slices.Clone(turns[i]), kept...)
+	}
+	return kept
+}
+
+// finished reports whether turn is a whole turn: it starts with the user's message,
+// every call of a tool in it has its response and every response its call, and the last
+// thing in it is the agent's own text.
+func finished(turn []stored) bool {
+	if len(turn) < 2 || turn[0].ev.Author != "user" {
+		return false
+	}
+	pending := map[string]bool{}
+	for _, it := range turn[1:] {
+		if it.ev.Content == nil {
+			continue
+		}
+		for _, p := range it.ev.Content.Parts {
+			switch {
+			case p.FunctionCall != nil:
+				pending[p.FunctionCall.ID] = true
+			case p.FunctionResponse != nil:
+				if !pending[p.FunctionResponse.ID] {
+					return false
+				}
+				delete(pending, p.FunctionResponse.ID)
+			}
+		}
+	}
+	if len(pending) > 0 {
+		return false
+	}
+	for i := len(turn) - 1; i > 0; i-- {
+		if c := turn[i].ev.Content; c != nil {
+			return turn[i].ev.Author != "user" && c.Role == genai.RoleModel && textOf(c) != ""
+		}
+	}
+	return false
+}
+
+// sessionLocks serialises the runs of one conversation inside this process, so a burst of
+// mentions queues on a mutex and not on database connections. It holds per instance;
+// serialised adds the database lock that holds across processes.
+type sessionLocks struct {
+	mu      sync.Mutex
+	entries map[string]*sessionLock
+}
+
+type sessionLock struct {
+	held chan struct{} // holds one token while the key is locked
+	refs int
+}
+
+func newSessionLocks() *sessionLocks { return &sessionLocks{entries: map[string]*sessionLock{}} }
+
+// lock waits for key and returns the function that releases it, or ctx's error when ctx
+// ends first.
+func (l *sessionLocks) lock(ctx context.Context, key string) (unlock func(), err error) {
+	l.mu.Lock()
+	e := l.entries[key]
+	if e == nil {
+		e = &sessionLock{held: make(chan struct{}, 1)}
+		l.entries[key] = e
+	}
+	e.refs++
+	l.mu.Unlock()
+
+	release := func() {
+		l.mu.Lock()
+		if e.refs--; e.refs == 0 {
+			delete(l.entries, key)
+		}
+		l.mu.Unlock()
+	}
+	select {
+	case e.held <- struct{}{}:
+		return func() {
+			<-e.held
+			release()
+		}, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+}
+
+// serialised runs fn while holding the conversation id of workspace ws: no other run of
+// that session, in this process or another, runs at the same time. Two runs of one
+// conversation would interleave their events (call, call, response, response), which
+// providers refuse, and the second would not read the first's answer. The database lock
+// is a transaction-level advisory lock; the transaction does nothing else, and fn does
+// its own work on other connections, so a run holds one connection for its whole length.
+func (s *service) serialised(ctx context.Context, ws uuid.UUID, id string, fn func(ctx context.Context) error) error {
+	unlock, err := s.locks.lock(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.db.InWorkspace(ctx, ws, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, "agents.session:"+id); err != nil {
+			return fmt.Errorf("agents: wait for session %s: %w", id, err)
+		}
+		return fn(ctx)
+	})
 }

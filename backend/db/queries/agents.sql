@@ -25,18 +25,29 @@ RETURNING *;
 -- name: GetRun :one
 SELECT * FROM agents.runs WHERE id = sqlc.arg(id);
 
--- name: CompleteRun :exec
+-- name: CompleteRun :execrows
 -- Ends a run with its answer. ref and result are null for a run that produced no slip.
+-- A run that already ended is left as it ended and nothing is affected, so a delivery that
+-- lost a race cannot overwrite the REF and the answer of the one that won; the caller
+-- treats that as the end of its own attempt.
 UPDATE agents.runs
 SET status        = 'done',
     failure_reason = NULL,
     ref           = sqlc.narg(ref),
     result        = sqlc.narg(result),
-    tool_calls    = sqlc.arg(tool_calls),
     input_tokens  = sqlc.arg(input_tokens),
     output_tokens = sqlc.arg(output_tokens),
     updated_at    = now()
-WHERE id = sqlc.arg(id);
+WHERE id = sqlc.arg(id) AND status IN ('queued', 'running');
+
+-- name: AppendToolCall :execrows
+-- Records one tool call of a run, as it ends, so that the calls of a run are known to its
+-- later attempts (they share one budget) and survive an attempt that never finished.
+-- call is a JSON array of the one call.
+UPDATE agents.runs
+SET tool_calls = tool_calls || sqlc.arg(call)::jsonb,
+    updated_at = now()
+WHERE id = sqlc.arg(id) AND status IN ('queued', 'running');
 
 -- name: FailRun :execrows
 -- Ends a run that will not be tried again. A run that already ended keeps its ending.

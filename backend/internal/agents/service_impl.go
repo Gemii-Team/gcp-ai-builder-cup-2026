@@ -1,10 +1,12 @@
 package agents
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -27,10 +29,22 @@ import (
 	"kiwi/internal/tasks"
 )
 
-// maxQuestionRunes bounds the question of an Ask-panel run. It is also what a
-// mention run's message can carry, as chat limits a message body to 8000 runes, which
-// is more than a model should be handed as one question.
+// maxQuestionRunes bounds a question: the one an Ask-panel request carries and the
+// body of the message that mentions an agent, which chat accepts up to 8000 runes and
+// which is cut to this before it is stored as the run's question and given to the model.
 const maxQuestionRunes = 4000
+
+const (
+	// defaultRunTimeout is how long one attempt of a run may take: the model client has no
+	// timeout of its own, and a model that runs away would hold the run until the end of
+	// the context.
+	defaultRunTimeout = 120 * time.Second
+	// defaultFinalAttempt is the delivery the bus dead-letters a message after, which is
+	// its own default (bus.MemoryOptions.MaxAttempts 0): a run that still fails on it is
+	// recorded as failed, because nothing will deliver the message again and the run
+	// would show as running for ever.
+	defaultFinalAttempt = 5
+)
 
 // Values of agents.runs.status.
 const (
@@ -61,6 +75,17 @@ type Deps struct {
 	Frames outbox.FanoutPublisher
 	// Runtime runs the agents. Nil means the ADK runtime over LLM.
 	Runtime Runtime
+	// RunTimeout bounds one attempt of a run; 0 means 120 s. A run that exceeds it is
+	// failed at once, with reason "timeout", and not tried again.
+	RunTimeout time.Duration
+	// MaxTurns bounds the model calls of one attempt of the ADK runtime, the last of which
+	// has to be the answer; 0 means 8. A run that exceeds it is failed at once, with
+	// reason "too_many_steps".
+	MaxTurns int
+	// FinalAttempt is the delivery of agent.invoke that fails a run for good instead of
+	// being tried again: it must equal the bus's MaxAttempts; 0 means 5, the bus's
+	// default.
+	FinalAttempt int
 }
 
 type service struct {
@@ -73,6 +98,10 @@ type service struct {
 	frames    outbox.FanoutPublisher
 	runtime   Runtime
 	registry  map[string]Spec
+	locks     *sessionLocks
+
+	runTimeout   time.Duration
+	finalAttempt int
 }
 
 // New returns the agents domain.
@@ -104,11 +133,12 @@ func newService(d Deps) *service {
 	}
 	rt := d.Runtime
 	if rt == nil {
-		rt = adkRuntime{llm: d.LLM}
+		rt = adkRuntime{llm: d.LLM, maxTurns: cmp.Or(d.MaxTurns, defaultMaxTurns)}
 	}
 	return &service{
 		db: d.DB, authz: d.Authz, chat: d.Chat, knowledge: d.Knowledge, tasks: d.Tasks, llm: d.LLM,
-		frames: d.Frames, runtime: rt, registry: registry,
+		frames: d.Frames, runtime: rt, registry: registry, locks: newSessionLocks(),
+		runTimeout: cmp.Or(d.RunTimeout, defaultRunTimeout), finalAttempt: cmp.Or(d.FinalAttempt, defaultFinalAttempt),
 	}
 }
 

@@ -26,6 +26,22 @@ const (
 // of a mention run, the user of an Ask-panel run. The frames are ephemeral: they go
 // over Valkey and never through the outbox, so a frame that is lost is a delay and
 // the run's stored state is the truth (a channel's message, GetRun).
+//
+// The contract a client reads the frames by:
+//
+//   - A run sends RUNNING when it starts and again after every tool call it made, then
+//     STREAMING frames whose text_delta pieces, in order, are the text the model is
+//     writing, then DONE or FAILED.
+//   - The text a model writes between tool calls is not necessarily part of its answer
+//     (it may say "let me look" before it searches), and the frames carry no marker for
+//     where the final answer begins. So a client keeps one buffer per run and clears it
+//     on every RUNNING, DONE and FAILED frame, and when the run's message arrives as a
+//     message_created frame; whatever STREAMING text follows the last RUNNING is the
+//     answer so far.
+//   - DONE carries the slip when the run produced one, and nothing else of the answer: a
+//     reply without a slip is the message the channel receives, or for an Ask-panel run
+//     the answer GetRun returns. A frame may be lost or arrive twice; DONE and FAILED
+//     are repeated by nobody, so a client that is waiting for a run also asks GetRun.
 type progress struct {
 	fan   outbox.FanoutPublisher
 	topic string
@@ -43,8 +59,13 @@ func progressTopic(channel *uuid.UUID, user uuid.UUID) string {
 	return "u:" + user.String()
 }
 
-// started tells watchers that the run is going before any text exists.
-func (p *progress) started(ctx context.Context) {
+// running tells watchers that the run is at work and no text of its answer is on the
+// way yet: at its start, and after each tool call, when what streamed before was not
+// the answer.
+func (p *progress) running(ctx context.Context) {
+	if p.muted {
+		return
+	}
 	p.send(ctx, frameTimeout, &realtimev1.AgentRunProgress{State: realtimev1.AgentRunState_AGENT_RUN_STATE_RUNNING})
 }
 

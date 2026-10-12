@@ -13,39 +13,65 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const completeRun = `-- name: CompleteRun :exec
+const appendToolCall = `-- name: AppendToolCall :execrows
+UPDATE agents.runs
+SET tool_calls = tool_calls || $1::jsonb,
+    updated_at = now()
+WHERE id = $2 AND status IN ('queued', 'running')
+`
+
+type AppendToolCallParams struct {
+	Call json.RawMessage
+	ID   uuid.UUID
+}
+
+// Records one tool call of a run, as it ends, so that the calls of a run are known to its
+// later attempts (they share one budget) and survive an attempt that never finished.
+// call is a JSON array of the one call.
+func (q *Queries) AppendToolCall(ctx context.Context, arg AppendToolCallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, appendToolCall, arg.Call, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const completeRun = `-- name: CompleteRun :execrows
 UPDATE agents.runs
 SET status        = 'done',
     failure_reason = NULL,
     ref           = $1,
     result        = $2,
-    tool_calls    = $3,
-    input_tokens  = $4,
-    output_tokens = $5,
+    input_tokens  = $3,
+    output_tokens = $4,
     updated_at    = now()
-WHERE id = $6
+WHERE id = $5 AND status IN ('queued', 'running')
 `
 
 type CompleteRunParams struct {
 	Ref          *string
 	Result       json.RawMessage
-	ToolCalls    json.RawMessage
 	InputTokens  int32
 	OutputTokens int32
 	ID           uuid.UUID
 }
 
 // Ends a run with its answer. ref and result are null for a run that produced no slip.
-func (q *Queries) CompleteRun(ctx context.Context, arg CompleteRunParams) error {
-	_, err := q.db.Exec(ctx, completeRun,
+// A run that already ended is left as it ended and nothing is affected, so a delivery that
+// lost a race cannot overwrite the REF and the answer of the one that won; the caller
+// treats that as the end of its own attempt.
+func (q *Queries) CompleteRun(ctx context.Context, arg CompleteRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeRun,
 		arg.Ref,
 		arg.Result,
-		arg.ToolCalls,
 		arg.InputTokens,
 		arg.OutputTokens,
 		arg.ID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSession = `-- name: DeleteSession :exec

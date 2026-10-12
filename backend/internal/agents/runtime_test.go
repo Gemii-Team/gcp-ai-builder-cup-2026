@@ -9,6 +9,7 @@ import (
 	"iter"
 	"log"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -174,14 +176,23 @@ type step struct {
 	err  error
 	// hold, when set, blocks a streaming answer after its first piece until it is closed.
 	hold <-chan struct{}
+	// block makes the call wait until its context ends, as a model that never answers.
+	block bool
+	// truncated ends the answer at the token limit.
+	truncated bool
+	// forever keeps the step at the head of the script: the model plays it on every call.
+	forever bool
 }
 
 // say is a step that answers with text.
 func say(text string) step { return step{text: text} }
 
+// callIDs makes the id of every call of a tool unique, as a provider's are.
+var callIDs atomic.Int64
+
 // callTool is a step that calls a tool.
 func callTool(name string, args map[string]any) step {
-	return step{call: &genai.FunctionCall{ID: "call-" + name, Name: name, Args: args}}
+	return step{call: &genai.FunctionCall{Name: name, Args: args}}
 }
 
 // scriptedModel is an ADK model that plays its steps in order, one per model call,
@@ -199,6 +210,13 @@ func (m *scriptedModel) script(steps ...step) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.steps = append(m.steps, steps...)
+}
+
+// reset drops the steps that are left, those that repeat forever included.
+func (m *scriptedModel) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.steps = nil
 }
 
 func (m *scriptedModel) requests() []*model.LLMRequest {
@@ -224,7 +242,9 @@ func (m *scriptedModel) GenerateContent(ctx context.Context, req *model.LLMReque
 	ok := len(m.steps) > 0
 	if ok {
 		s = m.steps[0]
-		m.steps = m.steps[1:]
+		if !s.forever {
+			m.steps = m.steps[1:]
+		}
 	}
 	m.mu.Unlock()
 
@@ -234,9 +254,14 @@ func (m *scriptedModel) GenerateContent(ctx context.Context, req *model.LLMReque
 			yield(nil, errors.New("scripted model: no step left for this call"))
 		case s.err != nil:
 			yield(nil, s.err)
+		case s.block:
+			<-ctx.Done()
+			yield(nil, ctx.Err())
 		case s.call != nil:
+			// A call of its own on every play: ADK edits the ids of the calls it is given.
+			call := &genai.FunctionCall{ID: fmt.Sprintf("call-%d", callIDs.Add(1)), Name: s.call.Name, Args: maps.Clone(s.call.Args)}
 			yield(&model.LLMResponse{
-				Content:       &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: s.call}}},
+				Content:       &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: call}}},
 				UsageMetadata: m.usage(), TurnComplete: true,
 			}, nil)
 		default:
@@ -255,9 +280,13 @@ func (m *scriptedModel) GenerateContent(ctx context.Context, req *model.LLMReque
 					}
 				}
 			}
-			yield(&model.LLMResponse{
+			final := &model.LLMResponse{
 				Content: genai.NewContentFromText(s.text, genai.RoleModel), UsageMetadata: m.usage(), TurnComplete: true,
-			}, nil)
+			}
+			if s.truncated {
+				final.FinishReason = genai.FinishReasonMaxTokens
+			}
+			yield(final, nil)
 		}
 	}
 }
@@ -740,8 +769,8 @@ func TestInvoke_FinalAttemptFailure_MarksRunFailed(t *testing.T) {
 	if run.Status != "failed" || run.Ref != nil || len(run.Result) != 0 {
 		t.Errorf("run = %+v, want failed with no REF and no answer: a failed run issues none", run)
 	}
-	if run.FailureReason == nil || *run.FailureReason == "" || strings.Contains(*run.FailureReason, "litellm") || strings.Contains(*run.FailureReason, "dial") {
-		t.Errorf("failure reason = %v, want a plain reason that does not repeat the provider's error", run.FailureReason)
+	if run.FailureReason == nil || *run.FailureReason != "model_unavailable" {
+		t.Errorf("failure reason = %v, want the code model_unavailable, which does not repeat the provider's error", run.FailureReason)
 	}
 	if n := len(a.replies(a.public, a.alice)); n != 0 {
 		t.Errorf("agent replies = %d, want none", n)
@@ -1189,7 +1218,7 @@ func TestInvoke_EmptyAnswerIsRetriedAndNeverPosted(t *testing.T) {
 	if n := len(a.replies(a.public, a.alice)); n != 0 {
 		t.Errorf("agent replies = %d, want none: a message cannot be empty", n)
 	}
-	if err := a.job()(t.Context(), a.delivery(ev, "evt-1", finalAttempt)); err != nil {
+	if err := a.job()(t.Context(), a.delivery(ev, "evt-1", defaultFinalAttempt)); err != nil {
 		t.Fatalf("final attempt: %v", err)
 	}
 	if run := a.run(runID); run.Status != "failed" || run.FailureReason == nil {
@@ -1408,7 +1437,7 @@ func TestSessionService_StoresEventsAndStateAndReloadsThem(t *testing.T) {
 	final.Actions.StateDelta = map[string]any{"topic": "board", "temp:scratch": "never stored"}
 	partial := turn(t, "assistant", "Two")
 	partial.Partial = true
-	noID := turn(t, "user", "thanks")
+	noID := turn(t, "assistant", "Anything else?")
 	noID.ID = ""
 
 	for _, ev := range []*session.Event{user, call, reply, partial, final, noID} {
@@ -1439,7 +1468,7 @@ func TestSessionService_StoresEventsAndStateAndReloadsThem(t *testing.T) {
 	for ev := range loaded.Events().All() {
 		authors = append(authors, ev.Author)
 	}
-	if want := []string{"user", "assistant", "tool", "assistant", "user"}; !slices.Equal(authors, want) {
+	if want := []string{"user", "assistant", "tool", "assistant", "assistant"}; !slices.Equal(authors, want) {
 		t.Errorf("event authors = %v, want %v in append order", authors, want)
 	}
 	if fc := loaded.Events().At(1).Content.Parts[0].FunctionCall; fc == nil || fc.Name != "list_tasks" || fc.Args["channel_id"] != "x" {

@@ -103,6 +103,26 @@ type ToolDeps struct {
 	// Trigger is the message that started the run; nil for a run of the Ask panel,
 	// which has none. A draft the run proposes cites it as its source.
 	Trigger *Trigger
+	// Prior is what earlier attempts of the same run already did. The zero value is a
+	// run that has done nothing.
+	Prior Prior
+}
+
+// Prior is what the earlier attempts of one run used: a run that is tried again carries
+// its budget over, so attempts cannot multiply it, and a draft an attempt made is handed
+// back, not made a second time, when a retry proposes it again (same channel, same
+// title).
+type Prior struct {
+	// Calls is how many tool calls the earlier attempts made.
+	Calls int
+	// Drafts are the drafts they made.
+	Drafts []PriorDraft
+}
+
+// PriorDraft is a draft an earlier attempt made, as the model was told of it. A zero
+// PriorDraft counts against the budget and matches no call.
+type PriorDraft struct {
+	ChannelID, Title, Ref, State, OwnerUserID, DueDate string
 }
 
 // Trigger is the message a run answers. It is data about the run, not an identity: who
@@ -180,13 +200,15 @@ func (c *Collector) recordSummary(s *ChannelSummary) {
 }
 
 // toolbox is the tools of one run, and the budget of that run: NewTools makes one per
-// call, so a new run starts with a full budget.
+// call and starts it from d.Prior, so a retried run carries over what its earlier
+// attempts used and a new run starts with a full budget.
 type toolbox struct {
 	ToolDeps
 
 	mu     sync.Mutex
-	calls  int // tool calls made
-	drafts int // drafts made, or being made
+	calls  int                     // tool calls made
+	drafts int                     // drafts made, or being made
+	made   []createTaskDraftResult // the drafts made, to hand back when one is proposed again
 }
 
 // NewTools returns the tools of one run by name. Each acts as the agent actor that
@@ -215,7 +237,12 @@ func NewTools(d ToolDeps) map[string]tool.Tool {
 	case d.Collector == nil:
 		panic("agents: ToolDeps.Collector is required")
 	}
-	tb := &toolbox{ToolDeps: d}
+	tb := &toolbox{ToolDeps: d, calls: d.Prior.Calls, drafts: len(d.Prior.Drafts)}
+	for _, p := range d.Prior.Drafts {
+		tb.made = append(tb.made, createTaskDraftResult{
+			Ref: p.Ref, ChannelID: p.ChannelID, Title: p.Title, State: p.State, OwnerUserID: p.OwnerUserID, DueDate: p.DueDate,
+		})
+	}
 	return map[string]tool.Tool{
 		toolSearchKnowledge: newTool(toolSearchKnowledge,
 			"Answer a question from what the channels, meetings and documents of the person you act for say. "+
@@ -561,6 +588,9 @@ func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (c
 		}
 	}
 
+	if again, ok := tb.alreadyMade(channel, title); ok {
+		return again, nil
+	}
 	release, err := tb.reserveDraft()
 	if err != nil {
 		return createTaskDraftResult{}, err
@@ -570,11 +600,31 @@ func (tb *toolbox) createTaskDraft(ctx agent.Context, in createTaskDraftArgs) (c
 		release() // a refused draft is not one of the run's
 		return createTaskDraftResult{}, err
 	}
-	return createTaskDraftResult{
+	made := createTaskDraftResult{
 		Ref: task.GetRef(), ChannelID: task.GetChannelId(), Title: task.GetTitle(),
 		State:       strings.TrimPrefix(task.GetState().String(), "TASK_STATE_"),
 		OwnerUserID: task.GetAssigneeId(), DueDate: dueDate,
-	}, nil
+	}
+	tb.mu.Lock()
+	tb.made = append(tb.made, made)
+	tb.mu.Unlock()
+	return made, nil
+}
+
+// alreadyMade finds the draft of this run in channel with this title: a retry, or a
+// model that asks twice, gets the draft that exists, not a second one.
+func (tb *toolbox) alreadyMade(channel uuid.UUID, title string) (createTaskDraftResult, bool) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if title == "" {
+		return createTaskDraftResult{}, false
+	}
+	for _, d := range tb.made {
+		if d.Title == title && d.ChannelID == channel.String() {
+			return d, true
+		}
+	}
+	return createTaskDraftResult{}, false
 }
 
 // ---- list_tasks -------------------------------------------------------------

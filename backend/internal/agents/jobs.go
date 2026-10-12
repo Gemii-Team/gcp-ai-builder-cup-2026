@@ -32,13 +32,6 @@ import (
 const (
 	// consumerRun is the name of the job; it reads agent.invoke.
 	consumerRun = "agent.run"
-	// finalAttempt is the delivery the bus dead-letters a message after: a run that
-	// still fails on it is recorded as failed, because nothing will deliver the
-	// message again and the run would show as running for ever.
-	finalAttempt = 5
-	// runTimeout bounds one attempt at a run: the model client has no timeout of its
-	// own, and a model that runs away holds the run until the context ends.
-	runTimeout = 3 * time.Minute
 	// triggerPage and triggerPages bound the search for the message that started a
 	// run: chat reads history by seq, not by id, and the message is among the latest.
 	triggerPage  = 200
@@ -49,15 +42,19 @@ const (
 	maxTitleRunes = 200
 )
 
-// Why a run failed, in the words a person reads. None repeats what the provider said:
-// an error of the model path may name the URL it called.
+// Why a run failed, as agents.runs.failure_reason keeps it: a short code, as the failure
+// reasons of files and meetings are, which a client words in the person's language. None
+// repeats what a provider said: an error of the model path may name the URL it called.
 const (
-	reasonUnavailable  = "The agent could not answer right now. Try again."
-	reasonTimeout      = "The agent took too long to answer. Try again."
-	reasonTruncated    = "The agent's answer was cut off. Try a shorter question."
-	reasonUnknownAgent = "This agent does not exist."
-	reasonNoAccess     = "You can no longer ask this agent in this conversation."
-	reasonNoQuestion   = "There was no question to answer."
+	reasonModelUnavailable = "model_unavailable" // the model or something it needs failed, on every attempt
+	reasonTimeout          = "timeout"           // an attempt ran out of time (Deps.RunTimeout)
+	reasonTooManySteps     = "too_many_steps"    // the model kept calling tools (Deps.MaxTurns)
+	reasonTruncated        = "truncated"         // the answer ended at the token limit, twice
+	reasonUnknownAgent     = "unknown_agent"     // the registry has no such agent
+	reasonNoAccess         = "no_access"         // the person may not ask here any more, or the message is not theirs
+	reasonTriggerTooOld    = "trigger_too_old"   // the message that called the agent is not among the latest
+	reasonNoQuestion       = "no_question"       // the message has nothing to answer
+	reasonInvalid          = "invalid"           // the event itself is wrong
 )
 
 var (
@@ -65,6 +62,16 @@ var (
 	errEmptyAnswer = errors.New("the agent ended without an answer")
 	// errMalformed is an event that is not an agent.invoke.
 	errMalformed = errors.New("malformed agent.invoke")
+	// errRunTimeout is an attempt that used up Deps.RunTimeout. The run is failed for it
+	// at once: another attempt would take as long again, and would re-run the tools the
+	// first one ran.
+	errRunTimeout = errors.New("the run took too long")
+	// errTriggerTooOld is a mention that is out of reach: chat is read back from the
+	// newest message and the one that called the agent is further back than that.
+	errTriggerTooOld = errors.New("the message that called the agent is no longer among the latest")
+	// errRunEnded is the delivery that found its run ended by another one, when it came to
+	// write its result: its transaction is rolled back, so it takes no REF and posts nothing.
+	errRunEnded = errors.New("the run has already ended")
 )
 
 // Jobs returns the consumers of the agents domain for the composition root to
@@ -157,66 +164,75 @@ func (o *outcome) publish(ctx context.Context) {
 
 // handle is the agent.run handler: the run, exactly once per message, and a last
 // resort for the final delivery. A run that fails is delivered again until its last
-// attempt; the last one records the failure so the run does not stay running for
-// ever. A caller that has gone away, a shutdown, is not the run's fault and is
-// delivered again.
+// attempt, unless the failure is one no attempt gets past (see verdict); the last
+// attempt records the failure so the run does not stay running for ever. A caller that
+// has gone away, a shutdown, is not the run's fault and is delivered again.
 func (s *service) handle(ctx context.Context, m bus.Message) error {
 	oc := &outcome{}
 	err := outbox.Once(s.db, consumerRun, func(ctx context.Context, m bus.Message) (outbox.Apply, error) {
 		return s.prepare(ctx, m, oc)
 	})(ctx, m)
-	if err == nil {
+	switch {
+	case err == nil:
 		oc.publish(ctx)
 		return nil
-	}
-	if m.Attempt < finalAttempt || ctx.Err() != nil {
+	case errors.Is(err, errRunEnded):
+		return nil // another delivery ended the run: its result stands, and there is nothing to retry
+	case m.Attempt < s.finalAttempt || ctx.Err() != nil:
 		return err
 	}
 	inv, derr := decodeInvoke(m)
 	if derr != nil {
 		return err // a message about no run: there is nothing to settle
 	}
-	slog.WarnContext(ctx, "agents: giving up on a run at the final attempt", "run_id", inv.run, "attempt", m.Attempt, "error", err)
+	reason, _ := verdict(err, m.Attempt)
+	slog.WarnContext(ctx, "agents: giving up on a run at the final attempt", "run_id", inv.run, "attempt", m.Attempt, "reason", reason, "error", err)
 	oc = &outcome{}
-	if settle := outbox.OnceFor(ctx, s.db, consumerRun, m.ID, inv.ws, s.failing(inv, failureReason(err), oc)); settle != nil {
+	if settle := outbox.OnceFor(ctx, s.db, consumerRun, m.ID, inv.ws, s.failing(inv, reason, oc)); settle != nil {
 		return fmt.Errorf("agents: fail run %s at the final attempt: %w (the run failed with: %v)", inv.run, settle, err)
 	}
 	oc.publish(ctx)
 	return nil
 }
 
-// failureReason is what to tell the person about err.
-func failureReason(err error) string {
+// verdict says why a run failed with err, and whether no further attempt can do better,
+// so that the run is failed now: the person may not do this, what they asked about is
+// gone, the run used up its time or its steps (another attempt would spend as much again
+// and run the tools again), or an answer ended at the token limit a second time. Anything
+// else is the model or its provider failing, which a later attempt may get past.
+func verdict(err error, attempt int) (reason string, final bool) {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return reasonTimeout
-	case errors.Is(err, llm.ErrTruncated):
-		return reasonTruncated
+	case errors.Is(err, errRunTimeout):
+		return reasonTimeout, true
+	case errors.Is(err, errTooManySteps):
+		return reasonTooManySteps, true
+	case errors.Is(err, errTriggerTooOld):
+		return reasonTriggerTooOld, true
 	case errors.Is(err, errs.ErrForbidden), errors.Is(err, errs.ErrNotFound):
-		return reasonNoAccess
+		return reasonNoAccess, true
+	case errors.Is(err, errs.ErrInvalid):
+		return reasonInvalid, true
+	case errors.Is(err, llm.ErrTruncated):
+		return reasonTruncated, attempt > 1
 	}
-	return reasonUnavailable
-}
-
-// permanent reports an error that no delivery will get past: the person may not do
-// this, or the thing they asked about is gone.
-func permanent(err error) bool {
-	return errors.Is(err, errs.ErrForbidden) || errors.Is(err, errs.ErrNotFound) || errors.Is(err, errs.ErrInvalid)
+	return reasonModelUnavailable, false
 }
 
 // failing is the Apply that ends the run of inv as failed: it writes the row of a
-// run that never got as far as having one, and leaves a run that ended as it ended.
+// run that never got as far as having one, and leaves a run that ended as it ended (and
+// announces nothing for it).
 func (s *service) failing(inv invoke, reason string, oc *outcome) outbox.Apply {
 	return func(ctx context.Context, tx pgx.Tx) error {
 		q := store.New(tx)
 		if _, err := q.UpsertRunningRun(ctx, upsertParams(inv, "")); err != nil {
 			return fmt.Errorf("agents: write run %s: %w", inv.run, err)
 		}
-		if _, err := q.FailRun(ctx, store.FailRunParams{ID: inv.run, FailureReason: &reason}); err != nil {
+		n, err := q.FailRun(ctx, store.FailRunParams{ID: inv.run, FailureReason: &reason})
+		if err != nil {
 			return fmt.Errorf("agents: fail run %s: %w", inv.run, err)
 		}
 		oc.progress = s.progressOf(inv.run, inv.trigger != nil, inv.channel, inv.user)
-		oc.failed, oc.applied = true, true
+		oc.failed, oc.applied = true, n > 0
 		return nil
 	}
 }
@@ -255,7 +271,8 @@ func (s *service) prepare(ctx context.Context, m bus.Message, oc *outcome) (outb
 	if row.Status == statusDone || row.Status == statusFailed {
 		return nil, nil // a run that ended is not run again, whatever message names it
 	}
-	// From here the row, not the event, says who the run is for and what it asks.
+	// From here the row, not the event, says who the run is for and what it asks: a run
+	// that exists is the one that was started, whatever a later event claims.
 	inv.agent, inv.user, inv.channel, inv.trigger = row.Agent, row.OnBehalfOf, row.ChannelID, row.TriggerMessageID
 
 	spec, ok := s.registry[row.Agent]
@@ -263,20 +280,25 @@ func (s *service) prepare(ctx context.Context, m bus.Message, oc *outcome) (outb
 		return s.failing(inv, reasonUnknownAgent, oc), nil
 	}
 	job, err := s.errand(ctx, inv, row)
-	switch {
-	case permanent(err):
-		slog.WarnContext(ctx, "agents: run cannot start", "run_id", inv.run, "error", err)
-		return s.failing(inv, failureReason(err), oc), nil
-	case err != nil:
-		return nil, err
-	case strings.TrimSpace(job.question) == "":
+	if err == nil && strings.TrimSpace(job.question) == "" {
 		return s.failing(inv, reasonNoQuestion, oc), nil
+	}
+	if err != nil {
+		if reason, stop := verdict(err, m.Attempt); stop {
+			slog.WarnContext(ctx, "agents: run cannot start", "run_id", inv.run, "reason", reason, "error", err)
+			return s.failing(inv, reason, oc), nil
+		}
+		return nil, err
 	}
 
 	oc.progress = s.progressOf(inv.run, job.trigger != nil, inv.channel, inv.user)
-	oc.progress.started(ctx)
-	final, col, err := s.execute(ctx, inv, spec, job, oc.progress)
+	oc.progress.running(ctx)
+	final, col, err := s.execute(ctx, inv, spec, job, priorOf(row.ToolCalls), oc.progress)
 	if err != nil {
+		if reason, stop := verdict(err, m.Attempt); stop {
+			slog.WarnContext(ctx, "agents: run stopped", "run_id", inv.run, "attempt", m.Attempt, "reason", reason, "error", err)
+			return s.failing(inv, reason, oc), nil
+		}
 		return nil, err
 	}
 
@@ -291,6 +313,45 @@ func (s *service) prepare(ctx context.Context, m bus.Message, oc *outcome) (outb
 	return s.finish(inv, job, final, slip, text, oc), nil
 }
 
+// priorOf reads what the earlier attempts of a run did from its recorded tool calls: how
+// many calls they made and which drafts. A call whose result was cut when it was
+// recorded still counts as a draft; it just matches no call of a retry.
+func priorOf(recorded json.RawMessage) Prior {
+	var calls []ToolCall
+	if len(recorded) == 0 || json.Unmarshal(recorded, &calls) != nil {
+		return Prior{}
+	}
+	prior := Prior{Calls: len(calls)}
+	seen := map[string]bool{}
+	for _, c := range calls {
+		if c.Name != toolCreateTaskDraft || c.Error != "" {
+			continue
+		}
+		var d PriorDraft
+		var res struct {
+			Ref         string `json:"ref"`
+			ChannelID   string `json:"channel_id"`
+			Title       string `json:"title"`
+			State       string `json:"state"`
+			OwnerUserID string `json:"owner_user_id"`
+			DueDate     string `json:"due_date"`
+		}
+		if json.Unmarshal([]byte(c.Result), &res) == nil {
+			d = PriorDraft{ChannelID: res.ChannelID, Title: res.Title, Ref: res.Ref, State: res.State, OwnerUserID: res.OwnerUserID, DueDate: res.DueDate}
+		}
+		// A call that was handed a draft the run had made is recorded too, with the same
+		// ref: it is one draft.
+		if d.Ref != "" {
+			if seen[d.Ref] {
+				continue
+			}
+			seen[d.Ref] = true
+		}
+		prior.Drafts = append(prior.Drafts, d)
+	}
+	return prior
+}
+
 // errand is what a run answers.
 type errand struct {
 	// question is what is stored as the run's question; input is what the model reads.
@@ -301,7 +362,8 @@ type errand struct {
 
 // errand finds what the run answers. For a mention run that is the message that started
 // it, read as the person who wrote it: someone who is not in its channel any more, or
-// whose message is not theirs, gets no answer.
+// whose message is not theirs, gets no answer. The event cannot make a run answer a
+// message for someone else: the message has to be its author's.
 func (s *service) errand(ctx context.Context, inv invoke, row store.AgentsRun) (errand, error) {
 	if inv.trigger == nil {
 		return errand{question: row.Question, input: askInput(row.Question, inv.channel)}, nil
@@ -324,7 +386,7 @@ func (s *service) errand(ctx context.Context, inv invoke, row store.AgentsRun) (
 			author = strings.TrimSpace(mem.GetName())
 		}
 	}
-	body := strings.TrimSpace(msg.GetBody())
+	body := clip(strings.TrimSpace(msg.GetBody()), maxQuestionRunes-1)
 	if err := s.db.InWorkspace(ctx, inv.ws, func(ctx context.Context, tx pgx.Tx) error {
 		return store.New(tx).SetRunQuestion(ctx, store.SetRunQuestionParams{ID: inv.run, Question: body})
 	}); err != nil {
@@ -340,7 +402,8 @@ func (s *service) errand(ctx context.Context, inv invoke, row store.AgentsRun) (
 }
 
 // findMessage reads the message id of channel, which is among the latest: chat pages
-// history by seq, so it walks back from the newest until it finds it.
+// history by seq, so it walks back from the newest until it finds it, through
+// triggerPages pages. A message further back, or that does not exist, is errTriggerTooOld.
 func (s *service) findMessage(ctx context.Context, person authz.Actor, channel, id uuid.UUID) (*chatv1.Message, error) {
 	var before int64
 	for range triggerPages {
@@ -358,16 +421,20 @@ func (s *service) findMessage(ctx context.Context, person authz.Actor, channel, 
 		}
 		before = page[len(page)-1].GetSeq() // newest first: the last is the oldest
 	}
-	return nil, fmt.Errorf("agents: message %s is not among the latest of channel %s: %w", id, channel, errs.ErrNotFound)
+	return nil, fmt.Errorf("agents: message %s of channel %s: %w", id, channel, errTriggerTooOld)
 }
 
-// execute runs the agent as the person the run is for, with the tools of this run.
-func (s *service) execute(ctx context.Context, inv invoke, spec Spec, t errand, p *progress) (Final, *Collector, error) {
+// execute runs the agent as the person the run is for, with the tools of this run, which
+// start from what the run's earlier attempts used (prior). It holds the conversation while
+// it runs, and its clock starts once it has it: one attempt may take s.runTimeout.
+func (s *service) execute(ctx context.Context, inv invoke, spec Spec, job errand, prior Prior, p *progress) (Final, *Collector, error) {
 	actor := authz.Actor{Kind: authz.ActorAgent, WorkspaceID: inv.ws, OnBehalfOf: inv.user, Agent: spec.Name}
 	col := &Collector{}
-	tools := NewTools(ToolDeps{Knowledge: s.knowledge, Tasks: s.tasks, Chat: s.chat, LLM: s.llm, Collector: col, Trigger: t.trigger})
+	tools := NewTools(ToolDeps{
+		Knowledge: s.knowledge, Tasks: s.tasks, Chat: s.chat, LLM: s.llm, Collector: col, Trigger: job.trigger, Prior: prior,
+	})
 	sessionChannel := inv.channel
-	if t.trigger == nil {
+	if job.trigger == nil {
 		sessionChannel = nil // the Ask panel has one conversation per person, whatever channel it names
 	}
 	sess := Session{
@@ -375,12 +442,27 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, t errand, 
 		Service: newSessionService(s.db, inv.ws), Tools: tools,
 	}
 
-	ctx, cancel := context.WithTimeout(WithActor(ctx, actor), runTimeout)
-	defer cancel()
-	bus.KeepAlive(ctx)
-	final, err := s.runtime.Run(ctx, spec, t.input, sess, func(delta string) {
+	var final Final
+	err := s.serialised(ctx, inv.ws, sess.ID, func(ctx context.Context) error {
 		bus.KeepAlive(ctx)
-		p.delta(ctx, delta)
+		runCtx, cancel := context.WithTimeout(WithActor(ctx, actor), s.runTimeout)
+		defer cancel()
+		sess.Record = func(call ToolCall) error {
+			if err := s.recordCall(runCtx, inv, call); err != nil {
+				return err
+			}
+			p.running(runCtx) // what streamed before the call was not the answer
+			return nil
+		}
+		var err error
+		final, err = s.runtime.Run(runCtx, spec, job.input, sess, func(delta string) {
+			bus.KeepAlive(runCtx)
+			p.delta(runCtx, delta)
+		})
+		if err != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return fmt.Errorf("agents: run %s: no answer within %s: %w", inv.run, s.runTimeout, errRunTimeout)
+		}
+		return err
 	})
 	if err != nil {
 		return Final{}, nil, err
@@ -388,10 +470,27 @@ func (s *service) execute(ctx context.Context, inv invoke, spec Spec, t errand, 
 	return final, col, nil
 }
 
+// recordCall adds a tool call to the calls recorded on the run, as the call ends: they
+// are the audit trail of the run, and what its later attempts count against the budget.
+func (s *service) recordCall(ctx context.Context, inv invoke, call ToolCall) error {
+	raw, err := json.Marshal([]ToolCall{call})
+	if err != nil {
+		return fmt.Errorf("agents: encode a tool call of run %s: %w", inv.run, err)
+	}
+	if err := s.db.InWorkspace(ctx, inv.ws, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := store.New(tx).AppendToolCall(ctx, store.AppendToolCallParams{ID: inv.run, Call: raw})
+		return err
+	}); err != nil {
+		return fmt.Errorf("agents: record a tool call of run %s: %w", inv.run, err)
+	}
+	return nil
+}
+
 // finish returns the Apply that ends the run: it numbers the slip, posts the reply to
 // the channel or keeps the answer for GetRun, and records the run's result, in the
-// transaction that records the message.
-func (s *service) finish(inv invoke, t errand, final Final, slip *chatv1.Artifact, text string, oc *outcome) outbox.Apply {
+// transaction that records the message. A run that another delivery ended meanwhile makes
+// it fail with errRunEnded, which rolls back the REF it took and the reply it posted.
+func (s *service) finish(inv invoke, job errand, final Final, slip *chatv1.Artifact, text string, oc *outcome) outbox.Apply {
 	return func(ctx context.Context, tx pgx.Tx) error {
 		var ref *string
 		if slip != nil {
@@ -403,7 +502,7 @@ func (s *service) finish(inv invoke, t errand, final Final, slip *chatv1.Artifac
 		}
 		var result json.RawMessage
 		answer := slip
-		if t.trigger != nil {
+		if job.trigger != nil {
 			actor := authz.Actor{Kind: authz.ActorAgent, WorkspaceID: inv.ws, OnBehalfOf: inv.user, Agent: inv.agent}
 			if _, err := s.chat.PostMessageTx(ctx, tx, actor, &chatv1.SendMessageRequest{
 				ChannelId: inv.channel.String(), ClientMsgId: replyID(inv.run), Body: clip(text, maxBodyRunes-1),
@@ -422,19 +521,15 @@ func (s *service) finish(inv invoke, t errand, final Final, slip *chatv1.Artifac
 			}
 			result = raw
 		}
-		calls := final.ToolCalls
-		if calls == nil {
-			calls = []ToolCall{}
-		}
-		toolCalls, err := json.Marshal(calls)
-		if err != nil {
-			return fmt.Errorf("agents: encode the tool calls of run %s: %w", inv.run, err)
-		}
-		if err := store.New(tx).CompleteRun(ctx, store.CompleteRunParams{
-			ID: inv.run, Ref: ref, Result: result, ToolCalls: toolCalls,
+		n, err := store.New(tx).CompleteRun(ctx, store.CompleteRunParams{
+			ID: inv.run, Ref: ref, Result: result,
 			InputTokens: tokens(final.Usage.InputTokens), OutputTokens: tokens(final.Usage.OutputTokens),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("agents: complete run %s: %w", inv.run, err)
+		}
+		if n == 0 {
+			return fmt.Errorf("agents: complete run %s: %w", inv.run, errRunEnded)
 		}
 		oc.answer, oc.applied = answer, true
 		return nil
