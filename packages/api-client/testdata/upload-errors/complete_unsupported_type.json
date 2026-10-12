@@ -1,0 +1,8 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "invalid_argument",
+    "message": "docs: upload rejected (unsupported_type): files of this type are not accepted"
+  }
+}

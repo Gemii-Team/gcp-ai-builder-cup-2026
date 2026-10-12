@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -256,11 +255,11 @@ func TestFailAnalysis_LeavesSettledFilesAlone(t *testing.T) {
 	}
 }
 
-// ---- the rejection text is a contract ----------------------------------------
+// ---- the rejection carries its reason ----------------------------------------
 
-var rejectionShape = regexp.MustCompile(`^docs: upload rejected \((empty|too_large|unsupported_type|unsupported_audio|size_mismatch)\): .+: invalid$`)
-
-func TestCompleteUpload_RejectionTextIsAContract(t *testing.T) {
+// The Connect layer makes what a client reads from the reason of the error CompleteUpload
+// returns, so every refusal must carry one of the five the web app can say.
+func TestCompleteUpload_RejectionCarriesItsReason(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("public", f.alice)
 	alice := f.user(f.alice)
@@ -321,9 +320,12 @@ func TestCompleteUpload_RejectionTextIsAContract(t *testing.T) {
 			if !errors.Is(err, errs.ErrInvalid) {
 				t.Fatalf("CompleteUpload = %v, want ErrInvalid", err)
 			}
-			m := rejectionShape.FindStringSubmatch(err.Error())
-			if m == nil || m[1] != c.reason {
-				t.Fatalf("error text %q does not have the shape \"docs: upload rejected (%s): <detail>: invalid\"", err, c.reason)
+			var rej *uploadRejection
+			if !errors.As(err, &rej) || rej.reason != c.reason {
+				t.Fatalf("CompleteUpload = %v, want an *uploadRejection naming %q", err, c.reason)
+			}
+			if _, ok := rejectionSentences[rej.reason]; !ok {
+				t.Fatalf("the reason %q has no sentence for the client", rej.reason)
 			}
 		})
 	}

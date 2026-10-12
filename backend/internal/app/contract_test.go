@@ -60,8 +60,14 @@ func (s *session) startMeeting(channelID string) contractAnswer {
 
 func postStartMeeting(r *rig, client *http.Client, channelID string) contractAnswer {
 	r.t.Helper()
-	req, err := http.NewRequestWithContext(r.t.Context(), http.MethodPost, r.URL+"/api/kiwi.meetings.v1.MeetingService/StartMeeting",
-		strings.NewReader(fmt.Sprintf(`{"channelId":%q}`, channelID)))
+	return postJSON(r, client, "kiwi.meetings.v1.MeetingService/StartMeeting", fmt.Sprintf(`{"channelId":%q}`, channelID))
+}
+
+// postJSON calls the unary RPC procedure the way the web's transport does (JSON, the
+// protocol header) through client, and returns what the server wrote.
+func postJSON(r *rig, client *http.Client, procedure, body string) contractAnswer {
+	r.t.Helper()
+	req, err := http.NewRequestWithContext(r.t.Context(), http.MethodPost, r.URL+"/api/"+procedure, strings.NewReader(body))
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -69,7 +75,7 @@ func postStartMeeting(r *rig, client *http.Client, channelID string) contractAns
 	req.Header.Set("Connect-Protocol-Version", "1")
 	resp, err := client.Do(req)
 	if err != nil {
-		r.t.Fatalf("StartMeeting: %v", err)
+		r.t.Fatalf("%s: %v", procedure, err)
 	}
 	return answerOf(r.t, resp)
 }
@@ -141,38 +147,48 @@ func TestContract_StartMeetingFailures_MatchTheFixturesTheWebReads(t *testing.T)
 		})
 	}
 
-	t.Run("every fixture has a case here", func(t *testing.T) {
-		files, err := filepath.Glob(filepath.Join(contractDir, "*.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, file := range files {
-			name := strings.TrimSuffix(filepath.Base(file), ".json")
-			if slices.Contains(names, name) {
-				continue
-			}
-			if os.Getenv("UPDATE_CONTRACT") == "1" {
-				if err := os.Remove(file); err != nil {
-					t.Fatal(err)
-				}
-				continue
-			}
-			t.Errorf("fixture %s has no case in this test: delete it, or add the case (UPDATE_CONTRACT=1 removes it)", file)
-		}
-	})
+	t.Run("every fixture has a case here", func(t *testing.T) { noStrayFixtures(t, contractDir, names) })
 }
 
-// checkFixture compares what the server wrote with the committed fixture of name; with
-// UPDATE_CONTRACT=1 it writes the fixture instead.
+// noStrayFixtures fails for a fixture of dir that has no case among names; with
+// UPDATE_CONTRACT=1 it removes it instead.
+func noStrayFixtures(t *testing.T, dir string, names []string) {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		name := strings.TrimSuffix(filepath.Base(file), ".json")
+		if slices.Contains(names, name) {
+			continue
+		}
+		if os.Getenv("UPDATE_CONTRACT") == "1" {
+			if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		t.Errorf("fixture %s has no case in this test: delete it, or add the case (UPDATE_CONTRACT=1 removes it)", file)
+	}
+}
+
+// checkFixture compares what the server wrote with the committed fixture of name in
+// contractDir; with UPDATE_CONTRACT=1 it writes the fixture instead.
 func checkFixture(t *testing.T, name string, got contractAnswer) {
 	t.Helper()
-	path := filepath.Join(contractDir, name+".json")
+	checkFixtureIn(t, contractDir, name, got)
+}
+
+func checkFixtureIn(t *testing.T, dir, name string, got contractAnswer) {
+	t.Helper()
+	path := filepath.Join(dir, name+".json")
 	if os.Getenv("UPDATE_CONTRACT") == "1" {
 		out, err := json.MarshalIndent(got, "", "  ")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll(contractDir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {

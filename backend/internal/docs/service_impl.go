@@ -201,14 +201,11 @@ func (s *service) CreateUpload(ctx context.Context, a authz.Actor, req *filesv1.
 // what it reads with that hash.
 //
 // A violation fails the file with the reason, deletes the object and returns the failed
-// file together with an error that wraps errs.ErrInvalid. The text of that error is a
-// contract, which the web client reads the reason from:
-//
-//	docs: upload rejected (<reason>): <detail>: invalid
-//
-// where <reason> is one of empty, too_large, unsupported_type, unsupported_audio and
-// size_mismatch (the object changed while it was being read), and <detail> is a sentence
-// for people. An accepted attachment commits, in one transaction, the status analyzing,
+// file together with an *uploadRejection, which wraps errs.ErrInvalid and carries the
+// reason, one of empty, too_large, unsupported_type, unsupported_audio and size_mismatch
+// (the object changed while it was being read), and a detail sentence for the log. The
+// text the client reads is made from the reason alone by the Connect layer (see refuse).
+// An accepted attachment commits, in one transaction, the status analyzing,
 // its message in the channel and the events that start its analysis; an accepted
 // recording stays uploaded, for the meetings domain to take over. Completing a file
 // twice is harmless: the second call returns the file as it then is, without reading
@@ -340,11 +337,21 @@ func (s *service) reject(ctx context.Context, a authz.Actor, row store.FilesFile
 	return fileProto(cur), rejection(reason, detail)
 }
 
-// rejection is the error CompleteUpload returns for an upload it refused; its text is
-// the contract documented there.
-func rejection(reason, detail string) error {
-	return fmt.Errorf("docs: upload rejected (%s): %s: %w", reason, detail, errs.ErrInvalid)
+// uploadRejection is the error CreateUpload and CompleteUpload return for an upload they
+// refused for a reason the web app can say. Its text is for the log: the detail holds
+// sizes and what the object store said. What a client reads is made from the reason
+// alone, by the Connect layer (see refuse).
+type uploadRejection struct{ reason, detail string }
+
+func (e *uploadRejection) Error() string {
+	return fmt.Sprintf("docs: upload rejected (%s): %s: %s", e.reason, e.detail, errs.ErrInvalid)
 }
+
+func (e *uploadRejection) Unwrap() error { return errs.ErrInvalid }
+
+// rejection is the error of an upload refused for reason, with a detail sentence for
+// people reading the log.
+func rejection(reason, detail string) error { return &uploadRejection{reason: reason, detail: detail} }
 
 // accept records a validated upload: the size and the sha256 of the bytes that were
 // validated.

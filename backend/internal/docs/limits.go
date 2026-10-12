@@ -95,29 +95,29 @@ func mediaType(contentType string) (string, error) {
 }
 
 // checkDeclared validates what CreateUpload is asked for and returns the media type to
-// sign the upload for.
+// sign the upload for. A refusal that has a reason the web app can say (a type not
+// accepted, an empty file, a file over its limit) is an *uploadRejection; one that has
+// none (no purpose) is a plain errs.ErrInvalid.
 func checkDeclared(purpose filesv1.UploadPurpose, contentType string, size int64) (string, error) {
 	var allowed map[string]bool
+	var notAccepted string
 	switch purpose {
 	case filesv1.UploadPurpose_UPLOAD_PURPOSE_ATTACHMENT:
-		allowed = allowedAttachmentMIME
+		allowed, notAccepted = allowedAttachmentMIME, reasonUnsupportedType
 	case filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING:
-		allowed = allowedRecordingMIME
+		allowed, notAccepted = allowedRecordingMIME, reasonUnsupportedAudio
 	default:
 		return "", fmt.Errorf("docs: an upload needs a purpose: %w", errs.ErrInvalid)
 	}
 	mt, err := mediaType(contentType)
-	if err != nil {
-		return "", err
-	}
-	if !allowed[mt] {
-		return "", fmt.Errorf("docs: files of type %q are not accepted here: %w", mt, errs.ErrInvalid)
+	if err != nil || !allowed[mt] {
+		return "", rejection(notAccepted, fmt.Sprintf("files of type %q are not accepted here", contentType))
 	}
 	if size <= 0 {
-		return "", fmt.Errorf("docs: an empty file cannot be uploaded: %w", errs.ErrInvalid)
+		return "", rejection(reasonEmpty, "an empty file cannot be uploaded")
 	}
 	if limit := maxBytes(purpose); size > limit {
-		return "", fmt.Errorf("docs: a file of %d bytes is over the %d byte limit: %w", size, limit, errs.ErrInvalid)
+		return "", rejection(reasonTooLarge, fmt.Sprintf("a file of %d bytes is over the %d byte limit", size, limit))
 	}
 	return mt, nil
 }

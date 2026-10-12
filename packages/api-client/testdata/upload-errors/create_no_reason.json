@@ -1,0 +1,8 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "invalid_argument",
+    "message": "invalid"
+  }
+}

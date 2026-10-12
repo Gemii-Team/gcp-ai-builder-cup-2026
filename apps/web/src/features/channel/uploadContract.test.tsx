@@ -1,5 +1,5 @@
 import { Code, ConnectError } from '@connectrpc/connect';
-import { create } from '@bufbuild/protobuf';
+import { create, toJson } from '@bufbuild/protobuf';
 import {
   CompleteUploadResponseSchema,
   CreateUploadResponseSchema,
@@ -10,14 +10,17 @@ import {
 } from '@kiwi/api-client';
 import { act, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createApi } from '../../api/client';
 import { useUiStore } from '../../state/ui';
 import { file, frame, message } from '../../testing/fixtures';
 import { LOG, openChannel } from '../../testing/openChannel';
 import { createStubApi, type StubApi } from '../../testing/stubApi';
 
-// The backend's contract for an upload the server rejects (L18): `CompleteUpload` answers `invalid_argument` with the
-// message `docs: upload rejected (<reason>): <detail>`, <reason> one of five; the file row is marked failed with that
-// reason, which `file_status_changed` and `GetFile` carry too. Recordings are PCM16 WAV only.
+// The contract between the server and the web for an upload the server refuses. The refusals are the files the Go test
+// `TestContract_UploadRefusals_MatchTheFixturesTheWebReads` (backend/internal/app) compares with the bytes the composed
+// server writes: `CreateUpload` and `CompleteUpload` answer `invalid_argument` with the message `docs: upload rejected
+// (<reason>): <sentence>` (<reason> one of five) or, for a refusal with no reason of its own, only `invalid`. The file row
+// is marked failed with the same reason, which `file_status_changed` and `GetFile` carry too. Recordings are PCM16 WAV only.
 
 beforeEach(() => {
   localStorage.clear();
@@ -37,6 +40,7 @@ const REASONS = [
   ['size_mismatch', "the file's size changed while it was uploading. Try again.", 'ขนาดไฟล์เปลี่ยนไประหว่างอัปโหลด ลองอีกครั้ง'],
 ] as const;
 
+/** A refusal as a hand-typed message, for the answers the server does not send today: a reason a newer server may add. */
 const rejection = (reason: string) => new ConnectError(`docs: upload rejected (${reason}): the server's own English detail`, Code.InvalidArgument);
 
 /** Chooses a file the way the picker does, past its accept list: the server decides what it takes. */
@@ -55,36 +59,124 @@ async function ready(api: StubApi) {
   return { ...opened, put };
 }
 
-describe('a rejected upload says its reason', () => {
-  it.each(REASONS)('CompleteUpload rejects with %s: the inline sentence is the reason, in English, and never the server detail', async (reason, english) => {
-    const api = createStubApi();
-    await ready(api);
-    api.files.completeUpload.mockRejectedValue(rejection(reason));
+type Fixture = { httpStatus: number; contentType: string; body: { code: string; message: string } };
 
-    choose(new File(['x'], 'standup.pdf', { type: 'application/pdf' }));
+const files = import.meta.glob<string>('../../../../../packages/api-client/testdata/upload-errors/*.json', { query: '?raw', import: 'default', eager: true });
+const fixtures = Object.entries(files).map(([path, text]) => ({
+  name: path.slice(path.lastIndexOf('/') + 1).replace(/\.json$/, ''),
+  fixture: JSON.parse(text) as Fixture,
+}));
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`Couldn't upload standup.pdf: ${english}`);
-    expect(alert).not.toHaveTextContent("the server's own English detail");
-    expect(api.meetings.createFromRecording).not.toHaveBeenCalled();
+/** What the person picks for each fixture and is told: the reason (a REASONS row), or null for a refusal that names none. */
+const OUTCOME: Record<string, { pick: () => File; reason: (typeof REASONS)[number][0] | null }> = {
+  create_empty: { pick: () => new File([], 'notes.txt', { type: 'text/plain' }), reason: 'empty' },
+  create_too_large: { pick: () => new File(['x'], 'big.pdf', { type: 'application/pdf' }), reason: 'too_large' },
+  create_unsupported_type: {
+    pick: () => new File(['x'], 'plan.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    reason: 'unsupported_type',
+  },
+  create_unsupported_audio: { pick: () => new File(['ID3'], 'standup.mp3', { type: 'audio/mpeg' }), reason: 'unsupported_audio' },
+  create_no_reason: { pick: () => new File(['x'], 'notes.txt', { type: 'text/plain' }), reason: null },
+  complete_empty: { pick: () => new File([], 'empty.txt', { type: 'text/plain' }), reason: 'empty' },
+  complete_too_large: { pick: () => new File(['x'], 'grew.txt', { type: 'text/plain' }), reason: 'too_large' },
+  complete_unsupported_type: { pick: () => new File(['x'], 'notes.pdf', { type: 'application/pdf' }), reason: 'unsupported_type' },
+  complete_unsupported_audio: { pick: () => new File(['ID3'], 'standup.wav', { type: 'audio/wav' }), reason: 'unsupported_audio' },
+  complete_size_mismatch: { pick: () => new File(['x'], 'changes.txt', { type: 'text/plain' }), reason: 'size_mismatch' },
+};
+
+/**
+ * The channel screen over the real connect-web transport and the real generated FileService client, whose `fetch` answers
+ * with `fixture` at the step the fixture is named for (`create_` or `complete_`) and as a willing server everywhere else.
+ */
+async function openWithAnswer(name: string, { httpStatus, contentType, body }: Fixture) {
+  const refusedStep = name.startsWith('create_') ? 'CreateUpload' : 'CompleteUpload';
+  const created = toJson(CreateUploadResponseSchema, create(CreateUploadResponseSchema, { fileId: 'file-9', uploadUrl: '/api/blob/tok-1', headers: { 'Content-Type': 'x/y' } }));
+  const fetchStub = vi.fn<typeof fetch>((input, init) => {
+    const target = typeof input === 'string' ? input : '';
+    if (init?.method === 'PUT') {
+      return Promise.resolve(new Response(null, { status: 200 }));
+    }
+    if (target.endsWith(`/kiwi.files.v1.FileService/${refusedStep}`)) {
+      return Promise.resolve(new Response(JSON.stringify(body), { status: httpStatus, headers: { 'Content-Type': contentType } }));
+    }
+    if (target.endsWith('/kiwi.files.v1.FileService/CreateUpload')) {
+      return Promise.resolve(new Response(JSON.stringify(created), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    }
+    return Promise.reject(new Error(`Unexpected request to ${target}`));
+  });
+  vi.stubGlobal('fetch', fetchStub);
+  const real = createApi();
+  const api = createStubApi();
+  api.files.createUpload.mockImplementation((request, options) => real.files.createUpload(request, options));
+  api.files.completeUpload.mockImplementation((request, options) => real.files.completeUpload(request, options));
+  const opened = openChannel({ messages: [message({ seq: 5, body: 'five' })] }, api);
+  const thai = useUiStore.getState().lang === 'th';
+  await within(await screen.findByRole('log', { name: thai ? 'ข้อความใน #q4-launch' : LOG.name })).findByText('five');
+  return { ...opened, api, fetchStub, refusedStep };
+}
+
+describe('a rejected upload says its reason: the answers the server writes', () => {
+  it('has an expectation for every fixture, and a fixture for every expectation', () => {
+    const names = fixtures.map(({ name }) => name);
+    expect(names.filter((name) => !Object.hasOwn(OUTCOME, name)), 'fixtures with no expectation in OUTCOME').toEqual([]);
+    expect(Object.keys(OUTCOME).filter((name) => !names.includes(name)), 'expectations with no fixture').toEqual([]);
   });
 
-  it.each(REASONS)('CompleteUpload rejects with %s: the same reason in Thai, with its Latin words tagged lang="en"', async (reason, _english, thai) => {
-    useUiStore.getState().setLang('th');
-    const api = createStubApi();
-    await ready(api);
-    api.files.completeUpload.mockRejectedValue(rejection(reason));
+  it('has an answer for every reason and both steps', () => {
+    const names = fixtures.map(({ name }) => name);
+    for (const [reason] of REASONS) {
+      expect(
+        names.some((name) => name.startsWith('complete_') && OUTCOME[name]?.reason === reason),
+        `a CompleteUpload fixture for ${reason}`,
+      ).toBe(true);
+    }
+    expect(names.some((name) => name.startsWith('create_') && OUTCOME[name]?.reason === null)).toBe(true);
+  });
 
-    choose(new File(['x'], 'standup.pdf', { type: 'application/pdf' }));
+  describe.each([
+    ['en', "Couldn't upload {name}: {reason}", "Couldn't upload {name}: the server doesn't accept this file."],
+    ['th', 'อัปโหลด {name} ไม่ได้: {reason}', 'อัปโหลด {name} ไม่ได้: เซิร์ฟเวอร์ไม่รับไฟล์นี้'],
+  ] as const)('in %s', (lang, sentence, noReason) => {
+    for (const { name, fixture } of fixtures) {
+      it(`${name}: ${Object.hasOwn(OUTCOME, name) ? String(OUTCOME[name]?.reason) : 'no expectation'}`, async () => {
+        const outcome = OUTCOME[name];
+        if (outcome === undefined) {
+          throw new Error(`the fixture ${name} has no expectation in OUTCOME: say what the person must be told for it`);
+        }
+        useUiStore.getState().setLang(lang);
+        const { api, fetchStub, refusedStep } = await openWithAnswer(name, fixture);
+        const chosen = outcome.pick();
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`อัปโหลด standup.pdf ไม่ได้: ${thai}`);
-    if (reason === 'unsupported_audio') {
-      expect(within(alert).getByText('WAV')).toHaveAttribute('lang', 'en');
-      expect(within(alert).getByText('PCM16')).toHaveAttribute('lang', 'en');
+        choose(chosen);
+
+        const alert = await screen.findByRole('alert');
+        const row = REASONS.find(([reason]) => reason === outcome.reason);
+        const said = row === undefined ? noReason.replace('{name}', chosen.name) : sentence.replace('{name}', chosen.name).replace('{reason}', row[lang === 'en' ? 1 : 2]);
+        expect(alert).toHaveTextContent(said);
+        // The server's own sentence is for logs and people reading the wire: the page says it in its own words.
+        const detail = fixture.body.message.split('): ')[1];
+        if (detail !== undefined) {
+          expect(alert).not.toHaveTextContent(detail);
+        }
+        if (outcome.reason === 'unsupported_audio' && lang === 'th') {
+          expect(within(alert).getByText('WAV')).toHaveAttribute('lang', 'en');
+          expect(within(alert).getByText('PCM16')).toHaveAttribute('lang', 'en');
+        }
+        expect(screen.getAllByRole('alert')).toHaveLength(1);
+        // The calls that were made: a refusal at CreateUpload ends there, a refusal at CompleteUpload is after the PUT.
+        const requested = fetchStub.mock.calls.map(([input, init]) => (init?.method === 'PUT' ? 'PUT' : (typeof input === 'string' ? input : '').split('/').pop()));
+        expect(requested).toEqual(refusedStep === 'CreateUpload' ? ['CreateUpload'] : ['CreateUpload', 'PUT', 'CompleteUpload']);
+        expect(api.files.createUpload).toHaveBeenCalledWith(
+          expect.objectContaining({ name: chosen.name, purpose: chosen.type.startsWith('audio/') ? UploadPurpose.RECORDING : UploadPurpose.ATTACHMENT }),
+        );
+        expect(api.meetings.createFromRecording).not.toHaveBeenCalled();
+      });
     }
   });
+});
 
+// Answers this build reads as a refusal that gives no reason, or as no refusal at all. They are typed out here because the server does not send them today.
+describe("an answer that is not one of the server's reasons", () => {
   it('an invalid_argument with any other message says only that the server does not accept the file, whatever words it uses', async () => {
     const api = createStubApi();
     await ready(api);
@@ -114,18 +206,6 @@ describe('a rejected upload says its reason', () => {
     choose(new File(['x'], 'a.pdf', { type: 'application/pdf' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't upload a.pdf. Try again.");
-  });
-
-  it('an mp3 recording is a RECORDING, and its rejection says recordings must be WAV (PCM16) files', async () => {
-    const api = createStubApi();
-    await ready(api);
-    api.files.completeUpload.mockRejectedValue(rejection('unsupported_audio'));
-
-    choose(new File(['ID3'], 'standup.mp3', { type: 'audio/mpeg' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't upload standup.mp3: recordings must be WAV (PCM16) files.");
-    expect(api.files.createUpload).toHaveBeenCalledWith(expect.objectContaining({ mime: 'audio/mpeg', purpose: UploadPurpose.RECORDING }));
-    expect(api.meetings.createFromRecording).not.toHaveBeenCalled();
   });
 });
 

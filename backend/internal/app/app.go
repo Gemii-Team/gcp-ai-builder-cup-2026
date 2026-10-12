@@ -107,6 +107,7 @@ type options struct {
 	listener  net.Listener
 	drain     *time.Duration
 	pollEvery time.Duration
+	wrapBlob  func(blob.Store) blob.Store
 }
 
 // Option replaces something New would build, for the caller that has it already (serve
@@ -131,6 +132,13 @@ func WithDrainTimeout(d time.Duration) Option { return func(o *options) { o.drai
 
 // WithPollInterval sets how often Meet is polled; the default is 30 s.
 func WithPollInterval(d time.Duration) Option { return func(o *options) { o.pollEvery = d } }
+
+// WithBlobWrap has the domains use wrap(store) as their object store, where store is
+// the one KIWI_BLOB_URL selects; the signed URLs are still served by store itself. It
+// is a seam for tests that need the store to misbehave.
+func WithBlobWrap(wrap func(blob.Store) blob.Store) Option {
+	return func(o *options) { o.wrapBlob = wrap }
+}
 
 // App is the process: its ports, its services and the roles it runs.
 type App struct {
@@ -225,6 +233,9 @@ func (a *App) wire(ctx context.Context) error {
 	blobHandler, ok := a.blob.(http.Handler)
 	if !ok {
 		return fmt.Errorf("app: the blob store (%T) does not serve signed URLs", a.blob)
+	}
+	if a.opt.wrapBlob != nil {
+		a.blob = a.opt.wrapBlob(a.blob)
 	}
 
 	a.google = a.opt.google
