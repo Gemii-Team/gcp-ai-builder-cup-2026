@@ -66,9 +66,11 @@ const (
 	reasonModelUnavailable      = "model_unavailable"
 )
 
-// purposeOf says what a stored type is for. The two allowlists share no type, so the
-// type CreateUpload accepted tells CompleteUpload the purpose without storing it.
-func purposeOf(mediaType string) filesv1.UploadPurpose {
+// PurposeOf says what a stored type is for. The two allowlists share no type, so the
+// type CreateUpload accepted tells CompleteUpload the purpose without storing it. The
+// composition root uses it to answer the meetings domain, which asks whether a file is
+// a recording, from the type of the file docs holds.
+func PurposeOf(mediaType string) filesv1.UploadPurpose {
 	if allowedRecordingMIME[mediaType] {
 		return filesv1.UploadPurpose_UPLOAD_PURPOSE_RECORDING
 	}

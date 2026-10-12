@@ -233,7 +233,7 @@ func (s *service) CompleteUpload(ctx context.Context, a authz.Actor, fileID uuid
 	if err != nil {
 		return nil, fmt.Errorf("docs: head upload: %w", err)
 	}
-	purpose := purposeOf(row.Mime)
+	purpose := PurposeOf(row.Mime)
 	v, err := s.validate(ctx, row, purpose, attrs)
 	if err != nil {
 		return nil, err

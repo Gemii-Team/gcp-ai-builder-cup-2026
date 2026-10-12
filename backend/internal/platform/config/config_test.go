@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -437,5 +439,119 @@ func TestAllEnvVarsAreUniqueAndPrefixed(t *testing.T) {
 			t.Errorf("%s is listed twice", name)
 		}
 		seen[name] = true
+	}
+}
+
+// TestLoad_ReturnsTheZeroConfigOnError: a Config that failed validation is not half
+// filled, so nothing that ignores the error can start on it.
+func TestLoad_ReturnsTheZeroConfigOnError(t *testing.T) {
+	env := with(validEnv(), "KIWI_ENV", "staging")
+	cfg, err := Load(nil, getenv(env))
+	if err == nil {
+		t.Fatal("Load succeeded")
+	}
+	if !reflect.DeepEqual(cfg, Config{}) {
+		t.Fatalf("Load returned a partly filled Config with its error: %v", cfg)
+	}
+}
+
+// secretFields is the policy: what a log line or a panic message must never carry.
+// The config tags each of them secret:"true"; the test fails when one loses the tag.
+var secretFields = []string{
+	"DatabaseURL", "DatabaseSystemURL", "MigrateURL", "ValkeyURL", "BlobURL", "BlobSigningKey",
+	"LLMBaseURL", "LLMAPIKey", "EmbedBaseURL", "OAuthClientSecret", "TokenEncKey",
+}
+
+func TestConfig_RedactsSecretsEverywhereItIsFormatted(t *testing.T) {
+	cfg := Config{
+		Env:               "local",
+		Roles:             []Role{RoleAPI, RoleWorker},
+		PublicURL:         "http://public.example:8080",
+		DatabaseURL:       "postgres://kiwi_app:app-secret-pw@db-host-1:5432/kiwi",
+		DatabaseSystemURL: "postgres://kiwi_system:system-secret-pw@db-host-2:5432/kiwi",
+		MigrateURL:        "postgres://kiwi_owner:owner-secret-pw@db-host-3:5432/kiwi",
+		ValkeyURL:         "redis://:valkey-secret-pw@valkey-host:6379",
+		BusProvider:       "memory",
+		BlobURL:           "file:///data/secret-blob-dir",
+		BlobSigningKey:    []byte("0123456789abcdef0123456789abcdef"),
+		LLMProvider:       "openai",
+		LLMBaseURL:        "https://llm-secret-host.example",
+		LLMAPIKey:         "sk-secret-key",
+		LLMModelFlash:     "flash-model",
+		LLMModelPro:       "pro-model",
+		EmbedBaseURL:      "http://embed-secret-host:11434",
+		EmbedModel:        "embed-model",
+		ASRModel:          "asr-model",
+		OIDCIssuer:        "http://issuer.example/mockoidc",
+		OIDCInternalURL:   "http://mockoidc:8090/mockoidc",
+		OAuthClientID:     "client-id-visible",
+		OAuthClientSecret: "client-secret-value",
+		TokenEncKey:       []byte("abcdefghijklmnopqrstuvwxyz012345"),
+		WorkspaceName:     "Acme",
+		WorkspaceDomain:   "acme.example",
+	}
+	secrets := []string{
+		"app-secret-pw", "system-secret-pw", "owner-secret-pw", "valkey-secret-pw", "db-host-1", "valkey-host",
+		"secret-blob-dir", "0123456789abcdef", base64.StdEncoding.EncodeToString(cfg.BlobSigningKey),
+		"llm-secret-host", "sk-secret-key", "embed-secret-host", "client-secret-value",
+		"abcdefghijklmnopqrstuvwxyz012345", base64.StdEncoding.EncodeToString(cfg.TokenEncKey),
+	}
+	visible := []string{
+		"local", "api", "worker", "http://public.example:8080", "memory", "openai", "flash-model", "pro-model",
+		"embed-model", "asr-model", "http://issuer.example/mockoidc", "http://mockoidc:8090/mockoidc",
+		"client-id-visible", "Acme", "acme.example", redacted,
+	}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("starting", "config", cfg)
+	var logText bytes.Buffer
+	slog.New(slog.NewTextHandler(&logText, nil)).Info("starting", slog.Any("config", cfg))
+	renderings := map[string]string{
+		"String":      cfg.String(),
+		"%v":          fmt.Sprintf("%v", cfg),
+		"%+v":         fmt.Sprintf("%+v", cfg),
+		"%#v":         fmt.Sprintf("%#v", cfg),
+		"%v of a ptr": fmt.Sprintf("%v", &cfg),
+		"slog JSON":   logged.String(),
+		"slog text":   logText.String(),
+		"Sprint":      fmt.Sprint(cfg),
+		"%s":          fmt.Sprintf("<%s>", cfg),
+		"%q":          fmt.Sprintf("%q", cfg),
+		"%x":          fmt.Sprintf("%x", cfg),
+		"embedded":    fmt.Sprintf("%v", struct{ C Config }{cfg}),
+	}
+	for name, out := range renderings {
+		for _, s := range secrets {
+			if strings.Contains(out, s) {
+				t.Errorf("%s shows the secret %q:\n%s", name, s, out)
+			}
+		}
+	}
+	// The readable renderings still say what the process runs with.
+	for _, name := range []string{"String", "slog JSON", "slog text"} {
+		for _, v := range visible {
+			if !strings.Contains(renderings[name], v) {
+				t.Errorf("%s does not show %q:\n%s", name, v, renderings[name])
+			}
+		}
+	}
+}
+
+func TestConfig_EverySecretFieldIsTaggedAndNoOtherIs(t *testing.T) {
+	typ := reflect.TypeFor[Config]()
+	for _, name := range secretFields {
+		f, ok := typ.FieldByName(name)
+		if !ok {
+			t.Fatalf("Config has no field %s", name)
+		}
+		if f.Tag.Get("secret") != "true" {
+			t.Errorf("%s is not tagged secret:\"true\": it would be logged in the clear", name)
+		}
+	}
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if f.Tag.Get("secret") == "true" && !slices.Contains(secretFields, f.Name) {
+			t.Errorf("%s is tagged secret but is not in the policy of this test: add it or drop the tag", f.Name)
+		}
 	}
 }

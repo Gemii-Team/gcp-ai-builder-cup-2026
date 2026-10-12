@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -17,6 +18,9 @@ const (
 	// drain plus shutdown stays inside Kubernetes' default 30 s termination grace.
 	shutdownTimeout   = 20 * time.Second
 	readHeaderTimeout = 10 * time.Second
+	// readyCheckTimeout bounds one run of ReadyCheck: a hung dependency answers the
+	// probe with 503 instead of hanging it.
+	readyCheckTimeout = 2 * time.Second
 )
 
 // Server serves /healthz and /readyz itself and hands every other request to
@@ -25,6 +29,11 @@ type Server struct {
 	// DrainTimeout is how long Run keeps serving, with /readyz answering 503,
 	// after its context is cancelled and before it stops accepting connections.
 	DrainTimeout time.Duration
+	// ReadyCheck, when set, is asked on every /readyz probe once SetReady(true) has
+	// been called, and a non-nil answer makes the probe 503: the process is ready
+	// only while what it depends on answers. It runs under a short deadline. The
+	// cause is logged, never put in the response. Set it before Run or Serve.
+	ReadyCheck func(ctx context.Context) error
 
 	srv   *http.Server
 	next  http.Handler
@@ -54,7 +63,7 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case "/healthz":
 		reply(w, http.StatusOK, "ok")
 	case "/readyz":
-		if s.ready.Load() {
+		if s.isReady(r.Context()) {
 			reply(w, http.StatusOK, "ready")
 			return
 		}
@@ -62,6 +71,23 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.next.ServeHTTP(w, r)
 	}
+}
+
+// isReady is the readiness flag, and the dependency check when there is one.
+func (s *Server) isReady(ctx context.Context) bool {
+	if !s.ready.Load() {
+		return false
+	}
+	if s.ReadyCheck == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, readyCheckTimeout)
+	defer cancel()
+	if err := s.ReadyCheck(ctx); err != nil {
+		slog.WarnContext(ctx, "httpx: not ready", "error", err)
+		return false
+	}
+	return true
 }
 
 func reply(w http.ResponseWriter, code int, body string) {
@@ -79,10 +105,13 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("httpx: %w", err)
 	}
-	return s.serve(ctx, ln)
+	return s.Serve(ctx, ln)
 }
 
-func (s *Server) serve(ctx context.Context, ln net.Listener) error {
+// Serve is Run on a listener the caller opened, so that it can fail on a taken port
+// before it starts anything else, or serve on a port it does not choose. Serve owns
+// ln from here on.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	served := make(chan error, 1)
 	go func() { served <- s.srv.Serve(ln) }()
 

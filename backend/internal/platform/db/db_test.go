@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -276,5 +277,58 @@ func TestSystem_WithoutSystemURLFails(t *testing.T) {
 	})
 	if err == nil || called {
 		t.Fatalf("System without a system pool: err = %v, called = %v; want an error and no call", err, called)
+	}
+}
+
+func TestPing_ChecksEveryPoolItWasOpenedWith(t *testing.T) {
+	fx := start(t)
+	if err := fx.db.Ping(t.Context()); err != nil {
+		t.Fatalf("Ping of a reachable database: %v", err)
+	}
+
+	appOnly, err := Open(t.Context(), config.Config{DatabaseURL: fx.env.AppURL})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(appOnly.Close)
+	if err := appOnly.Ping(t.Context()); err != nil {
+		t.Fatalf("Ping without a system pool: %v", err)
+	}
+}
+
+func TestPing_NamesThePoolThatCannotConnectWithoutEchoingTheURL(t *testing.T) {
+	fx := start(t)
+	const secret = "s3cr3t-pw"
+	// Port 1 refuses at once; the password is what must not come back in the error.
+	dead := "postgres://kiwi_app:" + secret + "@127.0.0.1:1/kiwi?sslmode=disable"
+	deadSystem := "postgres://kiwi_system:" + secret + "@127.0.0.1:1/kiwi?sslmode=disable"
+
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{"application pool", config.Config{DatabaseURL: dead}, "application"},
+		{"system pool", config.Config{DatabaseURL: fx.env.AppURL, DatabaseSystemURL: deadSystem}, "system"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := Open(t.Context(), tc.cfg)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(d.Close)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			err = d.Ping(ctx)
+			if err == nil {
+				t.Fatal("Ping of an unreachable database succeeded")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Ping error %q does not name the %s", err, tc.want)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("Ping error leaks the password: %v", err)
+			}
+		})
 	}
 }

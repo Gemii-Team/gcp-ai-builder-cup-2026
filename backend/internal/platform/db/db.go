@@ -68,6 +68,22 @@ func (d *DB) Close() {
 	}
 }
 
+// Ping checks that each pool this DB was opened with can reach its database, for
+// readiness probes: the application pool, and the system pool when one is
+// configured. It runs no transaction and is not a System call, so it needs no place
+// on that allowlist. An error names the pool that failed and never carries a URL.
+func (d *DB) Ping(ctx context.Context) error {
+	if err := d.app.Ping(ctx); err != nil {
+		return fmt.Errorf("db: ping application pool: %w", err)
+	}
+	if d.system != nil {
+		if err := d.system.Ping(ctx); err != nil {
+			return fmt.Errorf("db: ping system pool: %w", err)
+		}
+	}
+	return nil
+}
+
 // InWorkspace runs fn in a transaction whose kiwi.workspace_id is ws, so row-level
 // security shows fn that workspace's rows and nothing else. The setting is
 // transaction-local: a connection returned to the pool carries no workspace and

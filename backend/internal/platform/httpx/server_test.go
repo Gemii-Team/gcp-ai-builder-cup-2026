@@ -2,10 +2,12 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -20,7 +22,7 @@ func start(t *testing.T, s *Server) (base string, stop func() error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- s.serve(ctx, ln) }()
+	go func() { done <- s.Serve(ctx, ln) }()
 
 	var once sync.Once
 	var result error
@@ -76,6 +78,57 @@ func TestReadyz_503UntilReady(t *testing.T) {
 	}
 	if got := status(t, base+"/healthz"); got != http.StatusOK {
 		t.Errorf("/healthz while not ready = %d, want 200", got)
+	}
+}
+
+func TestReadyz_AsksTheReadyCheckOnEveryProbe(t *testing.T) {
+	s := New("", nil)
+	s.DrainTimeout = 0
+	var down atomic.Bool
+	var sawDeadline atomic.Bool
+	s.ReadyCheck = func(ctx context.Context) error {
+		if _, ok := ctx.Deadline(); ok {
+			sawDeadline.Store(true)
+		}
+		if down.Load() {
+			return errors.New("valkey: connection refused")
+		}
+		return nil
+	}
+	base, _ := start(t, s)
+
+	if got := status(t, base+"/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz before SetReady with a healthy check = %d, want 503", got)
+	}
+	s.SetReady(true)
+	if got := status(t, base+"/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz when ready and the check passes = %d, want 200", got)
+	}
+	down.Store(true)
+	if got := status(t, base+"/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz while the check fails = %d, want 503", got)
+	}
+	body := func() string {
+		resp, err := client().Get(base + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}()
+	if body != "not ready\n" {
+		t.Errorf("/readyz body while the check fails = %q: the cause must stay in the log, not in the answer", body)
+	}
+	down.Store(false)
+	if got := status(t, base+"/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz after the dependency is back = %d, want 200", got)
+	}
+	if got := status(t, base+"/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz = %d, want 200: liveness never asks the check", got)
+	}
+	if !sawDeadline.Load() {
+		t.Error("the check ran without a deadline: a hung dependency would hang the probe")
 	}
 }
 

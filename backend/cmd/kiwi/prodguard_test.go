@@ -99,10 +99,11 @@ func TestServe_ProdRejectsMockIssuer_ExitsAtStartup(t *testing.T) {
 			}
 			out := stderr.String()
 
-			// No dial error precedes the refusal. Today `serve` only loads its
-			// configuration, so this cannot fail yet; it starts to mean something
-			// when L27 makes `serve` open Postgres and Valkey, and it is carried
-			// there. The exact-message check below covers it as well.
+			// No dial error precedes the refusal. `serve` dials Valkey and the sign-in
+			// provider once it is past the guard, and the words below are what it prints
+			// when it does: TestServe_UnreachableValkey_FailsNamingItAndPrintsNoSecret runs
+			// the same ports unreachable and finds them, so their absence here means the
+			// refusal came first. The exact-message check below covers it as well.
 			for _, early := range []string{"connection refused", "dial tcp", "failed to connect", "valkey", "postgres"} {
 				if strings.Contains(strings.ToLower(out), early) {
 					t.Errorf("stderr mentions %q: the process went past configuration before it was refused:\n%s", early, out)

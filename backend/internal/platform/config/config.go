@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"reflect"
 	"slices"
@@ -45,7 +46,10 @@ var defaults = map[string]string{
 }
 
 // Config is the validated process configuration. The env tag names the
-// variable; the roles tag lists the roles that refuse to start without it.
+// variable; the roles tag lists the roles that refuse to start without it. A
+// field tagged secret:"true" can carry a credential or an address that is one
+// (a password in a URL, a key, the model endpoint): String, GoString and LogValue
+// replace it, so logging or printing a Config never shows it.
 // Values that no listed role requires are optional.
 type Config struct {
 	// Env is "local" or "prod".
@@ -57,26 +61,26 @@ type Config struct {
 	PublicURL string `env:"KIWI_PUBLIC_URL" roles:"api,worker"`
 
 	// DatabaseURL connects as kiwi_app, which Postgres row-level security binds.
-	DatabaseURL string `env:"KIWI_DATABASE_URL" roles:"api,realtime,worker,agents"`
+	DatabaseURL string `env:"KIWI_DATABASE_URL" roles:"api,realtime,worker,agents" secret:"true"`
 	// DatabaseSystemURL connects as kiwi_system, which bypasses row-level security.
-	DatabaseSystemURL string `env:"KIWI_DATABASE_SYSTEM_URL" roles:"api,worker"`
+	DatabaseSystemURL string `env:"KIWI_DATABASE_SYSTEM_URL" roles:"api,worker" secret:"true"`
 	// MigrateURL connects as kiwi_owner, which owns the tables.
-	MigrateURL string `env:"KIWI_MIGRATE_DATABASE_URL" roles:"migrate"`
-	ValkeyURL  string `env:"KIWI_VALKEY_URL" roles:"api,realtime,worker,agents"`
+	MigrateURL string `env:"KIWI_MIGRATE_DATABASE_URL" roles:"migrate" secret:"true"`
+	ValkeyURL  string `env:"KIWI_VALKEY_URL" roles:"api,realtime,worker,agents" secret:"true"`
 
 	// BusProvider is "memory", the only bus built locally.
 	BusProvider string `env:"KIWI_BUS_PROVIDER" roles:"worker,agents"`
 	// BlobURL is file:///<absolute path>, the only blob store built locally.
-	BlobURL string `env:"KIWI_BLOB_URL" roles:"api,worker"`
+	BlobURL string `env:"KIWI_BLOB_URL" roles:"api,worker" secret:"true"`
 	// BlobSigningKey is the decoded 32-byte HMAC key of signed blob URLs.
-	BlobSigningKey []byte `env:"KIWI_BLOB_SIGNING_KEY" roles:"api,worker"`
+	BlobSigningKey []byte `env:"KIWI_BLOB_SIGNING_KEY" roles:"api,worker" secret:"true"`
 
 	LLMProvider   string `env:"KIWI_LLM_PROVIDER" roles:"worker,agents"`
-	LLMBaseURL    string `env:"KIWI_LLM_BASE_URL" roles:"worker,agents"`
-	LLMAPIKey     string `env:"KIWI_LLM_API_KEY" roles:"worker,agents"`
+	LLMBaseURL    string `env:"KIWI_LLM_BASE_URL" roles:"worker,agents" secret:"true"`
+	LLMAPIKey     string `env:"KIWI_LLM_API_KEY" roles:"worker,agents" secret:"true"`
 	LLMModelFlash string `env:"KIWI_LLM_MODEL_FLASH" roles:"worker,agents"`
 	LLMModelPro   string `env:"KIWI_LLM_MODEL_PRO" roles:"worker,agents"`
-	EmbedBaseURL  string `env:"KIWI_EMBED_BASE_URL" roles:"worker,agents"`
+	EmbedBaseURL  string `env:"KIWI_EMBED_BASE_URL" roles:"worker,agents" secret:"true"`
 	EmbedModel    string `env:"KIWI_EMBED_MODEL" roles:"worker,agents"`
 	ASRModel      string `env:"KIWI_ASR_MODEL" roles:"worker"`
 
@@ -86,14 +90,78 @@ type Config struct {
 	// the issuer claim is still checked against OIDCIssuer. Never set in prod.
 	OIDCInternalURL   string `env:"KIWI_OIDC_INTERNAL_URL"`
 	OAuthClientID     string `env:"KIWI_OAUTH_CLIENT_ID" roles:"api,worker"`
-	OAuthClientSecret string `env:"KIWI_OAUTH_CLIENT_SECRET" roles:"api,worker"`
+	OAuthClientSecret string `env:"KIWI_OAUTH_CLIENT_SECRET" roles:"api,worker" secret:"true"`
 	// TokenEncKey is the decoded 32-byte AES-GCM key that encrypts refresh tokens.
-	TokenEncKey []byte `env:"KIWI_TOKEN_ENC_KEY" roles:"api,worker"`
+	TokenEncKey []byte `env:"KIWI_TOKEN_ENC_KEY" roles:"api,worker" secret:"true"`
 
 	// WorkspaceName and WorkspaceDomain are presentational only (the sign-in
 	// heading and domain hint); authorisation never reads them.
 	WorkspaceName   string `env:"KIWI_WORKSPACE_NAME"`
 	WorkspaceDomain string `env:"KIWI_WORKSPACE_DOMAIN"`
+}
+
+// redacted stands in for the value of a secret field that is set.
+const redacted = "[REDACTED]"
+
+// field is one Config field as it is shown: its Go name and its value, which is
+// redacted for a secret.
+type field struct{ name, value string }
+
+// redactedFields lists every field of c in declaration order. A secret that is set
+// shows as "[REDACTED]" and one that is not as "", so a log still tells whether a
+// variable arrived.
+func redactedFields(c Config) []field {
+	v := reflect.ValueOf(c)
+	out := make([]field, 0, v.NumField())
+	for i := range v.NumField() {
+		f := v.Type().Field(i)
+		var shown string
+		switch val := v.Field(i).Interface().(type) {
+		case string:
+			shown = val
+		case []byte:
+			if len(val) > 0 {
+				shown = "<set>"
+			}
+		case []Role:
+			shown = joinRoles(val)
+		default:
+			panic(fmt.Sprintf("config: field %s has unsupported type %s", f.Name, f.Type))
+		}
+		if f.Tag.Get("secret") == "true" && shown != "" {
+			shown = redacted
+		}
+		out = append(out, field{f.Name, shown})
+	}
+	return out
+}
+
+// String implements fmt.Stringer: %v, %+v, %s and Println show the redacted form.
+func (c Config) String() string {
+	var b strings.Builder
+	b.WriteString("config.Config{")
+	for i, f := range redactedFields(c) {
+		if i > 0 {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "%s:%s", f.name, f.value)
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+// GoString implements fmt.GoStringer, which %#v uses instead of String.
+func (c Config) GoString() string { return c.String() }
+
+// LogValue implements slog.LogValuer: a Config logged as an attribute is a group of
+// its redacted fields.
+func (c Config) LogValue() slog.Value {
+	fields := redactedFields(c)
+	attrs := make([]slog.Attr, len(fields))
+	for i, f := range fields {
+		attrs[i] = slog.String(f.name, f.value)
+	}
+	return slog.GroupValue(attrs...)
 }
 
 // AllEnvVars lists every variable Load reads, in Config field order.
@@ -143,7 +211,8 @@ func joinRoles(roles []Role) string {
 // a process running roles. With no roles it runs the ones KIWI_ROLES selects
 // (all serving roles when that is unset). The required variables are the union
 // of the roles' sets; every problem found is reported in one error that names
-// each variable and never a secret value.
+// each variable and never a secret value. When it reports a problem the Config is
+// the zero value, never a partly filled one.
 func Load(roles []Role, getenv func(string) string) (Config, error) {
 	if len(roles) == 0 {
 		parsed, err := ParseRoles(getenv(rolesVar))
@@ -196,7 +265,10 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 	if len(missing) > 0 {
 		problems = append([]error{fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))}, problems...)
 	}
-	return cfg, errors.Join(append(problems, cfg.validate()...)...)
+	if err := errors.Join(append(problems, cfg.validate()...)...); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 // requiredBy reports whether any of roles appears in the comma-separated tag.
