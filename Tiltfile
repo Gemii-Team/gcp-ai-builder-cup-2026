@@ -38,24 +38,20 @@ llm_deps = ['llmreplay'] if overlay == 'smoke' else []
 if k8s_context() != KUBE_CONTEXT:
     fail("kubectl context is '%s', expected '%s'; run `task local:up`" % (k8s_context(), KUBE_CONTEXT))
 
-# The web app lives in apps/web, which may not be in this checkout yet.
-web_enabled = os.path.exists('apps/web/package.json')
-
 objects = kustomize('deploy/k8s/overlays/' + overlay)
-if not web_enabled:
-    _, objects = filter_yaml(objects, labels={'app.kubernetes.io/name': 'web'})
 k8s_yaml(objects)
 
-# kiwi: cross-compile on the host and wrap the binary in a one-layer image. The
-# runtime image is distroless (no shell, no tar), so Tilt's live_update cannot
-# sync into it; a rebuild is a compile and a COPY. The embedded migrations are
-# part of the binary, so a change under backend/db/migrations rebuilds this
-# image, which re-creates the migrate Job (same image) and so applies them.
+# kiwi: cross-compile on the host, for the architecture of the host's Docker (the cluster
+# runs on it), and wrap the binary in a one-layer image. The runtime image is distroless (no
+# shell, no tar), so Tilt's live_update cannot sync into it; a rebuild is a compile and a
+# COPY. The embedded migrations are part of the binary, so a change under
+# backend/db/migrations rebuilds this image, which re-creates the migrate Job (same image)
+# and so applies them.
 custom_build(
     REGISTRY + '/kiwi',
     command=' && '.join([
         'out=$(mktemp -d)',
-        '(cd backend && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$out/kiwi" ./cmd/kiwi)',
+        '(cd backend && GOOS=linux GOARCH=$(go env GOARCH) CGO_ENABLED=0 go build -trimpath -o "$out/kiwi" ./cmd/kiwi)',
         'docker build -q -t $EXPECTED_REF -f deploy/local/kiwi.Dockerfile "$out"',
         'rm -rf "$out"',
     ]),
@@ -154,19 +150,18 @@ k8s_resource(
     labels=['app'],
 )
 
-if web_enabled:
-    # The Vite build runs inside the image build (apps/web/Dockerfile), so a change under
-    # apps/web or packages rebuilds the image. There is no live_update: the container runs as
-    # an unprivileged user with a read-only root filesystem, so nothing can be synced into
-    # it; the rebuild is the path.
-    docker_build(
-        REGISTRY + '/web',
-        '.',
-        dockerfile='apps/web/Dockerfile',
-        only=['apps/web', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json'],
-        ignore=['**/node_modules', '**/dist'],
-    )
-    k8s_resource(
-        'web',
-        labels=['app'],
-    )
+# The Vite build runs inside the image build (apps/web/Dockerfile), so a change under
+# apps/web or packages rebuilds the image. There is no live_update: the container runs as
+# an unprivileged user with a read-only root filesystem, so nothing can be synced into
+# it; the rebuild is the path.
+docker_build(
+    REGISTRY + '/web',
+    '.',
+    dockerfile='apps/web/Dockerfile',
+    only=['apps/web', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'turbo.json'],
+    ignore=['**/node_modules', '**/dist'],
+)
+k8s_resource(
+    'web',
+    labels=['app'],
+)

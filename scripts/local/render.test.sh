@@ -282,6 +282,23 @@ fi
 tilt_web_has_no_live_update() { ! grep -vE '^[[:space:]]*#' Tiltfile | grep -q 'live_update'; }
 check "Tiltfile: the web image has no live_update (its root filesystem is read-only)" tilt_web_has_no_live_update
 
+# apps/web is in the tree: the Tiltfile has no switch for its absence, and always builds the web image.
+tilt_has_no_web_switch() { ! grep -vE '^[[:space:]]*#' Tiltfile | grep -q 'web_enabled'; }
+check "Tiltfile: no web_enabled switch (apps/web is in the tree)" tilt_has_no_web_switch
+tilt_builds_web_image() {
+  awk '/^[ \t]*#/ { next } /^docker_build\($/ { b = 1; next } b && /REGISTRY \+ \047\/web\047/ { ok = 1 } /^\)$/ { b = 0 } END { exit !ok }' Tiltfile
+}
+check "Tiltfile: the web image is built unconditionally (docker_build at the top level)" tilt_builds_web_image
+
+# The kiwi binary is built for the architecture of the host's Docker, whichever that is.
+tilt_goarch_follows_host() {
+  local code
+  code=$(grep -vE '^[[:space:]]*#' Tiltfile)
+  printf '%s\n' "$code" | grep -qF "GOARCH=\$(go env GOARCH)" || { echo "the kiwi build does not use GOARCH=\$(go env GOARCH)"; return 1; }
+  ! printf '%s\n' "$code" | grep -qE 'GOARCH=(amd64|arm64)' || { echo "a hard-coded GOARCH is left"; return 1; }
+}
+check "Tiltfile: the kiwi binary is built for the host architecture (GOARCH from go env)" tilt_goarch_follows_host
+
 # --- the mockauth overlay -------------------------------------------------------------
 # The default stack signs in through the mock provider (backend/tools/mockoidc):
 # `local` plus mockoidc, and a kiwi that differs from `local` only in the two
