@@ -148,6 +148,16 @@ describe('the scope line', () => {
     expect(chips.map((chip) => chip.textContent)).toEqual(['# q4-launch', '# ops-warehouse']);
     expect(screen.getByText('Only channels you belong to: their messages, meeting transcripts, files and tasks.')).toBeVisible();
   });
+
+  it('names the one channel a question is scoped to and lists no other: the chips are what the server searches', async () => {
+    const { user } = openAsk({ channelId: 'ch-ops' });
+
+    const toggle = await screen.findByRole('button', { name: /^Searching only #ops-warehouse/ });
+    await user.click(toggle);
+
+    const chips = within(screen.getByRole('list', { name: 'Channels searched' })).getAllByRole('listitem');
+    expect(chips.map((chip) => chip.textContent)).toEqual(['# ops-warehouse']);
+  });
 });
 
 describe('sample questions', () => {
@@ -332,6 +342,20 @@ describe('a question and its run', () => {
     expect(article).not.toHaveTextContent('something went wrong');
     expect(article).not.toHaveTextContent('plain text of an older run');
     expect(within(article).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('lists only the one channel on the not-found slip of a question scoped to it: the channels the server says it searched', async () => {
+    const opened = openAsk({ channelId: 'ch-ops' });
+    await screen.findByText('Searching only #ops-warehouse');
+    await askQuestion(opened);
+    emit(opened, { state: AgentRunState.DONE, answer: artifact({ ...NOT_FOUND, scopeChannelIds: ['ch-ops'] }) });
+
+    const article = screen.getByRole('article');
+    expect(opened.api.agents.startRun.mock.calls[0]?.[0]).toMatchObject({ channelId: 'ch-ops' });
+    expect(within(article).getByText(/found nothing that answers this/)).toHaveTextContent('Searched messages, meeting transcripts, files and tasks in the 1 channel');
+    const chips = within(within(article).getByRole('list', { name: 'Channels searched' })).getAllByRole('listitem');
+    expect(chips.map((chip) => chip.textContent)).toEqual(['# ops-warehouse']);
+    expect(within(article).getByRole('link', { name: 'Ask the team in a channel' })).toHaveAttribute('href', '/c/ch-ops');
   });
 
   it('names a searched channel the person has since left only by what it is, and never by its name', async () => {
