@@ -1,0 +1,17 @@
+{
+  "match": {"schema": "meeting_summary", "contains": ["Q4 launch", "Malee"]},
+  "response": {
+    "choices": [
+      {
+        "message": {
+          "content": {
+            "summary": "ทีมตกลงเลื่อน dark mode ไป v1.1",
+            "decisions": [{"text": "Dark mode moves to v1.1", "entry_refs": [1]}],
+            "open_questions": [],
+            "action_items": [{"title": "Update the release notes", "owner_hint": "Nok", "due_hint": "next:fri", "entry_refs": [3]}]
+          }
+        }
+      }
+    ]
+  }
+}

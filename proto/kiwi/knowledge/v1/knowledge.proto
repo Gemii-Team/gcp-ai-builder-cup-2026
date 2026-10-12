@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package kiwi.knowledge.v1;
+
+import "kiwi/chat/v1/artifact.proto";
+
+// Messages only: knowledge is reached through the assistant agent, so this
+// package defines no RPC.
+
+// Answer is a retrieval-backed reply. found is false when no relevant chunk
+// exists in the channels searched; an answer is never returned uncited.
+message Answer {
+  // language is "th" or "en", following the question.
+  string language = 1;
+  string markdown = 2;
+  repeated Citation citations = 3;
+  bool found = 4;
+  // scope_channel_ids lists the channels that were searched.
+  repeated string scope_channel_ids = 5;
+}
+
+// Citation is a validated reference from an answer to a retrieved chunk,
+// numbered by first appearance.
+message Citation {
+  int32 n = 1;
+  string chunk_id = 2;
+  string quote = 3;
+  kiwi.chat.v1.Source source = 4;
+}

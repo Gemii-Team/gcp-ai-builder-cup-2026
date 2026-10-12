@@ -1,0 +1,37 @@
+# The local cluster: `task local:up` creates it, `task local:down` deletes it.
+# One server and one agent on a pinned k3s; the bundled Traefik is the ingress
+# controller, reachable at http://localhost:8080 (the overlay's Ingress and
+# KIWI_PUBLIC_URL assume that port) from this machine only: the port is published
+# on 127.0.0.1, because the default stack signs anyone in through a passwordless
+# chooser and holds the real model key. The Kubernetes API port of the load
+# balancer is bound to 127.0.0.1 too (k3d's default is every interface). A remote
+# machine reaches the app through an SSH tunnel. A cluster keeps the bindings it was
+# created with: an older one is recreated by `task local:down` and `task local:up`
+# (k3d-up.sh warns about it).
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: kiwi
+kubeAPI:
+  hostIP: "127.0.0.1"
+servers: 1
+agents: 1
+image: rancher/k3s:v1.34.12-k3s1
+ports:
+  # k3d hands a Simple config's port to the docker nat parser: [HOST_IP:]HOST_PORT:CONTAINER_PORT.
+  - port: 127.0.0.1:8080:80
+    nodeFilters:
+      - loadbalancer
+# The registry Tilt pushes the kiwi and web images to. Tilt pushes through the
+# loopback address below; the nodes pull over the Docker network by name, so the
+# port is not exposed beyond this machine. k3d wires the registry into every
+# node and advertises it in the kube-public/local-registry-hosting ConfigMap.
+registries:
+  create:
+    name: kiwi-registry.localhost
+    host: 127.0.0.1
+    hostPort: "5001"
+options:
+  k3d:
+    wait: true
+    timeout: 300s

@@ -1,0 +1,91 @@
+# One process runs every role (KIWI_ROLES), so there is one Deployment and one
+# Service. The ConfigMap kiwi-config, the Secret kiwi-env and the PVC kiwi-data
+# come from the overlay.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kiwi
+  labels:
+    app.kubernetes.io/name: kiwi
+    app.kubernetes.io/part-of: kiwi
+spec:
+  replicas: 1
+  # /data is a ReadWriteOnce volume with a single writer: never run two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kiwi
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kiwi
+        app.kubernetes.io/part-of: kiwi
+    spec:
+      securityContext:
+        # The image is distroless nonroot (uid 65532); fsGroup makes the PVC writable for it.
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kiwi
+          image: kiwi
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: kiwi-config
+            - secretRef:
+                name: kiwi-env
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kiwi-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kiwi
+  labels:
+    app.kubernetes.io/name: kiwi
+    app.kubernetes.io/part-of: kiwi
+spec:
+  selector:
+    app.kubernetes.io/name: kiwi
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

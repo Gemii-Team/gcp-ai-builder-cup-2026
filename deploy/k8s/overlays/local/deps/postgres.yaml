@@ -1,0 +1,101 @@
+# Postgres 17 with pgvector. The first start of an empty data directory runs
+# the ConfigMap postgres-init (database, roles, extension); the migrate Job
+# then builds the schema. The password is the one in the Secret kiwi-env, set
+# into the roles once, on that first start: changing KIWI_DB_PASSWORD later
+# needs `task local:down` and `task local:up`, which drops the data directory.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kiwi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: kiwi
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:0.8.7-pg17
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kiwi-env
+                  key: KIWI_DB_PASSWORD
+            # Read by postgres-init to set the role passwords.
+            - name: KIWI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kiwi-env
+                  key: KIWI_DB_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Holds the liveness and readiness probes off for up to 300 s while
+          # initdb and postgres-init run: a liveness kill after initdb but before
+          # the bootstrap SQL finished would leave a data directory that is
+          # never bootstrapped again (the init scripts run only on an empty one).
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]
+            periodSeconds: 3
+            failureThreshold: 100
+          # TCP only answers once initdb and the init scripts are done: the
+          # temporary server they use listens on the socket alone.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+        - name: init
+          configMap:
+            name: postgres-init
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kiwi
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

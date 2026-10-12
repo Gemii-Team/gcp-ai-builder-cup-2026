@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The mockauth stack with the model replaced by recorded fixtures: kiwi sends its
+# chat, embedding and transcription calls to llmreplay (backend/tools/llmreplay)
+# and not to LiteLLM and Ollama, so a run needs no paid model session. The Secret
+# kiwi-env still holds whatever LLM address and key the cluster has; the explicit
+# env of env-patch.yaml wins over it, and the replay ignores the credential.
+#
+# The fixtures are the ConfigMap llmreplay-fixtures, built from the files listed
+# below. kustomize reads files only below this directory, and lists them one by
+# one (no globs): add a fixture file under fixtures/ and name it here. The name of
+# the ConfigMap carries a hash of its content, so changing a fixture rolls the
+# replay out; no image is rebuilt. The format is documented in the package comment
+# of backend/tools/llmreplay/main.go.
+namespace: kiwi
+
+resources:
+  - ../mockauth
+  - llmreplay.yaml
+
+patches:
+  - path: env-patch.yaml
+
+configMapGenerator:
+  - name: llmreplay-fixtures
+    files:
+      - fixtures/10-file-summary.json
+      - fixtures/20-recordings.json
+      - fixtures/30-meeting-summary.json
+      - fixtures/40-kb-answers.json
+      - fixtures/50-agent.json
+
+# Where the image built by Tilt lives: the k3d registry (deploy/local/k3d.yaml), the
+# same mapping as ../mockauth/images.yaml. Tilt replaces the tag with the one it
+# just pushed.
+images:
+  - name: llmreplay
+    newName: kiwi-registry.localhost:5001/llmreplay
+    newTag: dev

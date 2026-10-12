@@ -1,0 +1,16 @@
+{
+  "name": "e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "K.I.W.I. smoke suite: the five demo flows in headless Chromium against the running k3d stack. It has no `test` script on purpose: `pnpm -r test` must never launch a browser against a cluster; `task smoke` runs it.",
+  "scripts": {
+    "smoke": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,46 @@
+# Volumes on the k3s local-path provisioner. They live inside the k3d node
+# containers, so `task local:down` (cluster delete) removes them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kiwi-data
+  labels:
+    app.kubernetes.io/name: kiwi
+    app.kubernetes.io/part-of: kiwi
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: kiwi
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-data
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/part-of: kiwi
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

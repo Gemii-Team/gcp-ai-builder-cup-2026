@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="K.I.W.I. app icon">
+  <!-- Maskable: content stays inside the central 80% safe zone -->
+  <rect width="512" height="512" fill="#0F3D3A"/>
+  <g transform="translate(96 96) scale(6.6667)">
+    <rect x="2" y="2" width="44" height="44" rx="10" fill="#FBFAF6"/>
+    <circle cx="24" cy="24" r="18" fill="none" stroke="#0F3D3A" stroke-width="1.5" stroke-dasharray="3 2.2" stroke-linecap="round"/>
+    <rect x="14" y="12" width="4" height="24" rx="0.5" fill="#0F3D3A"/>
+    <path d="M18 24 L28 12 H34 L24 24 L34 36 H28 Z" fill="#0F3D3A"/>
+  </g>
+</svg>

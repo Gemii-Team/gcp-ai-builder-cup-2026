@@ -1,0 +1,10 @@
+# BuildKit reads this file (not a root .dockerignore) for `docker build -f apps/web/Dockerfile .`.
+# Send only what the build copies: no host node_modules, no secrets, no backend sources.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/web
+!packages
+**/node_modules
+**/dist

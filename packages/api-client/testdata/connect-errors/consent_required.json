@@ -1,0 +1,21 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "failed_precondition",
+    "message": "consent required",
+    "details": [
+      {
+        "type": "google.rpc.ErrorInfo",
+        "value": "ChBDT05TRU5UX1JFUVVJUkVEEgRraXdpGh0KA3VybBIWL2FwaS9hdXRoL21lZXQtY29uc2VudA",
+        "debug": {
+          "reason": "CONSENT_REQUIRED",
+          "domain": "kiwi",
+          "metadata": {
+            "url": "/api/auth/meet-consent"
+          }
+        }
+      }
+    ]
+  }
+}

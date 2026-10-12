@@ -1,0 +1,5 @@
+{
+  "alice": { "email": "alice@demo.example", "name": "Alice", "hostedDomain": "demo.example", "seeded": true },
+  "bob": { "email": "bob@demo.example", "name": "Bob", "hostedDomain": null, "seeded": true },
+  "carol": { "email": "carol@elsewhere.example", "name": "Carol", "hostedDomain": null, "seeded": false }
+}

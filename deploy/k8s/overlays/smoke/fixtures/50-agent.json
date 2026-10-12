@@ -1,0 +1,32 @@
+[
+  {
+    "match": {"stage": "agent_tool", "contains": "How full is the Bang Na warehouse right now?"},
+    "response": {
+      "choices": [{"message": {"content": null, "tool_calls": [{"function": {"name": "search_knowledge", "arguments": {"question": "How full is the Bang Na warehouse right now?"}}}]}}]
+    }
+  },
+  {
+    "match": {"stage": "agent_final", "contains": "How full is the Bang Na warehouse right now?"},
+    "response": {"choices": [{"message": {"content": "Bang Na is 85% full, see the sources below."}}]}
+  },
+  {
+    "match": {"stage": "agent_tool", "contains": "คลังสินค้าบางนาใช้พื้นที่ไปแล้วกี่เปอร์เซ็นต์"},
+    "response": {
+      "choices": [{"message": {"content": null, "tool_calls": [{"function": {"name": "search_knowledge", "arguments": {"question": "คลังสินค้าบางนาใช้พื้นที่ไปแล้วกี่เปอร์เซ็นต์"}}}]}}]
+    }
+  },
+  {
+    "match": {"stage": "agent_final", "contains": "คลังสินค้าบางนาใช้พื้นที่ไปแล้วกี่เปอร์เซ็นต์"},
+    "response": {"choices": [{"message": {"content": "คลังสินค้าบางนาใช้งานอยู่ร้อยละ 85 ดูแหล่งที่มาด้านล่าง"}}]}
+  },
+  {
+    "match": {"stage": "agent_tool", "contains": "What is the merit increase pool for 2027?"},
+    "response": {
+      "choices": [{"message": {"content": null, "tool_calls": [{"function": {"name": "search_knowledge", "arguments": {"question": "What is the merit increase pool for 2027?"}}}]}}]
+    }
+  },
+  {
+    "match": {"stage": "agent_final", "contains": "What is the merit increase pool for 2027?"},
+    "response": {"choices": [{"message": {"content": "Not found in channels you can access."}}]}
+  }
+]

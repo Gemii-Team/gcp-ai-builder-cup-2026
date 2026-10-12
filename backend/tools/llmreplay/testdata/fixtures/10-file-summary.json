@@ -1,0 +1,31 @@
+[
+  {
+    "match": {"schema": "file_summary", "contains": "warehouse"},
+    "response": {
+      "choices": [
+        {"message": {"content": {"summary": "The warehouse note covers pallet counts.", "key_points": ["Count the pallets on Friday"]}}}
+      ],
+      "usage": {"prompt_tokens": 120, "completion_tokens": 40, "total_tokens": 160}
+    }
+  },
+  {
+    "match": {"schema": "file_summary"},
+    "response": {
+      "id": "chatcmpl-recorded",
+      "object": "chat.completion",
+      "model": "qwen3.8-flash-next",
+      "choices": [
+        {
+          "index": 0,
+          "finish_reason": "stop",
+          "message": {
+            "role": "assistant",
+            "content": "\n\n{\"summary\": \"A generic file summary.\", \"key_points\": []}",
+            "reasoning_content": "The file is short, so the summary is one sentence."
+          }
+        }
+      ],
+      "usage": {"prompt_tokens": 87, "completion_tokens": 133, "total_tokens": 220}
+    }
+  }
+]

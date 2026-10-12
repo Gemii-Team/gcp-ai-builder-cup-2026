@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package kiwi.identity.v1;
+
+// IdentityService is served under /api (Connect, POST, protobuf or JSON).
+service IdentityService {
+  // GetMe returns the signed-in user and their workspace.
+  rpc GetMe(GetMeRequest) returns (GetMeResponse);
+  // ListUsers returns every user of the caller's workspace.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  // IssueRealtimeTicket returns a single-use ticket (30 s) for /ws?ticket=...,
+  // bound to the caller.
+  rpc IssueRealtimeTicket(IssueRealtimeTicketRequest) returns (IssueRealtimeTicketResponse);
+}
+
+// User is a workspace member. Ids are UUID strings.
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  string avatar_url = 4;
+}
+
+// Workspace is the tenant. name is presentational (KIWI_WORKSPACE_NAME).
+message Workspace {
+  string id = 1;
+  string name = 2;
+  string google_domain = 3;
+}
+
+message GetMeRequest {}
+
+message GetMeResponse {
+  User user = 1;
+  Workspace workspace = 2;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+message IssueRealtimeTicketRequest {}
+
+message IssueRealtimeTicketResponse {
+  string ticket = 1;
+}

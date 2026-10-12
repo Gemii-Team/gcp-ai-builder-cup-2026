@@ -1,0 +1,216 @@
+/*
+ * Ask's Sources panel: the right column of a wide screen and the bottom sheet of a phone, each cited source a slip with its
+ * excerpt, the Sources toggle of an answer and the draft made from it. Ported from .impeccable/prototype/ask.html; every
+ * colour, radius and size is a theme token. Every class starts with `ak-`.
+ */
+
+@media (min-width: 1024px) {
+  .ak-work {
+    grid-template-columns: minmax(0, 1fr) var(--panel-w);
+  }
+
+  .ak-work > .ak-panel {
+    border-left: 1px solid var(--color-ledger-rule);
+  }
+
+  .ak-work > .ak-panel .ak-pbody {
+    gap: 12px;
+  }
+}
+
+.ak-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-counter-mint);
+}
+
+.ak-ph {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px var(--pad) 8px 16px;
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.ak-ph-t {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.ak-pc {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-carbon-copy);
+}
+
+.ak-pclose {
+  margin-right: -8px;
+}
+
+.ak-pbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 16px 40px;
+}
+
+.ak-pbody > * {
+  flex: none;
+}
+
+.ak-p-sub {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 14px;
+  color: var(--color-carbon-copy);
+}
+
+.ak-ref {
+  font-family: var(--font-mono);
+  font-size: var(--text-reference);
+  font-weight: var(--text-reference--font-weight);
+  letter-spacing: var(--text-reference--letter-spacing);
+  color: var(--color-primary);
+  white-space: nowrap;
+}
+
+.ak-slips {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A source slip is no AI output: no perforation, a Track Rule hairline above its stub. A pressed citation tints it for 200ms. */
+.ak-sp {
+  transition: background-color .2s;
+}
+
+.ak-sp[data-hit] {
+  background: var(--color-citation-wash);
+}
+
+.ak-mk {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  background: var(--color-citation-wash);
+  color: var(--color-citation-teal);
+  font-family: var(--font-mono);
+  font-size: var(--text-citation);
+  font-weight: var(--text-citation--font-weight);
+  line-height: var(--text-citation--line-height);
+  white-space: nowrap;
+}
+
+.ak-sp-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ak-sp-t {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ak-sp-n {
+  margin-left: auto;
+}
+
+.ak-sp-k {
+  margin-left: 36px;
+  color: var(--color-carbon-copy);
+  font-size: 14px;
+}
+
+.ak-sp-ex {
+  margin-top: 8px;
+  padding: 8px 12px 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-counter-hover);
+  font-size: 14px;
+}
+
+.ak-ex-l {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 12px;
+  margin-top: 4px;
+}
+
+.ak-ex-l:first-child {
+  margin-top: 0;
+}
+
+.ak-ex-l > b {
+  font-weight: 600;
+}
+
+.ak-ex-n {
+  color: var(--color-carbon-copy);
+}
+
+.ak-ex-t {
+  grid-column: 1 / -1;
+}
+
+.ak-sp-ex .ak-ex-t {
+  padding-bottom: 4px;
+}
+
+.ak-ex-err {
+  color: var(--color-returned-ink);
+}
+
+.ak-sp .kiwi-stub {
+  padding: 6px 16px 8px;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+/* The Sources toggle of an answer: pressed, it takes Citation Wash, a Control Line Hover border and 600. */
+.ak-tgl[aria-pressed="true"] {
+  border-color: var(--color-control-line-hover);
+  background: var(--color-citation-wash);
+  font-weight: 600;
+}
+
+/* The draft made from an answer sits under it. */
+.ak-dr {
+  margin-top: 8px;
+}
+
+.ak-body > .kiwi-err {
+  margin-top: 4px;
+}
+
+/* ===== Phones: the panel is a bottom sheet (`.sheet` is the shell's) and its controls are 44px ===== */
+@media (max-width: 1023px) {
+  .ak-panel[data-sheet] {
+    flex: 1;
+  }
+
+  .ak-ph {
+    min-height: 56px;
+    padding: 6px 8px 6px 16px;
+  }
+
+  .ak-pbody {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .ak-p-sub,
+  .ak-sp-k {
+    font-size: 15px;
+  }
+}

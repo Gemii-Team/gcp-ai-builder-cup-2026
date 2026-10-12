@@ -1,0 +1,43 @@
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "request_sha256": "3c179c601ca207aba6c89aa11f3ff10949436d92039a1afbedaf3e04a1b33beb",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "id": "chatcmpl-9d3150b6ec36a2eb",
+    "created": 1791756207,
+    "model": "qwen3.8-27b-uncensored",
+    "object": "chat.completion",
+    "system_fingerprint": "vllm-0.27.1-tp2-bdd617fb",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\"summary\":\"ที่ประชุมตกลงเลื่อนการปล่อย dark mode ไปยังเวอร์ชัน v1.1 แทนที่จะเป็น v1.0 และมอบหมายงานให้ Nok อัปเดต release notes และให้ John แจ้งทีม QA\",\"decisions\":[{\"text\":\"เลื่อนการปล่อย dark mode ไปยัง v1.1 แทนที่จะเป็น v1.0\",\"entry_refs\":[1,2]}],\"action_items\":[{\"title\":\"อัปเดต release notes\",\"owner_hint\":\"Nok\",\"due_hint\":\"next:fri\",\"entry_refs\":[3]},{\"title\":\"แจ้งทีม QA เรื่องการเลื่อน dark mode\",\"owner_hint\":\"John\",\"due_hint\":\"+1d\",\"entry_refs\":[4]}]}",
+          "role": "assistant",
+          "reasoning_content": "The meeting is in Thai (with some English mixed in). Let me analyze the transcript:\n\n[0] Malee: Welcome everyone, today we will discuss dark mode and release.\n[1] John: I think we should ship dark mode in v1.1, not v1.0.\n[2] Malee: Agreed, we move dark mode to v1.1.\n[3] Nok: I will update the release notes by next Friday.\n[4] John: And I'll tell the QA team tomorrow.\n\nDecisions:\n- Dark mode is moved to v1.1 (not v1.0) - entries [1], [2]\n\nAction items:\n- Nok will update release notes by next Friday → due: next:fri (meeting is Friday 2026-10-09, next Friday would be 2026-10-16)\n- John will tell the QA team tomorrow → due: +1d (tomorrow from the meeting date)\n\nThe language of the meeting is Thai (with some English). I should write in Thai.\n\nLet me format the JSON properly.\n",
+          "provider_specific_fields": {
+            "refusal": null,
+            "reasoning": "The meeting is in Thai (with some English mixed in). Let me analyze the transcript:\n\n[0] Malee: Welcome everyone, today we will discuss dark mode and release.\n[1] John: I think we should ship dark mode in v1.1, not v1.0.\n[2] Malee: Agreed, we move dark mode to v1.1.\n[3] Nok: I will update the release notes by next Friday.\n[4] John: And I'll tell the QA team tomorrow.\n\nDecisions:\n- Dark mode is moved to v1.1 (not v1.0) - entries [1], [2]\n\nAction items:\n- Nok will update release notes by next Friday → due: next:fri (meeting is Friday 2026-10-09, next Friday would be 2026-10-16)\n- John will tell the QA team tomorrow → due: +1d (tomorrow from the meeting date)\n\nThe language of the meeting is Thai (with some English). I should write in Thai.\n\nLet me format the JSON properly.\n"
+          }
+        },
+        "provider_specific_fields": {
+          "stop_reason": null,
+          "routed_experts": null,
+          "token_ids": null
+        }
+      }
+    ],
+    "usage": {
+      "completion_tokens": 380,
+      "prompt_tokens": 532,
+      "total_tokens": 912,
+      "prompt_tokens_details": {
+        "cached_tokens": 0,
+        "created_cache_tokens": 0
+      }
+    }
+  }
+}

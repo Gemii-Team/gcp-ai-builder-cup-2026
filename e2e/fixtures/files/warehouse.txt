@@ -1,0 +1,8 @@
+Bang Na Cross-Dock Trial - Week 1 Report
+Demo data · ข้อมูลตัวอย่าง: this note is synthetic and every figure in it is invented.
+
+The cross-dock trial moved 480 pallet positions of slow-moving Zone B stock to the partner warehouse in Lat Krabang during the week of 13 October. Handling cost was 85,000 THB for the week, as quoted. Zone B is now 68% full, and Zone A is still 92% full.
+
+Next steps: confirm the partner's second dock slot by Friday, and decide on the Samut Prakan overflow space only if pre-orders pass 18,000 on 23 October.
+
+สรุปภาษาไทย: ทดลองย้ายสินค้าหมุนเวียนช้าของโซน B จำนวน 480 ตำแหน่งไปคลังพันธมิตรที่ลาดกระบังในสัปดาห์วันที่ 13 ตุลาคม ค่าดำเนินการ 85,000 บาทต่อสัปดาห์

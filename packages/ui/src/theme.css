@@ -1,0 +1,233 @@
+/*
+ * K.I.W.I. Proof Slip theme for Tailwind v4. Token names and values are DESIGN.md's; a token that no
+ * prototype uses is not added. Seal Green is for confirmed things, Draft Amber for what waits on a person,
+ * Returned Red for failure. There are no gradients, and the torn sealed slip is the only thing that casts a shadow.
+ *
+ * `static` keeps every token as a CSS variable on :root. Tailwind would otherwise drop the variables no utility
+ * references, and the component stylesheets (slip.css and the like) read tokens with var(--color-*).
+ */
+@theme static {
+  /* The default palette, type scale, radii and shadows give way to the design system's own. */
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+
+  /* Ink Teal: the rail, the primary button, the K.I.W.I. mark */
+  --color-primary: #0F3D3A;
+  --color-primary-hover: #164B47;
+  --color-primary-press: #0A2D2B;
+  --color-on-primary: #FFFFFF;
+
+  /* Rail: states and text on Ink Teal */
+  --color-rail-hover: #1B5651;
+  --color-rail-press: #22655F;
+  --color-rail-line: #24544F;
+  --color-rail-sage: #9FC4BB;
+  --color-rail-focus: #8FE3BE;
+  --color-rail-selection: #2F6F67;
+
+  /* Mints, teals and washes */
+  --color-presence-green: #5FD3A0;
+  --color-tally-mint: #CFE5DE;
+  --color-doing-teal: #3F7F78;
+  --color-focus-teal: #0F6F68;
+  --color-citation-teal: #0F5F59;
+  --color-citation-wash: #DCEBE6;
+  --color-citation-hover: #C6DFD7;
+  --color-citation-press: #B3D2C8;
+  --color-mint-press: #CBE0D9;
+  --color-selection-mint: #B3DACB;
+  --color-selection-ink: #0B2B28;
+  --color-counter-mint: #E6F2EE;
+  --color-counter-hover: #EEF6F3;
+
+  /* Slip paper and ink */
+  --color-slip-paper: #FBFAF6;
+  --color-field-white: #FFFFFF;
+  --color-ledger-ink: #14211F;
+  --color-carbon-copy: #4B615C;
+
+  /* Lines: control-line is a control boundary (3:1 on paper and on ground), the rest is decoration */
+  --color-control-line: #668A82;
+  --color-control-line-hover: #4B6F67;
+  --color-perforation-sage: #9DB8B1;
+  --color-ledger-rule: #C5D8D1;
+  --color-slip-edge: #C3D6CF;
+  --color-track-rule: #E1E9E5;
+  --color-skeleton-sage: #CFE0DA;
+  --color-chip-fill: #F3F8F6;
+  --color-chip-edge: #B5CBC4;
+  --color-disabled-fill: #D5E2DD;
+  --color-disabled-ink: #44594F;
+
+  /* Seal Green: confirmed things only */
+  --color-seal-green: #1E8A5A;
+  --color-seal-ink: #14683F;
+  --color-seal-wash: #EAF5EE;
+
+  /* Draft Amber: drafts and warnings only */
+  --color-draft-amber: #C98A1B;
+  --color-draft-ink: #7A4E00;
+  --color-draft-wash: #FBF1DA;
+  --color-draft-tag: #F6E7C7;
+  --color-draft-hover: #F8E8C2;
+  --color-draft-press: #F3DFB0;
+
+  /* Returned Red: the one failure family */
+  --color-returned-red: #C8402F;
+  --color-returned-ink: #9A2C1E;
+  --color-returned-wash: #FDF1EE;
+  --color-returned-edge: #E8BDB5;
+
+  /* The kiwi's bill, and the scrim behind a phone sheet */
+  --color-bill-tan: #B8A27A;
+  --color-sheet-scrim: rgb(15 61 58 / .45);
+
+  /* Two voices: Anuphan is language; Noto Sans Mono sets what is counted, timed or referenced */
+  --font-sans: Anuphan, "Noto Sans Thai", system-ui, sans-serif;
+  --font-mono: "Noto Sans Mono", Anuphan, monospace;
+
+  /* DESIGN.md typography roles: size, line height, and weight / tracking where the role fixes one */
+  --text-headline: 20px;
+  --text-headline--line-height: 1.45;
+  --text-headline--font-weight: 700;
+  --text-headline--letter-spacing: -0.01em;
+  --text-wordmark: 19px;
+  --text-wordmark--line-height: 1.35;
+  --text-wordmark--font-weight: 700;
+  --text-wordmark--letter-spacing: 0.06em;
+  --text-title: 16px;
+  --text-title--line-height: 1.6;
+  --text-title--font-weight: 600;
+  --text-item-title: 15px;
+  --text-item-title--line-height: 1.55;
+  --text-item-title--font-weight: 600;
+  --text-body: 14.5px;
+  --text-body--line-height: 1.65;
+  --text-body--font-weight: 400;
+  --text-body-phone: 15px;
+  --text-body-phone--line-height: 1.65;
+  --text-body-phone--font-weight: 400;
+  --text-label: 14px;
+  --text-label--line-height: 1.5;
+  --text-label--font-weight: 600;
+  --text-button: 14.5px;
+  --text-button--line-height: 1.5;
+  --text-button--font-weight: 500;
+  --text-meta: 14px;
+  --text-meta--line-height: 1.65;
+  --text-meta--font-weight: 400;
+  --text-numeral: 13px;
+  --text-numeral--line-height: 1.6;
+  --text-numeral--font-weight: 500;
+  --text-reference: 13px;
+  --text-reference--line-height: 1.6;
+  --text-reference--font-weight: 600;
+  --text-reference--letter-spacing: 0.02em;
+  --text-citation: 12px;
+  --text-citation--line-height: 20px;
+  --text-citation--font-weight: 600;
+
+  /* Gently squared, paper-cut geometry; hair, notch and pill are geometry rather than steps */
+  --radius-hair: 2px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-tile: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-notch: 7px;
+  --radius-pill: 999px;
+
+  --ease-expo: cubic-bezier(.16,1,.3,1);
+
+  /* The only shadow: the torn, sealed slip. Tailwind wraps the value in drop-shadow(). */
+  --drop-shadow-torn: 0 6px 10px rgb(15 61 58 / .2);
+}
+
+@layer base {
+  body {
+    background-color: var(--color-counter-mint);
+    color: var(--color-ledger-ink);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    font-variant-numeric: tabular-nums;
+    caret-color: var(--color-primary);
+    accent-color: var(--color-primary);
+    -webkit-font-smoothing: antialiased;
+    overflow-wrap: break-word;
+  }
+
+  @media (max-width: 1023px) {
+    body {
+      font-size: var(--text-body-phone);
+      line-height: var(--text-body-phone--line-height);
+    }
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background-color: var(--color-selection-mint);
+    color: var(--color-selection-ink);
+  }
+
+  .rail ::selection,
+  .tabs ::selection {
+    background-color: var(--color-rail-selection);
+    color: var(--color-on-primary);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus-teal);
+    outline-offset: 2px;
+  }
+
+  .rail :focus-visible,
+  .tabs :focus-visible {
+    outline-color: var(--color-rail-focus);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-perforation-sage) transparent;
+  }
+
+  .rail {
+    scrollbar-color: var(--color-doing-teal) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-perforation-sage);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: var(--radius-pill);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition-duration: .01ms !important;
+      transition-delay: 0s !important;
+    }
+  }
+}

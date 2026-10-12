@@ -1,0 +1,86 @@
+name: hygiene
+
+# Last line of defence behind the local lefthook hooks (which --no-verify skips):
+# docs, design records and credentials must never reach this public repository.
+# Runs on every push and pull request, for all paths.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.28.0
+      # sha256 of gitleaks_8.28.0_linux_x64.tar.gz, from the release's checksums file.
+      GITLEAKS_SHA256: a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the scanned range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          else
+            # New branch, tag or force-push over a commit this clone lacks: scan all history.
+            range="$PUSH_AFTER"
+          fi
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse private paths in the pushed commits
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: bash scripts/hygiene/check-paths.sh --range "$RANGE"
+
+      - name: Install gitleaks
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$archive"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/bin" gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # The suites behind the guards above: a guard nobody tests can rot unnoticed. The README
+      # suite skips, loudly, the checks that need the git-ignored .env (it does not exist here).
+      - name: Test the hygiene guards
+        run: |
+          bash scripts/hygiene/check-paths.test.sh
+          bash scripts/hygiene/gitleaks.test.sh
+          bash scripts/hygiene/readme.test.sh
+
+      - name: Scan the pushed commits for secrets
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: gitleaks git --log-opts="$RANGE" -c .gitleaks.toml --redact --no-banner
+
+      - name: Fail if a private path is tracked
+        run: |
+          tracked=$(git ls-files docs .impeccable .superpowers DESIGN.md PRODUCT.md)
+          if [ -n "$tracked" ]; then
+            echo "::error::private paths are tracked by git"
+            echo "$tracked"
+            exit 1
+          fi

@@ -1,0 +1,11 @@
+# Where the image built by Tilt lives: the k3d registry (deploy/local/k3d.yaml),
+# the same mapping as ../local/images.yaml. Tilt replaces the tag with the one it
+# just pushed.
+apiVersion: builtin
+kind: ImageTagTransformer
+metadata:
+  name: mockoidc-image
+imageTag:
+  name: mockoidc
+  newName: kiwi-registry.localhost:5001/mockoidc
+  newTag: dev

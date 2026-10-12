@@ -1,0 +1,21 @@
+{
+  "httpStatus": 429,
+  "contentType": "application/json",
+  "body": {
+    "code": "resource_exhausted",
+    "message": "meet unavailable",
+    "details": [
+      {
+        "type": "google.rpc.ErrorInfo",
+        "value": "ChBNRUVUX1VOQVZBSUxBQkxFEgRraXdpGhUKBWNhdXNlEgxyYXRlX2xpbWl0ZWQ",
+        "debug": {
+          "reason": "MEET_UNAVAILABLE",
+          "domain": "kiwi",
+          "metadata": {
+            "cause": "rate_limited"
+          }
+        }
+      }
+    ]
+  }
+}

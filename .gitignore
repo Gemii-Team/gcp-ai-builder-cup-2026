@@ -4,6 +4,8 @@
 /PRODUCT.md
 /DESIGN.md
 /.impeccable/
+# Agent working files (briefs, ledgers, reports): never pushed
+/.superpowers/
 
 # Secrets and credentials
 .env
@@ -19,6 +21,8 @@ kubeconfig*
 *-sa-key.json
 service-account*.json
 application_default_credentials.json
+# The OAuth client file the Google console offers for download (client_secret_<id>.apps.googleusercontent.com.json)
+client_secret*.json
 
 # Terraform state, plans and variable files (can contain secrets)
 .terraform/
@@ -28,3 +32,15 @@ application_default_credentials.json
 tfplan
 *.tfvars
 crash.log
+
+# Build and tool output
+node_modules/
+.turbo/
+dist/
+coverage/
+# turbo writes one when run; never commit it
+/AGENTS.md
+
+# Playwright output of the smoke suite
+/e2e/test-results/
+/e2e/playwright-report/

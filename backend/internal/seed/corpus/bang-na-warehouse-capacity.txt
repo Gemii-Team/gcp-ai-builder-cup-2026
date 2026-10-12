@@ -1,0 +1,25 @@
+Bang Na Warehouse Capacity - Q4 Launch
+Demo data · ข้อมูลตัวอย่าง: this note is synthetic and every figure in it is invented.
+
+1. Summary
+The Bang Na warehouse holds 9,600 pallet positions. On 12 October 8,160 of them are occupied, which is 85% utilisation. The Q4 launch plan assumes that order volume grows by 20% in the week of the 3 November go-live.
+
+2. Capacity by zone
+Zone A, ambient fast-moving stock: 4,000 positions, 92% full.
+Zone B, ambient slow-moving stock: 3,600 positions, 80% full.
+Zone C, chilled 2-8 C: 1,200 positions, 80% full.
+Zone D, returns and quarantine: 800 positions, 80% full.
+
+3. Forecast
+If volume grows by 20%, Zone A is full on 28 October and total utilisation reaches 102% of all positions in launch week. The launch cannot be fulfilled from Bang Na alone.
+
+4. Options
+Option 1, overflow warehouse at Samut Prakan: 1,200 pallet positions, about 2 weeks to set up, rent 410,000 THB per month with a three-month minimum.
+Option 2, cap launch-week orders at 15% growth: no extra cost, but about 5% of launch-week orders ship one day late.
+Option 3, move slow-moving Zone B stock to a partner cross-dock: frees 500 positions for 85,000 THB per month.
+
+5. Recommendation
+Do Option 3 now. Rent the Option 1 overflow space only if pre-orders pass 18,000 on 23 October.
+
+สรุปภาษาไทย
+คลังสินค้าบางนามีพื้นที่วางพาเลท 9,600 ตำแหน่ง ขณะนี้ใช้งานอยู่ร้อยละ 85 หากยอดสั่งซื้อเพิ่มขึ้นร้อยละ 20 ในสัปดาห์เปิดตัววันที่ 3 พฤศจิกายน พื้นที่โซน A จะเต็มภายในวันที่ 28 ตุลาคม ข้อเสนอคือย้ายสินค้าหมุนเวียนช้าไปคลังพันธมิตรทันที และเช่าคลังสำรองที่สมุทรปราการเฉพาะเมื่อยอดสั่งจองล่วงหน้าเกิน 18,000 รายการในวันที่ 23 ตุลาคม

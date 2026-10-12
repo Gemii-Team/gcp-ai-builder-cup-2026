@@ -1,0 +1,29 @@
+# Toolchain pins: `mise install` gives every developer and CI the same tools.
+# A bare "1.26" means the newest 1.26.x release; backend/go.mod needs 1.26.6 or later
+# (google.golang.org/adk/v2 requires it).
+[tools]
+go = "1.26"
+node = "lts"
+pnpm = "10"
+
+# Code generation
+buf = "1.59"
+sqlc = "1.30"
+goose = "3.26"
+
+# Local cluster
+kubectl = "1.34"
+kustomize = "5.8"
+kubeconform = "0.7"
+k3d = "5.8"
+tilt = "0.35"
+caddy = "2.11"
+
+# Repository checks
+lefthook = "1.13"
+gitleaks = "8.28"
+actionlint = "1.7"
+golangci-lint = "2.14" # must be built with Go >= 1.26: 2.6.2 (built with Go 1.25) refuses this module
+
+# Task runner
+task = "3.45"

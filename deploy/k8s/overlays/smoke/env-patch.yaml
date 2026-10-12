@@ -1,0 +1,19 @@
+# kiwi sends its LLM and embedding calls to the replay. An explicit env entry wins
+# over envFrom, so this overrides KIWI_LLM_BASE_URL (from the Secret kiwi-env) and
+# KIWI_EMBED_BASE_URL (from the ConfigMap kiwi-config) and leaves every other
+# setting of the mockauth stack as it is. Neither URL carries /v1: the adapter
+# appends the path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kiwi
+spec:
+  template:
+    spec:
+      containers:
+        - name: kiwi
+          env:
+            - name: KIWI_LLM_BASE_URL
+              value: http://llmreplay:8089
+            - name: KIWI_EMBED_BASE_URL
+              value: http://llmreplay:8089

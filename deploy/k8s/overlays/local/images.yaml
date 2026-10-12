@@ -1,0 +1,19 @@
+# Where the images built by Tilt live: the k3d registry (deploy/local/k3d.yaml).
+# Tilt replaces the tag with the one it just pushed.
+apiVersion: builtin
+kind: ImageTagTransformer
+metadata:
+  name: kiwi-image
+imageTag:
+  name: kiwi
+  newName: kiwi-registry.localhost:5001/kiwi
+  newTag: dev
+---
+apiVersion: builtin
+kind: ImageTagTransformer
+metadata:
+  name: web-image
+imageTag:
+  name: web
+  newName: kiwi-registry.localhost:5001/web
+  newTag: dev

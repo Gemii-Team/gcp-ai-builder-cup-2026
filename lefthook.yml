@@ -1,0 +1,23 @@
+# Local hygiene hooks (spec section 7.6): install once with `lefthook install`.
+# CI repeats the same checks, so skipping a hook with --no-verify still fails the push there.
+pre-commit:
+  commands:
+    gitleaks:
+      run: gitleaks git --pre-commit --staged --redact -c .gitleaks.toml
+    check-paths:
+      run: bash scripts/hygiene/check-paths.sh --staged
+
+# A branch with no remote-tracking ref (its first push) has no @{push}; scan every
+# commit no remote-tracking ref contains instead.
+pre-push:
+  commands:
+    check-paths:
+      run: |
+        range='@{push}..HEAD'
+        git rev-parse -q --verify '@{push}' >/dev/null 2>&1 || range='HEAD --not --remotes'
+        bash scripts/hygiene/check-paths.sh --range $range
+    gitleaks:
+      run: |
+        range='@{push}..HEAD'
+        git rev-parse -q --verify '@{push}' >/dev/null 2>&1 || range='HEAD --not --remotes'
+        gitleaks git --log-opts="$range" --redact -c .gitleaks.toml

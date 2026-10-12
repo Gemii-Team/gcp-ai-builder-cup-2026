@@ -1,0 +1,37 @@
+# Lane ownership. The last matching pattern wins, so the general rule comes first.
+#   platform      shared platform code, composition root, deploy, tooling, CI
+#   collaboration identity, chat and tasks backend; protobuf, SQL and generated code
+#   web           apps/web and the packages it uses
+#   ingest        docs and meetings domains, Google Meet client
+#   intelligence  LLM adapters, knowledge and agents domains, seed corpus
+
+* @Gemii-Team/platform
+
+# Collaboration
+/proto/                                  @Gemii-Team/collaboration
+/backend/db/                             @Gemii-Team/collaboration
+/backend/gen/                            @Gemii-Team/collaboration
+/backend/internal/identity/              @Gemii-Team/collaboration
+/backend/internal/chat/                  @Gemii-Team/collaboration
+/backend/internal/tasks/                 @Gemii-Team/collaboration
+/backend/internal/api/                   @Gemii-Team/collaboration
+/backend/internal/migrate/               @Gemii-Team/collaboration
+/backend/internal/testkit/               @Gemii-Team/collaboration
+/backend/internal/platform/events/       @Gemii-Team/collaboration
+/backend/internal/platform/oidc/         @Gemii-Team/collaboration
+
+# Web
+/apps/                                   @Gemii-Team/web
+/packages/                               @Gemii-Team/web
+/scripts/web/                            @Gemii-Team/web
+
+# Ingest
+/backend/internal/docs/                  @Gemii-Team/ingest
+/backend/internal/meetings/              @Gemii-Team/ingest
+/backend/internal/platform/google/       @Gemii-Team/ingest
+
+# Intelligence
+/backend/internal/platform/llm/          @Gemii-Team/intelligence
+/backend/internal/knowledge/             @Gemii-Team/intelligence
+/backend/internal/agents/                @Gemii-Team/intelligence
+/backend/internal/seed/                  @Gemii-Team/intelligence

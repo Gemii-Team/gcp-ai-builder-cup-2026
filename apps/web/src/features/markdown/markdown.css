@@ -1,0 +1,43 @@
+/* ===== The model's markdown in a slip: paragraphs, lists, bold labels, links ===== */
+.md > * + * {
+  margin-top: 8px;
+}
+
+.md ul,
+.md ol {
+  padding-left: 20px;
+}
+
+.md ul {
+  list-style: disc;
+}
+
+.md ol {
+  list-style: decimal;
+}
+
+.md strong,
+.md-heading {
+  font-weight: 600;
+}
+
+.md a {
+  color: var(--color-citation-teal);
+  text-decoration: underline;
+  text-decoration-color: var(--color-perforation-sage);
+  text-underline-offset: 3px;
+  transition: text-decoration-color .15s;
+}
+
+.md a:hover {
+  text-decoration-color: var(--color-citation-teal);
+}
+
+.md code {
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+}
+
+.md pre {
+  overflow-x: auto;
+}

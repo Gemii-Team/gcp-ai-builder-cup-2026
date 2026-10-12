@@ -1,0 +1,8 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "invalid_argument",
+    "message": "docs: upload rejected (too_large): the file is over the size limit"
+  }
+}

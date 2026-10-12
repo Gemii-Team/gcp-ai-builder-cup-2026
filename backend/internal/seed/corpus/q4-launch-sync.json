@@ -1,0 +1,32 @@
+{
+  "title": "Q4 launch sync",
+  "entries": [
+    {"speaker": 0, "start_ms": 5000, "end_ms": 20000, "text": "Okay, let's start. Today: launch date, warehouse capacity, and who owns what."},
+    {"speaker": 1, "start_ms": 21000, "end_ms": 47000, "text": "Bang Na is at eighty-five percent. If orders grow twenty percent in launch week we run out of space around the twenty-eighth of October."},
+    {"speaker": 0, "start_ms": 48000, "end_ms": 71000, "text": "ถ้าอย่างนั้นเราต้องตัดสินใจเรื่องโกดังสำรองที่สมุทรปราการก่อนวันศุกร์ใช่ไหมคะ"},
+    {"speaker": 1, "start_ms": 72000, "end_ms": 99000, "text": "Yes. The overflow space is about twelve hundred pallet positions with two weeks lead time. The other option is moving slow stock to a partner cross-dock."},
+    {"speaker": 0, "start_ms": 100000, "end_ms": 124000, "text": "I prefer the cross-dock first, it is cheaper. We rent the overflow space only if pre-orders pass eighteen thousand."},
+    {"speaker": 1, "start_ms": 125000, "end_ms": 149000, "text": "Agreed. We check the pre-order count on the twenty-third of October."},
+    {"speaker": 0, "start_ms": 150000, "end_ms": 171000, "text": "เรื่องวันเปิดตัวคือวันที่สามพฤศจิกายนเหมือนเดิมนะคะ ไม่เลื่อน"},
+    {"speaker": 1, "start_ms": 172000, "end_ms": 199000, "text": "The launch date stays the third of November. Marketing wants the final delivery promise for the landing page by Monday."},
+    {"speaker": 0, "start_ms": 200000, "end_ms": 223000, "text": "Who writes the delivery promise? I think ops should draft it and then we review it."},
+    {"speaker": 1, "start_ms": 224000, "end_ms": 249000, "text": "Someone from ops, but I do not know who yet."},
+    {"speaker": 0, "start_ms": 250000, "end_ms": 270000, "text": "Fine. Can you update the launch checklist with the capacity numbers?"},
+    {"speaker": 1, "start_ms": 271000, "end_ms": 294000, "text": "Will do, I will have it done by Friday."},
+    {"speaker": 0, "start_ms": 295000, "end_ms": 319000, "text": "และฉันจะขอให้ฝ่ายการเงินยืนยันงบค่าเช่าโกดังสำรองภายในวันศุกร์ค่ะ"},
+    {"speaker": 0, "start_ms": 320000, "end_ms": 335000, "text": "Thanks everyone. Same time next week."}
+  ],
+  "summary": "The team reviewed Bang Na warehouse capacity for the 3 November launch. The warehouse is 85% full, and a 20% rise in launch-week orders would fill it around 28 October. They will move slow-moving stock to a partner cross-dock first and rent the Samut Prakan overflow space only if pre-orders pass 18,000 on 23 October.",
+  "decisions": [
+    {"text": "The launch date stays 3 November.", "entry_refs": [6, 7]},
+    {"text": "Move slow-moving stock to a partner cross-dock first; rent the overflow space only if pre-orders pass 18,000.", "entry_refs": [4, 5]}
+  ],
+  "open_questions": [
+    {"text": "Who in ops drafts the delivery promise for the landing page?", "entry_refs": [8, 9]}
+  ],
+  "action_items": [
+    {"title": "Update the launch checklist with the capacity numbers", "owner": 1, "due": "next:fri", "entry_refs": [11]},
+    {"title": "Confirm the overflow warehouse rental budget with finance", "owner": 0, "due": "next:fri", "entry_refs": [12]},
+    {"title": "Draft the delivery promise for the landing page", "due": "next:mon", "entry_refs": [9]}
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "httpStatus": 400,
+  "contentType": "application/json",
+  "body": {
+    "code": "invalid_argument",
+    "message": "docs: upload rejected (size_mismatch): the file changed while it was checked"
+  }
+}

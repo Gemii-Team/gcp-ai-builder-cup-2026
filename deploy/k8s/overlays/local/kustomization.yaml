@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The k3d stack: the base plus Postgres, Valkey and Ollama in the cluster.
+# The Secret kiwi-env is not rendered here: scripts/local/load-env-secret.sh
+# builds it from .env so that no secret value is ever written to a manifest.
+namespace: kiwi
+
+resources:
+  - ../../base
+  - config.yaml
+  - ingress.yaml
+  - pvc.yaml
+  - deps/postgres.yaml
+  - deps/postgres-init.yaml
+  - deps/valkey.yaml
+  - deps/ollama.yaml
+
+transformers:
+  - images.yaml

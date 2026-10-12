@@ -1,0 +1,167 @@
+name: ci
+
+# Build and test on every pull request: the Go module and the TypeScript workspaces, the
+# guard suites of the manifests and scripts, and the drift of the generated code.
+# Nothing here pushes an image or deploys; the hygiene workflow guards what may be pushed.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+# The tools the jobs below build from source with `go install` (no third-party action, no
+# downloaded binary): exact releases of the minors mise.toml pins, which
+# scripts/local/render.test.sh keeps in step.
+env:
+  KUSTOMIZE_VERSION: v5.8.0
+  KUBECONFORM_VERSION: v0.7.0
+  TASK_VERSION: v3.45.5
+  BUF_VERSION: v1.59.0
+  SQLC_VERSION: v1.30.0
+  CADDY_VERSION: v2.11.7
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l backend)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: these files need formatting"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        working-directory: backend
+        run: go build ./...
+
+      # The tests start real Postgres and Valkey containers (testcontainers); the runner has Docker.
+      - name: Test
+        working-directory: backend
+        run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # No version given: pnpm/action-setup reads "packageManager" of package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+  # The suites that guard the rendered manifests, the Tiltfile and the smoke runner: they need
+  # no cluster and no Docker (the programs the scripts call are stubbed).
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      # caddy validates apps/web/Caddyfile in render.test.sh (a missing caddy fails there in CI).
+      - name: Install kustomize, kubeconform, task and caddy
+        run: |
+          go install "sigs.k8s.io/kustomize/kustomize/v5@${KUSTOMIZE_VERSION}"
+          go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
+          go install "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}"
+          go install "github.com/caddyserver/caddy/v2/cmd/caddy@${CADDY_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Rendered manifests, Tiltfile and scripts
+        run: bash scripts/local/render.test.sh
+
+      - name: Smoke runner
+        run: bash scripts/smoke/run.test.sh
+
+  # Generated code (protobuf, sqlc) must be what `task gen` produces.
+  gen-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # No version given: pnpm/action-setup reads "packageManager" of package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      # protoc-gen-es is a dependency of packages/api-client; protoc-gen-go and
+      # protoc-gen-connect-go are `tool` directives of backend/go.mod.
+      - name: Install the JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install task, buf and sqlc
+        run: |
+          go install "github.com/go-task/task/v3/cmd/task@${TASK_VERSION}"
+          go install "github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}"
+          go install "github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Check the generated code
+        run: bash scripts/check-gen-drift.sh

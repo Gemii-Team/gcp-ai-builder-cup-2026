@@ -1,0 +1,42 @@
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "request_sha256": "3a9a82a0bc93397bb875c529c89ea08f59715512639fbc1fcfe275ee06030dda",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "id": "chatcmpl-928695b1-9c7a-4d54-9a3d-75d475abd591",
+    "created": 1791756235,
+    "model": "Qwen3.8",
+    "object": "chat.completion",
+    "system_fingerprint": "vllm-0.30.0-c36416d3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "\n\nWe decided to move dark mode out of the v1.0 release and into v1.1 instead (MTG-1001#12).",
+          "role": "assistant",
+          "reasoning_content": "The search returned a single result: MTG-1001#12 says dark mode moves from v1.0 to v1.1. That's the decision.\n",
+          "provider_specific_fields": {
+            "refusal": null,
+            "reasoning": "The search returned a single result: MTG-1001#12 says dark mode moves from v1.0 to v1.1. That's the decision.\n"
+          }
+        },
+        "provider_specific_fields": {
+          "stop_reason": null,
+          "routed_experts": null,
+          "token_ids": null
+        }
+      }
+    ],
+    "usage": {
+      "completion_tokens": 74,
+      "prompt_tokens": 552,
+      "total_tokens": 626,
+      "completion_tokens_details": {
+        "reasoning_tokens": 38
+      }
+    }
+  }
+}

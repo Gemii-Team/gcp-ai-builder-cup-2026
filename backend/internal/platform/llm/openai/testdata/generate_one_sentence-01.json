@@ -1,0 +1,42 @@
+{
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "request_sha256": "dd92915449aba8d8d3252a0b803498213272e9403095729859646c37530d8181",
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "id": "chatcmpl-0c168c90-2f1f-4301-9942-f424f209080b",
+    "created": 1791756211,
+    "model": "Qwen3.8",
+    "object": "chat.completion",
+    "system_fingerprint": "vllm-0.30.0-c36416d3",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "\n\nA kanban board is a visual workflow management tool—typically a set of columns (e.g., \"To Do,\" \"In Progress,\" \"Done\") with cards representing individual tasks—used to visualize work, limit work-in-progress, and manage flow through a process.",
+          "role": "assistant",
+          "reasoning_content": "The user asks for a one-sentence definition of a kanban board. This is a straightforward factual question I can answer from knowledge. A kanban board is a visual workflow management tool (originally from Toyota's manufacturing system) that displays work items in columns representing stages of a process (e.g., To Do, In Progress, Done) to visualize and manage workflow.\n",
+          "provider_specific_fields": {
+            "refusal": null,
+            "reasoning": "The user asks for a one-sentence definition of a kanban board. This is a straightforward factual question I can answer from knowledge. A kanban board is a visual workflow management tool (originally from Toyota's manufacturing system) that displays work items in columns representing stages of a process (e.g., To Do, In Progress, Done) to visualize and manage workflow.\n"
+          }
+        },
+        "provider_specific_fields": {
+          "stop_reason": null,
+          "routed_experts": null,
+          "token_ids": null
+        }
+      }
+    ],
+    "usage": {
+      "completion_tokens": 133,
+      "prompt_tokens": 87,
+      "total_tokens": 220,
+      "completion_tokens_details": {
+        "reasoning_tokens": 76
+      }
+    }
+  }
+}

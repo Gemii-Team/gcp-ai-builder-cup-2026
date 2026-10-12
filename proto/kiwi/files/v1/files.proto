@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package kiwi.files.v1;
+
+// FileService is served under /api (Connect, POST, protobuf or JSON).
+service FileService {
+  // CreateUpload returns a signed PUT bound to one object key, content type and
+  // size limit; the browser uploads straight to storage.
+  rpc CreateUpload(CreateUploadRequest) returns (CreateUploadResponse);
+  // CompleteUpload re-validates size and MIME on the stored object and starts analysis.
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+  // GetDownloadUrl returns a short-lived signed GET, issued after a channel-membership check.
+  rpc GetDownloadUrl(GetDownloadUrlRequest) returns (GetDownloadUrlResponse);
+  // RetryAnalysis re-enqueues analysis of a FAILED file.
+  rpc RetryAnalysis(RetryAnalysisRequest) returns (RetryAnalysisResponse);
+}
+
+enum FileStatus {
+  FILE_STATUS_UNSPECIFIED = 0;
+  FILE_STATUS_UPLOADED = 1;
+  FILE_STATUS_ANALYZING = 2;
+  FILE_STATUS_READY = 3;
+  FILE_STATUS_FAILED = 4;
+}
+
+// UploadPurpose selects the size and MIME limits and who consumes the file.
+enum UploadPurpose {
+  UPLOAD_PURPOSE_UNSPECIFIED = 0;
+  UPLOAD_PURPOSE_ATTACHMENT = 1;
+  UPLOAD_PURPOSE_RECORDING = 2;
+}
+
+// File is an uploaded file. ref is the DOC-... REF code, empty until the file is ready.
+message File {
+  string id = 1;
+  string channel_id = 2;
+  string message_id = 3;
+  string name = 4;
+  string mime = 5;
+  int64 size = 6;
+  FileStatus status = 7;
+  // failure_reason is a short code (e.g. too_large, unsupported_type, empty) when FAILED.
+  string failure_reason = 8;
+  string ref = 9;
+  // pages: 0 = unknown; set by analysis.
+  int32 pages = 10;
+}
+
+message CreateUploadRequest {
+  string channel_id = 1;
+  string name = 2;
+  string mime = 3;
+  int64 size = 4;
+  UploadPurpose purpose = 5;
+}
+
+message CreateUploadResponse {
+  string file_id = 1;
+  string upload_url = 2;
+  // headers must be sent with the PUT to upload_url.
+  map<string, string> headers = 3;
+}
+
+message CompleteUploadRequest {
+  string file_id = 1;
+}
+
+message CompleteUploadResponse {
+  File file = 1;
+}
+
+message GetFileRequest {
+  string file_id = 1;
+}
+
+message GetFileResponse {
+  File file = 1;
+}
+
+message GetDownloadUrlRequest {
+  string file_id = 1;
+}
+
+message GetDownloadUrlResponse {
+  string url = 1;
+}
+
+message RetryAnalysisRequest {
+  string file_id = 1;
+}
+
+message RetryAnalysisResponse {}

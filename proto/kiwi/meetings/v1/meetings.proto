@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package kiwi.meetings.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// MeetingService is served under /api (Connect, POST, protobuf or JSON).
+service MeetingService {
+  // StartMeeting creates a Meet space for the channel as the calling user.
+  rpc StartMeeting(StartMeetingRequest) returns (StartMeetingResponse);
+  // CreateFromRecording makes a meeting from an uploaded RECORDING file.
+  rpc CreateFromRecording(CreateFromRecordingRequest) returns (CreateFromRecordingResponse);
+  rpc GetMeeting(GetMeetingRequest) returns (GetMeetingResponse);
+  // GetTranscriptExcerpt returns the entries within radius of entry_idx.
+  rpc GetTranscriptExcerpt(GetTranscriptExcerptRequest) returns (GetTranscriptExcerptResponse);
+  // RetrySummary re-enqueues the right job for a FAILED meeting.
+  rpc RetrySummary(RetrySummaryRequest) returns (RetrySummaryResponse);
+}
+
+enum MeetingStatus {
+  MEETING_STATUS_UNSPECIFIED = 0;
+  MEETING_STATUS_PENDING = 1;
+  MEETING_STATUS_INGESTING = 2;
+  MEETING_STATUS_READY = 3;
+  MEETING_STATUS_FAILED = 4;
+  MEETING_STATUS_NO_TRANSCRIPT = 5;
+}
+
+// Meeting is a Meet meeting or a recording turned into one. ref is the MTG-... REF code.
+message Meeting {
+  string id = 1;
+  string channel_id = 2;
+  string title = 3;
+  string ref = 4;
+  MeetingStatus status = 5;
+  // failure_reason is a short code (e.g. no_speech, model_unavailable) when FAILED.
+  string failure_reason = 6;
+  string meet_uri = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp ended_at = 9;
+  string summary = 10;
+  repeated SummaryItem decisions = 11;
+  repeated SummaryItem open_questions = 12;
+}
+
+// SummaryItem is a decision or open question with the transcript entries it comes from.
+message SummaryItem {
+  string text = 1;
+  repeated int32 entry_refs = 2;
+}
+
+// Entry is one transcript line. speaker, start_ms and end_ms are unset when the
+// transcript has no speaker or timing (recording fallback on the local provider).
+message Entry {
+  int32 idx = 1;
+  optional string speaker = 2;
+  optional int64 start_ms = 3;
+  optional int64 end_ms = 4;
+  string text = 5;
+}
+
+// Excerpt is a window of transcript entries around focus_idx.
+message Excerpt {
+  string meeting_id = 1;
+  string title = 2;
+  int32 focus_idx = 3;
+  repeated Entry entries = 4;
+}
+
+message StartMeetingRequest {
+  string channel_id = 1;
+}
+
+message StartMeetingResponse {
+  Meeting meeting = 1;
+  // True when Meet will start the transcript by itself; false when the Google account
+  // cannot have auto-transcription and the host must turn it on in Meet.
+  bool transcription_automatic = 2;
+}
+
+message CreateFromRecordingRequest {
+  string channel_id = 1;
+  string file_id = 2;
+  string title = 3;
+}
+
+message CreateFromRecordingResponse {
+  Meeting meeting = 1;
+}
+
+message GetMeetingRequest {
+  string meeting_id = 1;
+}
+
+message GetMeetingResponse {
+  Meeting meeting = 1;
+}
+
+message GetTranscriptExcerptRequest {
+  string meeting_id = 1;
+  int32 entry_idx = 2;
+  int32 radius = 3;
+}
+
+message GetTranscriptExcerptResponse {
+  Excerpt excerpt = 1;
+}
+
+message RetrySummaryRequest {
+  string meeting_id = 1;
+}
+
+message RetrySummaryResponse {}

@@ -1,0 +1,24 @@
+{
+  "match": {"schema": "meeting_summary", "contains": "[0] Okay, let's start the cross-dock trial review."},
+  "response": {
+    "choices": [
+      {
+        "message": {
+          "content": {
+            "summary": "The team reviewed the cross-dock trial and agreed to start it on Monday with Zone B stock. The partner's second dock slot still has no owner, and two follow-ups were handed out.",
+            "decisions": [
+              {"text": "Start the cross-dock trial on Monday with Zone B stock.", "entry_refs": [1]}
+            ],
+            "open_questions": [
+              {"text": "Who will confirm the partner's second dock slot?", "entry_refs": [2, 3]}
+            ],
+            "action_items": [
+              {"title": "Send the pallet count to ops", "owner_hint": "Alice", "due_hint": "next:fri", "entry_refs": [4]},
+              {"title": "Book the weekend crew for the trial", "owner_hint": "", "due_hint": "none", "entry_refs": [5]}
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,89 @@
+version: '3'
+
+# The single entry point for repository tasks. Tasks are added by the change
+# that makes them work.
+tasks:
+  setup:
+    desc: Install the git hooks and the JavaScript dependencies
+    cmds:
+      - lefthook install
+      - pnpm install
+
+  test:
+    desc: Run the Go tests (race detector) and the TypeScript tests
+    cmds:
+      - cd backend && go test -race ./...
+      - pnpm -r test
+
+  lint:
+    desc: Check Go formatting, run golangci-lint and the TypeScript linters
+    cmds:
+      - |
+        unformatted="$(gofmt -l backend)"
+        if [ -n "$unformatted" ]; then
+          echo "gofmt: these files need formatting:"
+          echo "$unformatted"
+          exit 1
+        fi
+      - cd backend && golangci-lint run
+      - pnpm -r lint
+
+  check:scripts:
+    desc: "Run the guard suites of the manifests and scripts: rendered overlays and Tiltfile, README, forbidden paths, gitleaks rules and the smoke runner. Needs no cluster and no Docker (the programs the scripts call are stubbed) but network access (kubeconform downloads the Kubernetes schemas); needs kustomize, kubeconform, gitleaks and task on PATH, and caddy to validate the Caddyfile (skipped, loudly, without it)"
+    cmds:
+      - bash scripts/local/render.test.sh
+      - bash scripts/hygiene/check-paths.test.sh
+      - bash scripts/hygiene/gitleaks.test.sh
+      - bash scripts/hygiene/readme.test.sh
+      - bash scripts/smoke/run.test.sh
+
+  gen:
+    desc: Generate code from proto/ (buf generate) and the domain stores from backend/db (sqlc generate)
+    preconditions:
+      - sh: test -x packages/api-client/node_modules/.bin/protoc-gen-es
+        msg: protoc-gen-es is not installed; run `task setup` (pnpm install) first
+    cmds:
+      - buf generate
+      # sqlc cannot skip a domain whose query file does not exist yet, so the
+      # script hands it a config with only the domains that have one.
+      - bash scripts/gen-sqlc.sh
+
+  gen:check:
+    desc: "Fail when the committed generated code differs from what task gen produces (runs task gen, so stage generated files first; needs buf, sqlc and the JavaScript dependencies)"
+    cmds:
+      - bash scripts/check-gen-drift.sh
+
+  local:up:
+    desc: Create the k3d cluster, load .env into Secret kiwi-env and start Tilt (OVERLAY=mockauth signs in through the mock provider; OVERLAY=local through Google)
+    vars:
+      OVERLAY: '{{.OVERLAY | default "mockauth"}}'
+    cmds:
+      - bash scripts/local/k3d-up.sh
+      - bash scripts/local/gen-env.sh
+      - bash scripts/local/load-env-secret.sh {{.OVERLAY}}
+      - tilt up -- --overlay {{.OVERLAY}}
+
+  local:down:
+    desc: Delete the k3d cluster, its registry and its volumes
+    cmds:
+      - k3d cluster delete kiwi
+
+  seed:
+    desc: "Seed a workspace in the running cluster (flags after --: none seeds demo.example with alice and bob; --members a@gmail.com alone, the one workspace without a domain, with demo people Nok and Pim in front of a@gmail.com; --domain x.com)"
+    cmds:
+      - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi seed {{.CLI_ARGS}}
+
+  reindex:
+    desc: Rebuild the knowledge embeddings in the running cluster (after changing KIWI_EMBED_MODEL)
+    cmds:
+      - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi reindex {{.CLI_ARGS}}
+
+  reset:
+    desc: "WIPE the workspace data of the running cluster (every table of the application schemas, Valkey; a real-Google Team workspace and grant included): kiwi is stopped, the tables truncated (30 s lock timeout), Valkey flushed and kiwi started again; run task seed afterwards"
+    cmds:
+      - bash scripts/smoke/reset.sh
+
+  smoke:
+    desc: "WIPES the cluster's workspace data, then runs the five flows in headless Chromium from a clean seed (recorded LLM, mock sign-in); on a machine with the real LLM values in .env it returns the cluster to mockauth, freshly seeded, on a machine without them it leaves it on smoke (replay-seeded) and says so; KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM; it also removes the older Tilt-built images from the host; flags after -- go to Playwright (-- --list lists the suite and touches nothing)"
+    cmds:
+      - bash scripts/smoke/run.sh {{.CLI_ARGS}}

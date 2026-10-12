@@ -1,0 +1,36 @@
+{
+  "channels": [
+    {
+      "name": "general",
+      "kind": "public",
+      "messages": [
+        {"author": 0, "body": "Welcome to the K.I.W.I. demo workspace. Everything in it is synthetic: the people, numbers and documents are invented. · ยินดีต้อนรับสู่พื้นที่ทำงานตัวอย่างของ K.I.W.I. ทุกอย่างในนี้เป็นข้อมูลสมมติ"},
+        {"author": 1, "body": "Reminder: the Q4 launch review is on Thursday at 14:00 in #q4-launch. Please read the Bang Na warehouse capacity note before then."},
+        {"author": 0, "body": "รับทราบค่ะ ทีมคลังสินค้าจะส่งตัวเลขล่าสุดของโกดังบางนาให้ก่อนการประชุม"},
+        {"author": 1, "body": "FYI: the office is closed on Tuesday for the public holiday, so Tuesday deliveries move to Wednesday."},
+        {"author": 0, "body": "ขอบคุณที่แจ้งค่ะ ฉันจะแจ้งลูกค้ารายใหญ่ว่ารอบส่งของวันอังคารเลื่อนไปเป็นวันพุธ"}
+      ]
+    },
+    {
+      "name": "q4-launch",
+      "kind": "public",
+      "messages": [
+        {"author": 0, "body": "Q4 launch plan: go-live is 3 November. Bangkok customers get same-day delivery from the Bang Na warehouse."},
+        {"author": 1, "body": "Bang Na is at 85% of its pallet positions today. If launch-week orders grow 20% we run out of space around 28 October."},
+        {"author": 0, "body": "ถ้าพื้นที่ไม่พอ เราต้องเช่าโกดังสำรองที่สมุทรปราการ ใช้เวลาจัดหาประมาณ 2 สัปดาห์"},
+        {"author": 1, "body": "Decision needed by Friday: rent the Samut Prakan overflow space (about 1,200 pallet positions) or cap launch-week orders."},
+        {"author": 0, "body": "ขอให้ฝ่ายการเงินยืนยันงบค่าเช่าโกดังสำรองภายในวันศุกร์นี้ด้วยค่ะ"},
+        {"author": 1, "body": "Thanks. I added the zone-by-zone numbers to the capacity note and will update the launch checklist."}
+      ]
+    },
+    {
+      "name": "hr-private",
+      "kind": "private",
+      "messages": [
+        {"author": 0, "body": "Draft, not for sharing: the merit increase pool for 2027 is 4.2% of payroll, to be announced after the board meeting on 20 November."},
+        {"author": 0, "body": "รายชื่อผู้ที่จะได้เลื่อนตำแหน่งรอบหน้า ทีมคลังสินค้า 2 คน ทีมขนส่ง 1 คน ห้ามเปิดเผยจนกว่าจะประกาศอย่างเป็นทางการ"},
+        {"author": 0, "body": "Reminder: performance review calibration is next Tuesday. Keep the ratings table private to HR."}
+      ]
+    }
+  ]
+}

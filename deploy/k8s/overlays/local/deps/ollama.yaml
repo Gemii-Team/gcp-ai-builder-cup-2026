@@ -1,0 +1,111 @@
+# Ollama serves the embeddings (embeddinggemma, 768 dimensions). The Job
+# ollama-pull downloads the model once into the PVC ollama-data through the
+# server's API; `ollama pull` returns at once when the model is already there.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/part-of: kiwi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama
+        app.kubernetes.io/part-of: kiwi
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.40.3
+          ports:
+            - name: http
+              containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+    app.kubernetes.io/part-of: kiwi
+spec:
+  selector:
+    app.kubernetes.io/name: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+---
+# No app.kubernetes.io/part-of on the pod: a finished pod is never Ready (see migrate).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull
+  labels:
+    app.kubernetes.io/name: ollama-pull
+    app.kubernetes.io/part-of: kiwi
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-pull
+        app.kubernetes.io/component: job
+    spec:
+      restartPolicy: OnFailure
+      # The image is several GB: run where the server's copy already is.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ollama
+      containers:
+        - name: pull
+          image: ollama/ollama:0.40.3
+          # The Service answers a moment after the pod turns Ready; without the
+          # wait the first attempt fails with "could not connect to ollama server".
+          command:
+            - sh
+            - -c
+            - |
+              for i in $(seq 60); do ollama list >/dev/null 2>&1 && break; sleep 1; done
+              exec ollama pull embeddinggemma
+          env:
+            - name: OLLAMA_HOST
+              value: http://ollama:11434
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi

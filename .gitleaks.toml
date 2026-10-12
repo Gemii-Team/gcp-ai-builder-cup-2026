@@ -1,0 +1,22 @@
+title = "K.I.W.I. gitleaks configuration"
+
+[extend]
+useDefault = true
+
+# LiteLLM virtual keys are "sk-" plus a random tail. GitHub push protection does
+# not recognise them, so this rule is the only guard for the LLM key.
+[[rules]]
+id = "litellm-sk-key"
+description = "LiteLLM virtual key (sk-...)"
+regex = '''\bsk-[A-Za-z0-9_-]{16,}\b'''
+keywords = ["sk-"]
+
+# .env.example lists these names with empty values; a value after the name is a secret,
+# whether written as a .env line (NAME=value), a shell export (export NAME=value) or a
+# YAML mapping (NAME: value). Spaces and tabs only after the separator, so an empty
+# "NAME=" or "NAME:" line followed by another line does not match.
+[[rules]]
+id = "kiwi-env-assignment-with-value"
+description = "K.I.W.I. secret or connection string assigned a value"
+regex = '''(?m)^[ \t]*(export[ \t]+)?KIWI_(LLM_API_KEY|LLM_BASE_URL|OAUTH_CLIENT_SECRET|TOKEN_ENC_KEY|BLOB_SIGNING_KEY|DB_PASSWORD|[A-Z_]*DATABASE[A-Z_]*URL)[ \t]*[=:][ \t]*\S+'''
+keywords = ["kiwi_"]

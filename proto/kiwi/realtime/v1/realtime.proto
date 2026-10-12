@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package kiwi.realtime.v1;
+
+import "kiwi/chat/v1/artifact.proto";
+import "kiwi/chat/v1/chat.proto";
+import "kiwi/files/v1/files.proto";
+import "kiwi/meetings/v1/meetings.proto";
+import "kiwi/tasks/v1/tasks.proto";
+
+// Frozen WebSocket gateway contract: every frame is one binary protobuf
+// message on /ws?ticket=... . Valkey topics: ch:{channelId}, u:{userId}. Any
+// gateway implementation that honours these is a drop-in.
+
+// ServerEvent is a frame from the gateway to a client.
+message ServerEvent {
+  oneof event {
+    kiwi.chat.v1.Message message_created = 1;
+    kiwi.tasks.v1.Task task_changed = 2;
+    MeetingSummaryReady meeting_summary_ready = 3;
+    FileStatusChanged file_status_changed = 4;
+    AgentRunProgress agent_run_progress = 5;
+    Presence presence = 6;
+    Typing typing = 7;
+    MembershipChanged membership_changed = 8;
+  }
+}
+
+// ClientFrame is a frame from a client to the gateway. The WebSocket carries
+// only ephemeral client signals; every mutation goes through the API.
+message ClientFrame {
+  oneof frame {
+    Subscribe subscribe = 1;
+    Typing typing = 2;
+    Ping ping = 3;
+  }
+}
+
+// MeetingSummaryReady reports a meeting leaving ingestion: READY, FAILED or NO_TRANSCRIPT.
+message MeetingSummaryReady {
+  string meeting_id = 1;
+  string channel_id = 2;
+  kiwi.meetings.v1.MeetingStatus status = 3;
+  string failure_reason = 4;
+}
+
+// FileStatusChanged reports a file moving through analysis.
+message FileStatusChanged {
+  string file_id = 1;
+  string channel_id = 2;
+  kiwi.files.v1.FileStatus status = 3;
+  string failure_reason = 4;
+}
+
+// AgentRunState is the progress of one agent run.
+enum AgentRunState {
+  AGENT_RUN_STATE_UNSPECIFIED = 0;
+  // RUNNING reports tool progress before any text is produced.
+  AGENT_RUN_STATE_RUNNING = 1;
+  // STREAMING carries text_delta tokens; streamed text is ephemeral.
+  AGENT_RUN_STATE_STREAMING = 2;
+  // DONE carries the validated answer when the run produced one.
+  AGENT_RUN_STATE_DONE = 3;
+  AGENT_RUN_STATE_FAILED = 4;
+}
+
+// AgentRunProgress is ephemeral (Valkey only, never outboxed).
+message AgentRunProgress {
+  string run_id = 1;
+  AgentRunState state = 2;
+  string text_delta = 3;
+  kiwi.chat.v1.Artifact answer = 4;
+}
+
+// Presence reports a user coming online or going offline.
+message Presence {
+  string user_id = 1;
+  bool online = 2;
+}
+
+// Typing is sent by a client with channel_id only; the gateway stamps user_id
+// before fanning it out.
+message Typing {
+  string channel_id = 1;
+  string user_id = 2;
+}
+
+// MembershipChanged tells a user (topic u:{userId}) that a channel was added or removed.
+message MembershipChanged {
+  string channel_id = 1;
+  string user_id = 2;
+  kiwi.chat.v1.MembershipChange change = 3;
+}
+
+// Subscribe asks for frames of the listed channels; only member channels are honoured.
+message Subscribe {
+  repeated string channel_ids = 1;
+}
+
+// Ping is the client keepalive, sent every 25 s.
+message Ping {}

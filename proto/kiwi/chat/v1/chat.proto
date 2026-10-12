@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package kiwi.chat.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kiwi/chat/v1/artifact.proto";
+
+// ChatService is served under /api (Connect, POST, protobuf or JSON).
+service ChatService {
+  // ListChannels returns the channels the caller can see.
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
+  rpc CreateChannel(CreateChannelRequest) returns (CreateChannelResponse);
+  // JoinChannel joins a public channel.
+  rpc JoinChannel(JoinChannelRequest) returns (JoinChannelResponse);
+  rpc AddMember(AddMemberRequest) returns (AddMemberResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  // ListMessages pages backwards: messages with seq < before_seq, newest first.
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  // SendMessage is idempotent on (author, client_msg_id) and returns the stored
+  // message, so the ack carries the assigned id and seq.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  // SyncChannels returns what each cursor is missing after a reconnect.
+  rpc SyncChannels(SyncChannelsRequest) returns (SyncChannelsResponse);
+}
+
+enum ChannelKind {
+  CHANNEL_KIND_UNSPECIFIED = 0;
+  CHANNEL_KIND_PUBLIC = 1;
+  CHANNEL_KIND_PRIVATE = 2;
+}
+
+enum AuthorKind {
+  AUTHOR_KIND_UNSPECIFIED = 0;
+  AUTHOR_KIND_USER = 1;
+  AUTHOR_KIND_AGENT = 2;
+}
+
+enum MentionKind {
+  MENTION_KIND_UNSPECIFIED = 0;
+  MENTION_KIND_USER = 1;
+  MENTION_KIND_AGENT = 2;
+}
+
+enum MemberRole {
+  MEMBER_ROLE_UNSPECIFIED = 0;
+  MEMBER_ROLE_MEMBER = 1;
+  MEMBER_ROLE_OWNER = 2;
+}
+
+// MembershipChange is the direction of a membership event (realtime and events).
+enum MembershipChange {
+  MEMBERSHIP_CHANGE_UNSPECIFIED = 0;
+  MEMBERSHIP_CHANGE_ADDED = 1;
+  MEMBERSHIP_CHANGE_REMOVED = 2;
+}
+
+// Channel is a public or private conversation. last_seq is the head of its
+// per-channel message sequence (clients derive unread counts from it).
+message Channel {
+  string id = 1;
+  string name = 2;
+  ChannelKind kind = 3;
+  int64 last_seq = 4;
+}
+
+// Member is a channel member with the identity fields owner pickers need.
+message Member {
+  string user_id = 1;
+  string name = 2;
+  string avatar_url = 3;
+  MemberRole role = 4;
+}
+
+// Mention is a recognised @mention; only channel members and registered agents
+// are kept, anything else stays plain text.
+message Mention {
+  MentionKind kind = 1;
+  string id = 2;
+  string label = 3;
+}
+
+// FileRef is the snapshot of an attached file carried on a message.
+message FileRef {
+  string file_id = 1;
+  string name = 2;
+  string mime = 3;
+  int64 size = 4;
+}
+
+// Message is one chat message. seq is gapless and commit-ordered per channel.
+message Message {
+  string id = 1;
+  string channel_id = 2;
+  int64 seq = 3;
+  AuthorKind author_kind = 4;
+  string author_id = 5;
+  string body = 6;
+  repeated Mention mentions = 7;
+  string client_msg_id = 8;
+  google.protobuf.Timestamp created_at = 9;
+  repeated FileRef files = 10;
+  Artifact artifact = 11;
+}
+
+message ListChannelsRequest {}
+
+message ListChannelsResponse {
+  repeated Channel channels = 1;
+}
+
+message CreateChannelRequest {
+  string name = 1;
+  ChannelKind kind = 2;
+}
+
+message CreateChannelResponse {
+  Channel channel = 1;
+}
+
+message JoinChannelRequest {
+  string channel_id = 1;
+}
+
+message JoinChannelResponse {}
+
+message AddMemberRequest {
+  string channel_id = 1;
+  string user_id = 2;
+}
+
+message AddMemberResponse {}
+
+message RemoveMemberRequest {
+  string channel_id = 1;
+  string user_id = 2;
+}
+
+message RemoveMemberResponse {}
+
+message ListMembersRequest {
+  string channel_id = 1;
+}
+
+message ListMembersResponse {
+  repeated Member members = 1;
+}
+
+message ListMessagesRequest {
+  string channel_id = 1;
+  // before_seq 0 means the latest page.
+  int64 before_seq = 2;
+  int32 limit = 3;
+}
+
+message ListMessagesResponse {
+  repeated Message messages = 1;
+}
+
+// SendMessageRequest: attachments, artifact, author_kind and author_id are
+// honoured only for agent and system actors and cleared on user requests.
+message SendMessageRequest {
+  string channel_id = 1;
+  string client_msg_id = 2;
+  string body = 3;
+  repeated Mention mentions = 4;
+  repeated FileRef attachments = 5;
+  Artifact artifact = 6;
+  optional AuthorKind author_kind = 7;
+  optional string author_id = 8;
+}
+
+message SendMessageResponse {
+  Message message = 1;
+}
+
+// Cursor is the last seq a client holds for a channel.
+message Cursor {
+  string channel_id = 1;
+  int64 last_seq = 2;
+}
+
+// ChannelDelta is what one cursor is missing: messages with seq > last_seq in
+// ascending order, or (reload) the latest page when the client is too far behind.
+message ChannelDelta {
+  string channel_id = 1;
+  repeated Message messages = 2;
+  bool reload = 3;
+}
+
+message SyncChannelsRequest {
+  repeated Cursor cursors = 1;
+}
+
+message SyncChannelsResponse {
+  repeated ChannelDelta deltas = 1;
+}
