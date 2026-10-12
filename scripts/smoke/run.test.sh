@@ -21,7 +21,10 @@ bad() { # name detail...
   [ "$#" -gt 0 ] && printf '     %s\n' "$@"
 }
 
-TREE="$WORK/tree" BIN="$WORK/bin" LOG="$WORK/log" STDIN="$WORK/stdin"
+TREE="$WORK/tree" BIN="$WORK/bin" LOG="$WORK/log" STDIN="$WORK/stdin" TLOG="$WORK/tlog"
+# The real timeout runs the harness's own cases; the scripts find a stub of that name that logs
+# its arguments first.
+REAL_TIMEOUT="$(command -v timeout || command -v gtimeout)" || { echo "run.test.sh: needs GNU coreutils timeout (gtimeout on macOS)"; exit 2; }
 BROWSERS="$WORK/browsers"
 mkdir -p "$TREE/scripts/smoke" "$TREE/scripts/local" "$TREE/e2e" "$BIN" "$BROWSERS/chromium_headless_shell-1194"
 
@@ -34,6 +37,8 @@ name=${STUB_NAME:-$(basename "$0")}
 line="$name $*"
 printf '%s\n' "$line" >>"$STUB_LOG"
 case " $* " in *" exec -i "*) cat >>"$STUB_STDIN" ;; esac
+# The suite call: the base URL it was given.
+case "$line" in "pnpm --filter e2e smoke"*) printf '%s\n' "${KIWI_BASE_URL-unset}" >>"$STUB_LOG.baseurl" ;; esac
 IFS='|'
 for pattern in $STUB_FAIL; do
   case "$pattern" in
@@ -55,10 +60,17 @@ for program in kubectl tilt task pnpm nix node docker; do
   printf '#!/usr/bin/env bash\nSTUB_NAME=%s exec "%s" "$@"\n' "$program" "$WORK/generic" >"$BIN/$program"
   chmod +x "$BIN/$program"
 done
+cat >"$BIN/timeout" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_TLOG"
+exec "$REAL_TIMEOUT" "$@"
+EOF
+chmod +x "$BIN/timeout"
 for script in scripts/local/k3d-up.sh scripts/local/gen-env.sh scripts/local/load-env-secret.sh scripts/smoke/reset.sh; do
   printf '#!/usr/bin/env bash\nSTUB_NAME=%s exec "%s" "$@"\n' "$(basename "$script")" "$WORK/generic" >"$TREE/$script"
 done
 cp scripts/smoke/run.sh "$TREE/scripts/smoke/run.sh"
+cp scripts/smoke/bounded.sh "$TREE/scripts/smoke/bounded.sh"
 
 # Fixture .env files: the names the script looks for, with made-up values, or none.
 {
@@ -80,15 +92,21 @@ before() {
 }
 last_line() { printf '%s\n' "$OUT" | tail -n 1; }
 
+# Every call of timeout the script made went through `bounded`: --foreground, then the seconds.
+all_foreground() { [ -s "$TLOG" ] && ! grep -qvE '^--foreground [0-9]+ ' "$TLOG"; }
+timed() { grep -qxF -- "--foreground $1" "$TLOG"; } # timed '900 bash scripts/local/k3d-up.sh'
+
 # run_case ENV_FILE FAIL SCRIPT [args...]: runs the script of the throw-away tree. Sets RC, OUT, LOG.
 run_case() {
   local envfile=$1 fail=$2 script=$3
   shift 3
   : >"$LOG"
   : >"$STDIN"
-  OUT=$(env -i PATH="$BIN:$PATH" HOME="$WORK" ENV_FILE="$envfile" STUB_LOG="$LOG" STUB_STDIN="$STDIN" STUB_FAIL="$fail" \
+  : >"$TLOG"
+  : >"$LOG.baseurl"
+  OUT=$(env -i PATH="$BIN:$PATH" HOME="$WORK" ENV_FILE="$envfile" STUB_LOG="$LOG" STUB_STDIN="$STDIN" STUB_TLOG="$TLOG" REAL_TIMEOUT="$REAL_TIMEOUT" STUB_FAIL="$fail" \
     STUB_BROWSERS="$BROWSERS" PLAYWRIGHT_BROWSERS_PATH="${BROWSERS_PATH-$BROWSERS}" ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
-    timeout 120 bash "$TREE/scripts/$script" "$@" 2>&1)
+    "$REAL_TIMEOUT" 120 bash "$TREE/scripts/$script" "$@" 2>&1)
   RC=$?
 }
 EXTRA_ENV=()
@@ -121,6 +139,17 @@ logged 'docker rmi 127.0.0.1:5001/kiwi-registry.localhost_5001_kiwi:tilt-old' ||
 logged 'docker rmi 127.0.0.1:5001/kiwi-registry.localhost_5001_kiwi:tilt-new' && verdict=bad
 logged 'docker rmi registry' && verdict=bad
 logged 'docker system prune' && verdict=bad
+# Nothing of the host beyond the Tilt-built images is touched: no host-wide prune of dangling images.
+logged 'docker image prune' && verdict=bad
+# Ctrl-C must reach the command a timeout waits for: every bounded call is --foreground.
+all_foreground || verdict=bad
+timed '900 bash scripts/local/k3d-up.sh' || verdict=bad
+timed '700 bash scripts/smoke/reset.sh' || verdict=bad
+timed '300 task seed -- --domain demo.example --members alice@demo.example,bob@demo.example' || verdict=bad
+timed '300 task seed' || verdict=bad
+timed '30 kubectl --context k3d-kiwi -n kiwi get configmap -o name' || verdict=bad
+timed '1800 env KIWI_BASE_URL=http://localhost:8080 pnpm --filter e2e smoke' || verdict=bad
+[ "$(cat "$LOG.baseurl")" = "http://localhost:8080" ] || verdict=bad
 ok_msg="run.sh (keyed, replay): install, smoke up, wipe, seed, suite, back to mockauth, replay objects deleted, wipe and default seed, older Tilt images only"
 if [ "$verdict" = ok ]; then ok "$ok_msg"; else bad "$ok_msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
 
@@ -239,8 +268,8 @@ if [ "$RC" -ne 0 ] && ! logged 'tilt' && contains "$OUT" 'chromium_headless_shel
 BROWSERS_PATH= # an empty PLAYWRIGHT_BROWSERS_PATH is "not set": the browsers are built with nix
 run_case "$WORK/env.keyed" "" smoke/run.sh
 unset BROWSERS_PATH
-msg="run.sh: with no PLAYWRIGHT_BROWSERS_PATH it builds the browsers with nix"
-if [ "$RC" -eq 0 ] && logged 'nix build nixpkgs#playwright-driver.browsers --no-link --print-out-paths'; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+msg="run.sh: with no PLAYWRIGHT_BROWSERS_PATH it builds the browsers with nix, bounded and --foreground"
+if [ "$RC" -eq 0 ] && logged 'nix build nixpkgs#playwright-driver.browsers --no-link --print-out-paths' && all_foreground && timed '900 nix build nixpkgs#playwright-driver.browsers --no-link --print-out-paths'; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$(cat "$TLOG")" "$OUT"; fi
 
 # --- reset.sh --------------------------------------------------------------------------------
 cp scripts/smoke/reset.sh "$TREE/scripts/smoke/reset.real.sh"
@@ -271,6 +300,60 @@ run_case "" "exec -i deploy/postgres" smoke/reset.real.sh
 msg="reset.sh: a failing TRUNCATE flushes nothing"
 if ! logged 'FLUSHALL'; then ok "$msg"; else bad "$msg" "$(cat "$LOG")"; fi
 
+run_case "" "" smoke/reset.real.sh
+verdict=ok
+all_foreground || verdict=bad
+timed '150 kubectl --context k3d-kiwi -n kiwi exec -i deploy/postgres -- psql -U postgres -d kiwi -v ON_ERROR_STOP=1 -q' || verdict=bad
+timed '60 kubectl --context k3d-kiwi -n kiwi exec deploy/valkey -- valkey-cli FLUSHALL' || verdict=bad
+msg="reset.sh: its bounded calls are --foreground, so Ctrl-C reaches kubectl"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "$(cat "$TLOG")"; fi
+
+# The scale-back is what keeps a failed reset from leaving the cluster with no kiwi: when it
+# fails too, the script says so and how to do it by hand.
+SCALE_UP='kubectl --context k3d-kiwi -n kiwi scale deploy/kiwi --replicas=1'
+run_case "" "valkey-cli|=$SCALE_UP" smoke/reset.real.sh
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+contains "$OUT" "reset: COULD NOT scale kiwi back to 1: run $SCALE_UP" || verdict=bad
+msg="reset.sh: a failed scale-back is announced with the command that does it by hand, and the exit is non-zero"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT"; fi
+
+run_case "" "valkey-cli" smoke/reset.real.sh
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+contains "$OUT" "scaling kiwi back to 1" || verdict=bad
+contains "$OUT" "COULD NOT" && verdict=bad
+msg="reset.sh: a scale-back that works is not announced as failed"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT"; fi
+
+# --- bounded.sh: GNU timeout, or gtimeout on macOS, always with --foreground ----------------
+for dir in only-timeout only-gtimeout both none; do mkdir -p "$WORK/p-$dir"; done
+cat >"$WORK/tlogstub" <<'EOF'
+#!@BASH@
+printf '%s %s\n' "${0##*/}" "$*" >>"$STUB_TLOG"
+EOF
+for pair in only-timeout:timeout only-gtimeout:gtimeout both:timeout both:gtimeout; do
+  sed "s|@BASH@|$BASH|" "$WORK/tlogstub" >"$WORK/p-${pair%%:*}/${pair##*:}"
+  chmod +x "$WORK/p-${pair%%:*}/${pair##*:}"
+done
+lib_run() { # dir: sources bounded.sh with a PATH of that directory only and runs `bounded 5 true`
+  : >"$TLOG"
+  OUT=$(env -i PATH="$WORK/p-$1" STUB_TLOG="$TLOG" "$BASH" -c '. scripts/smoke/bounded.sh && bounded 5 true' 2>&1)
+  RC=$?
+}
+lib_run only-timeout
+msg="bounded.sh: runs GNU timeout with --foreground"
+if [ "$RC" -eq 0 ] && [ "$(cat "$TLOG")" = "timeout --foreground 5 true" ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT" "$(cat "$TLOG")"; fi
+lib_run only-gtimeout
+msg="bounded.sh: falls back to gtimeout (coreutils on macOS), still with --foreground"
+if [ "$RC" -eq 0 ] && [ "$(cat "$TLOG")" = "gtimeout --foreground 5 true" ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT" "$(cat "$TLOG")"; fi
+lib_run both
+msg="bounded.sh: prefers timeout when both exist"
+if [ "$RC" -eq 0 ] && [ "$(cat "$TLOG")" = "timeout --foreground 5 true" ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT" "$(cat "$TLOG")"; fi
+lib_run none
+msg="bounded.sh: without timeout or gtimeout it stops with exit 2 and names GNU coreutils"
+if [ "$RC" -eq 2 ] && contains "$OUT" "GNU coreutils" && [ ! -s "$TLOG" ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT"; fi
+
 # --- mutants: the tests above notice when a guard is taken out --------------------------------
 mutant() { # name sed-script file-in-tree check-description
   local name=$1 script=$2 file=$3
@@ -283,9 +366,17 @@ if mutant 'a failed return to mockauth is ignored' 's/^          restore_failed=
   run_case "$WORK/env.keyed" "$MOCKAUTH" smoke/run.sh
   if [ "$RC" -eq 0 ]; then ok "mutant caught: ignoring a failed return to mockauth makes the run exit 0 (the test above fails on it)"; else bad "mutant: removing restore_failed after a failed return still exits non-zero" "$(last_line)"; fi
 fi
-if mutant 'kiwi is not scaled back after a failed reset' 's/--replicas=1 >\/dev\/null$/--replicas=0 >\/dev\/null/' reset.real.sh; then
+if mutant 'kiwi is not scaled back after a failed reset' 's/--replicas=1 >\/dev\/null/--replicas=0 >\/dev\/null/' reset.real.sh; then
   run_case "" "exec -i deploy/postgres" smoke/reset.real.sh
   if contains "$(grep -n 'scale deploy/kiwi' "$LOG" | tail -n 1)" '--replicas=0'; then ok "mutant caught: a reset that does not scale kiwi back leaves it at 0"; else bad "mutant: the scale-back mutation changed nothing observable"; fi
+fi
+if mutant 'the host-wide prune is back' 's/^  local removed=0 image$/&\n  docker image prune -f >\/dev\/null 2>\&1 || true/' run.sh; then
+  run_case "$WORK/env.keyed" "" smoke/run.sh
+  if logged 'docker image prune'; then ok "mutant caught: a run that prunes host-wide logs docker image prune (the keyed-run test fails on it)"; else bad "mutant: the prune mutation changed nothing observable"; fi
+fi
+if mutant 'bounded drops --foreground' 's/ --foreground//' bounded.sh; then
+  run_case "$WORK/env.keyed" "" smoke/run.sh
+  if ! all_foreground; then ok "mutant caught: a bounded call without --foreground is seen (the keyed-run test fails on it)"; else bad "mutant: dropping --foreground changed nothing observable" "$(cat "$TLOG")"; fi
 fi
 
 if [ "$failures" -gt 0 ]; then

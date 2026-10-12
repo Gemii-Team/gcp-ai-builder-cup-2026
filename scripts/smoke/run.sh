@@ -33,10 +33,12 @@
 # for) cannot start mockauth: the replay run then leaves the cluster ON SMOKE (replay-seeded),
 # says so on its last line, and fails only if the suite failed.
 #
-# Every step is bounded (timeouts below, tilt's own, reset.sh's). The exit status is that of
-# the suite (or of the first step that failed); a restore that failed (back to mockauth,
-# removing the replay server, wipe or seed) makes it non-zero too, and the last line says
-# what state the cluster is really in.
+# Every step that can wait on kiwi, the database or a model is bounded: the timeouts below,
+# tilt's own, reset.sh's. The timeouts are GNU coreutils `timeout` (gtimeout on macOS: see
+# bounded.sh), a prerequisite, run with --foreground so that Ctrl-C reaches the command.
+# The exit status is that of the suite (or of the first step that failed); a restore that
+# failed (back to mockauth, removing the replay server, wipe or seed) makes it non-zero too,
+# and the last line says what state the cluster is really in.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -48,6 +50,8 @@ for arg in "$@"; do
     exec pnpm --filter e2e smoke "$@"
   fi
 done
+# shellcheck source=scripts/smoke/bounded.sh
+. scripts/smoke/bounded.sh
 
 live=0
 [ "${KIWI_LIVE_E2E:-}" != 1 ] || live=1
@@ -76,7 +80,7 @@ keyed() {
 pnpm install --frozen-lockfile >/dev/null
 if [ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
   say "PLAYWRIGHT_BROWSERS_PATH is not set: building nixpkgs#playwright-driver.browsers (nix build --no-link)"
-  PLAYWRIGHT_BROWSERS_PATH="$(timeout 900 nix build nixpkgs#playwright-driver.browsers --no-link --print-out-paths)"
+  PLAYWRIGHT_BROWSERS_PATH="$(bounded 900 nix build nixpkgs#playwright-driver.browsers --no-link --print-out-paths)"
   export PLAYWRIGHT_BROWSERS_PATH
   export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1
 fi
@@ -105,7 +109,7 @@ up() {
 if [ "$live" = 1 ] && ! keyed; then
   die "KIWI_LIVE_E2E=1 needs the real LLM values in .env (KIWI_LLM_BASE_URL, KIWI_LLM_API_KEY, KIWI_LLM_MODEL_FLASH, KIWI_LLM_MODEL_PRO, KIWI_ASR_MODEL)"
 fi
-timeout 900 bash scripts/local/k3d-up.sh
+bounded 900 bash scripts/local/k3d-up.sh
 bash scripts/local/gen-env.sh
 
 # drop_replay: Tilt does not prune, so the replay server and its fixtures stay until they
@@ -113,7 +117,7 @@ bash scripts/local/gen-env.sh
 drop_replay() {
   local left=() cms cm
   "${kc[@]}" delete deployment/llmreplay service/llmreplay --ignore-not-found --timeout=60s || left+=(deployment/llmreplay service/llmreplay)
-  if ! cms="$(timeout 30 "${kc[@]}" get configmap -o name)"; then
+  if ! cms="$(bounded 30 "${kc[@]}" get configmap -o name)"; then
     left+=("configmaps (could not be listed: look for llmreplay-fixtures-*)")
   else
     for cm in $(printf '%s\n' "$cms" | grep '^configmap/llmreplay-fixtures-' || true); do
@@ -128,12 +132,11 @@ drop_replay() {
 }
 
 # drop_images: each run leaves the images Tilt built on the host (a registry copy is what the
-# cluster runs). The dangling ones go, and so do the older Tilt-built images of each repo;
-# the newest of each is kept (Tilt reuses it) and docker refuses to remove one a container
-# uses. Never the registry or the k3d images: only repos named kiwi-registry.localhost_5001_*.
+# cluster runs). The older Tilt-built images of each repo go; the newest of each is kept (Tilt
+# reuses it) and docker refuses to remove one a container uses. Never the registry or the k3d
+# images, and no host-wide prune: only repos named kiwi-registry.localhost_5001_*.
 drop_images() {
   local removed=0 image
-  docker image prune -f >/dev/null 2>&1 || true
   for image in $(docker images --format '{{.Repository}} {{.Tag}}' 2>/dev/null | grep '/kiwi-registry\.localhost_5001_' | awk '{ if (seen[$1]++) print $1 ":" $2 }'); do
     if docker rmi "$image" >/dev/null 2>&1; then
       removed=$((removed + 1))
@@ -172,7 +175,7 @@ finish() {
     fi
     if [ "$cluster_on" = mockauth ] && [ "$wiped" = 1 ]; then
       say "wiping the workspace data and seeding the default workspace (task seed), so that mockauth is usable at once"
-      if timeout 700 bash scripts/smoke/reset.sh && timeout 300 task seed; then
+      if bounded 700 bash scripts/smoke/reset.sh && bounded 300 task seed; then
         reseeded=1
       else
         restore_failed=1
@@ -209,9 +212,9 @@ cluster_on=$overlay
 # 3. The wipe, then the seed (the real services; under smoke every model call is answered by the replay).
 say "wiping the workspace data"
 wiped=1
-timeout 700 bash scripts/smoke/reset.sh
+bounded 700 bash scripts/smoke/reset.sh
 say "seeding demo.example with alice and bob"
-timeout 300 task seed -- --domain demo.example --members alice@demo.example,bob@demo.example
+bounded 300 task seed -- --domain demo.example --members alice@demo.example,bob@demo.example
 
 # 4. The suite; its status is the script's (see finish).
-KIWI_BASE_URL=http://localhost:8080 timeout 1800 pnpm --filter e2e smoke "$@"
+bounded 1800 env KIWI_BASE_URL=http://localhost:8080 pnpm --filter e2e smoke "$@"

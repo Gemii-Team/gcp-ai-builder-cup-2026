@@ -12,12 +12,19 @@
 #   3. Valkey is flushed (sessions, tickets, caches);
 #   4. kiwi is scaled back to 1 and waited for.
 # Whatever fails, kiwi is scaled back to 1 before the script exits non-zero: a failed reset
-# never leaves the cluster with no kiwi. Every step is bounded. Everything of the workspace
-# is gone, whoever made it (a developer's real-Google "Team" workspace and its Meet grant
-# included); run `task seed` afterwards. Nothing is printed of a connection string or a value.
+# never leaves the cluster with no kiwi, and when even the scale-back fails the script prints
+# the command that does it by hand. Every step that can wait on kiwi, the database or a model
+# is bounded: the kubectl waits, and the two timeouts below (GNU coreutils `timeout`, gtimeout
+# on macOS, run with --foreground so that Ctrl-C reaches kubectl: see bounded.sh).
+# Everything of the workspace is gone, whoever made it (a developer's real-Google "Team"
+# workspace and its Meet grant included); run `task seed` afterwards. Nothing is printed of a
+# connection string or a value.
 set -euo pipefail
 
 kc=(kubectl --context k3d-kiwi -n kiwi)
+
+# shellcheck source=scripts/smoke/bounded.sh
+. "$(dirname "${BASH_SOURCE[0]}")/bounded.sh"
 
 restore_kiwi() {
   local status=$?
@@ -25,7 +32,9 @@ restore_kiwi() {
   if [ "$status" -ne 0 ]; then
     set +e
     echo "reset: failed (exit $status); scaling kiwi back to 1" >&2
-    "${kc[@]}" scale deploy/kiwi --replicas=1 >/dev/null
+    if ! "${kc[@]}" scale deploy/kiwi --replicas=1 >/dev/null; then
+      echo "reset: COULD NOT scale kiwi back to 1: run ${kc[*]} scale deploy/kiwi --replicas=1" >&2
+    fi
   fi
   exit "$status"
 }
@@ -34,7 +43,7 @@ trap restore_kiwi EXIT
 "${kc[@]}" scale deploy/kiwi --replicas=0 >/dev/null
 "${kc[@]}" wait --for=delete pod -l app.kubernetes.io/name=kiwi --timeout=120s
 
-timeout 150 "${kc[@]}" exec -i deploy/postgres -- psql -U postgres -d kiwi -v ON_ERROR_STOP=1 -q <<'SQL'
+bounded 150 "${kc[@]}" exec -i deploy/postgres -- psql -U postgres -d kiwi -v ON_ERROR_STOP=1 -q <<'SQL'
 SET lock_timeout = '30s';
 DO $$
 DECLARE stmt text;
@@ -45,7 +54,7 @@ BEGIN
   EXECUTE stmt;
 END $$;
 SQL
-timeout 60 "${kc[@]}" exec deploy/valkey -- valkey-cli FLUSHALL >/dev/null
+bounded 60 "${kc[@]}" exec deploy/valkey -- valkey-cli FLUSHALL >/dev/null
 
 "${kc[@]}" scale deploy/kiwi --replicas=1 >/dev/null
 "${kc[@]}" rollout status deploy/kiwi --timeout=180s
