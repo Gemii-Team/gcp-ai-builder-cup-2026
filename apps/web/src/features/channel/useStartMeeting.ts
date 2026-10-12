@@ -1,7 +1,7 @@
 import { Code } from '@connectrpc/connect';
 import type { I18nKey } from '@kiwi/core';
-import { useRouterState } from '@tanstack/react-router';
-import { useCallback, useState } from 'react';
+import { useRouter, useRouterState } from '@tanstack/react-router';
+import { useCallback, useEffect, useState } from 'react';
 import { useApi } from '../../api/client';
 import { hasCode, meetFailure } from '../../api/errors';
 import { hardNavigate } from '../../navigation';
@@ -18,6 +18,26 @@ const MEET_FAILURE_KEY: Record<string, I18nKey> = {
   refused: 'startMeetingRefused',
 };
 
+/** The query parameter the consent flow adds to the address it returns to when it ended without a Meet grant. */
+const CONSENT_MISSING_PARAM = 'meet_consent';
+const CONSENT_MISSING_VALUE = 'missing';
+
+/** `href` without the query parameter `name`, keeping the rest of the query and the fragment as they were. */
+function withoutQueryParam(href: string, name: string): string {
+  const hashAt = href.indexOf('#');
+  const hash = hashAt === -1 ? '' : href.slice(hashAt);
+  const beforeHash = hashAt === -1 ? href : href.slice(0, hashAt);
+  const queryAt = beforeHash.indexOf('?');
+  if (queryAt === -1) {
+    return href;
+  }
+  const kept = beforeHash
+    .slice(queryAt + 1)
+    .split('&')
+    .filter((pair) => pair !== '' && pair.split('=')[0] !== name);
+  return `${beforeHash.slice(0, queryAt)}${kept.length > 0 ? `?${kept.join('&')}` : ''}${hash}`;
+}
+
 /**
  * Starts a Meet meeting for the channel as the signed-in person. A `FailedPrecondition` the API does not name a Meet failure
  * for means Google has not been granted yet: the page leaves for the consent flow, which returns to this route. A started
@@ -26,9 +46,18 @@ const MEET_FAILURE_KEY: Record<string, I18nKey> = {
  */
 export function useStartMeeting(channelId: string) {
   const api = useApi();
+  const router = useRouter();
   const here = useRouterState({ select: (state) => state.location.href });
   const [starting, setStarting] = useState(false);
-  const [notice, setNotice] = useState<StartNotice | null>(null);
+  // A consent round trip that stored no grant comes back here with the flag: say so once, then take the flag off the address.
+  const consentMissing = useRouterState({ select: (state) => new URLSearchParams(state.location.searchStr).get(CONSENT_MISSING_PARAM) === CONSENT_MISSING_VALUE });
+  const [notice, setNotice] = useState<StartNotice | null>(consentMissing ? { role: 'alert', key: 'startMeetingConsentMissing' } : null);
+
+  useEffect(() => {
+    if (consentMissing) {
+      router.history.replace(withoutQueryParam(router.state.location.href, CONSENT_MISSING_PARAM));
+    }
+  }, [consentMissing, router]);
 
   const start = useCallback(async () => {
     setStarting(true);

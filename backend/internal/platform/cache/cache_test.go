@@ -323,7 +323,7 @@ func TestOAuthState_TakeOnce(t *testing.T) {
 	c := open(t, Options{})
 	ctx := context.Background()
 	state := uuid.NewString()
-	want := OAuthState{Verifier: "pkce-verifier", ReturnTo: "/channels/general", Nonce: "nonce-of-the-flow"}
+	want := OAuthState{Verifier: "pkce-verifier", ReturnTo: "/channels/general", Nonce: "nonce-of-the-flow", Consent: true}
 
 	if err := c.PutOAuthState(ctx, state, want); err != nil {
 		t.Fatalf("PutOAuthState: %v", err)

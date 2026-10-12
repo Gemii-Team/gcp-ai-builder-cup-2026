@@ -126,18 +126,19 @@ func (m *Module) withClient(ctx context.Context) context.Context {
 // LoginURL implements Service. The HTTP route also binds the flow to the browser
 // that started it, which only it can do; see handleLogin.
 func (m *Module) LoginURL(ctx context.Context, returnTo string) (string, error) {
-	authURL, _, err := m.begin(ctx, returnTo, loginScopes)
+	authURL, _, err := m.begin(ctx, returnTo, loginScopes, false)
 	return authURL, err
 }
 
 // begin starts an authorization-code flow with PKCE S256 for scopes: it stores the
 // state, the verifier and a nonce in Valkey and returns the provider URL and the
-// state.
-func (m *Module) begin(ctx context.Context, returnTo string, scopes []string, extra ...oauth2.AuthCodeOption) (authURL, state string, err error) {
+// state. consent marks the flow of the Meet consent route, whose callback says so
+// when it ends without a Meet grant.
+func (m *Module) begin(ctx context.Context, returnTo string, scopes []string, consent bool, extra ...oauth2.AuthCodeOption) (authURL, state string, err error) {
 	state = rand.Text() // 128 random bits
 	nonce := rand.Text()
 	verifier := oauth2.GenerateVerifier()
-	if err := m.cache.PutOAuthState(ctx, state, cache.OAuthState{Verifier: verifier, ReturnTo: safeReturnTo(returnTo), Nonce: nonce}); err != nil {
+	if err := m.cache.PutOAuthState(ctx, state, cache.OAuthState{Verifier: verifier, ReturnTo: safeReturnTo(returnTo), Nonce: nonce, Consent: consent}); err != nil {
 		return "", "", fmt.Errorf("identity: store login state: %w", err)
 	}
 	return m.authCodeURL(state, nonce, verifier, scopes, extra...), state, nil
@@ -233,6 +234,21 @@ func (m *Module) HandleCallback(ctx context.Context, code, state string) (Sessio
 	if err := m.storeGrant(ctx, user, tok); err != nil {
 		return Session{}, "", fmt.Errorf("identity: store Google grant: %w", err)
 	}
+	returnTo := st.ReturnTo
+	if st.Consent {
+		held, err := m.holdsScope(ctx, user, meetScope)
+		if err != nil {
+			return Session{}, "", fmt.Errorf("identity: check Meet grant: %w", err)
+		}
+		if !held {
+			// Google skipped the consent screen (no refresh token) or the person did not
+			// tick the Meet permission: nothing usable was stored, and a silent redirect
+			// would send them back into the same consent round trip.
+			m.log.WarnContext(ctx, "meet consent completed without a refresh token",
+				"user_id", user.ID, "workspace_id", user.WorkspaceID, "refresh_token_received", tok.RefreshToken != "")
+			returnTo = withMeetConsentMissing(returnTo)
+		}
+	}
 
 	sid, err := newSessionID()
 	if err != nil {
@@ -241,7 +257,7 @@ func (m *Module) HandleCallback(ctx context.Context, code, state string) (Sessio
 	if err := m.cache.PutSession(ctx, sid, cache.SessionRecord{UserID: user.ID, WorkspaceID: user.WorkspaceID}); err != nil {
 		return Session{}, "", fmt.Errorf("identity: open session: %w", err)
 	}
-	return Session{ID: sid, UserID: user.ID, WorkspaceID: user.WorkspaceID}, st.ReturnTo, nil
+	return Session{ID: sid, UserID: user.ID, WorkspaceID: user.WorkspaceID}, returnTo, nil
 }
 
 // newSessionID returns 256 random bits as base64url: the session id is the only
@@ -276,6 +292,39 @@ func (m *Module) storeGrant(ctx context.Context, u store.IdentityUser, tok *oaut
 			Scopes:          scopes,
 		})
 	})
+}
+
+// holdsScope reports whether the grant stored for u covers scope. No row is false.
+func (m *Module) holdsScope(ctx context.Context, u store.IdentityUser, scope string) (bool, error) {
+	var row store.IdentityOauthToken
+	err := m.db.InWorkspace(ctx, u.WorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {
+		row, err = store.New(tx).GetOAuthToken(ctx, u.ID)
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(row.Scopes, scope), nil
+}
+
+// withMeetConsentMissing adds meet_consent=missing to the query of returnTo, keeping
+// what it had and its fragment. returnTo is the local path safeReturnTo kept.
+func withMeetConsentMissing(returnTo string) string {
+	path, fragment, hasFragment := strings.Cut(returnTo, "#")
+	switch {
+	case !strings.Contains(path, "?"):
+		path += "?"
+	case !strings.HasSuffix(path, "?") && !strings.HasSuffix(path, "&"):
+		path += "&"
+	}
+	path += "meet_consent=missing"
+	if hasFragment {
+		path += "#" + fragment
+	}
+	return path
 }
 
 // grantedScopes reads the scope of a token response: sorted, without duplicates.

@@ -69,6 +69,8 @@ export const en = {
   startMeetingRateLimited: 'Google is limiting Meet requests right now. Wait a minute, then try again.',
   startMeetingMeetUnavailable: "Meet isn't answering right now. Try again in a moment.",
   startMeetingRefused: 'Google refused to create the meeting. Try again, and tell whoever runs K.I.W.I. if it keeps happening.',
+  startMeetingConsentMissing:
+    "Google did not give K.I.W.I. permission to create meetings. Try Start meeting again; if this repeats, remove K.I.W.I. in your Google account's third-party access (myaccount.google.com/permissions) and try again.",
   channelUnavailable: "This channel isn't available to you.",
   goToChannels: 'Go to your channels',
   messagesIn: 'Messages in #{channel}',

@@ -27,6 +27,9 @@ type OAuthState struct {
 	ReturnTo string `json:"return_to"`
 	// Nonce is sent in the authorization request and must come back in the ID token.
 	Nonce string `json:"nonce"`
+	// Consent marks the flow of the Meet consent route: its callback tells the person
+	// when no Meet grant came out of it, which a plain sign-in never does.
+	Consent bool `json:"consent,omitempty"`
 }
 
 func sessionKey(id string) string   { return "sess:" + id }

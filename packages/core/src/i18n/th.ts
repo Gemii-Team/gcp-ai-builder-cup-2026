@@ -65,6 +65,8 @@ export const th: I18nTable = {
   startMeetingRateLimited: '<en>Google</en> กำลังจำกัดจำนวนคำขอ <en>Meet</en> รอสักครู่แล้วลองอีกครั้ง',
   startMeetingMeetUnavailable: '<en>Meet</en> ยังไม่ตอบสนองในขณะนี้ ลองอีกครั้งในอีกสักครู่',
   startMeetingRefused: '<en>Google</en> ปฏิเสธการสร้างการประชุม ลองอีกครั้ง และแจ้งผู้ดูแลระบบหากยังเกิดซ้ำ',
+  startMeetingConsentMissing:
+    '<en>Google</en> ไม่ได้ให้สิทธิ์ <en>K.I.W.I.</en> สร้างการประชุม ลองกดเริ่มประชุมอีกครั้ง หากยังเป็นเหมือนเดิม ให้ลบ <en>K.I.W.I.</en> ออกจากสิทธิ์การเข้าถึงของบุคคลที่สามในบัญชี <en>Google</en> ของคุณ (<en>myaccount.google.com/permissions</en>) แล้วลองอีกครั้ง',
   channelUnavailable: 'คุณเข้าถึงช่องสนทนานี้ไม่ได้',
   goToChannels: 'ไปที่ช่องสนทนาของคุณ',
   messagesIn: 'ข้อความใน #{channel}',

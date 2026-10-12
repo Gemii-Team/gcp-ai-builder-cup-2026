@@ -434,9 +434,7 @@ func (f *fixture) mustSignIn(email string) *http.Cookie {
 // consent runs the incremental Meet consent for the signed-in sid.
 func (f *fixture) consent(sid *http.Cookie, email, returnTo string) *httptest.ResponseRecorder {
 	f.t.Helper()
-	rec := f.serve(http.MethodGet, "/api/auth/meet-consent?return_to="+url.QueryEscape(returnTo), sid)
-	authURL := f.providerRedirect(rec)
-	return f.callback(f.approve(authURL, email), cookieNamed(rec, stateCookie))
+	return f.consentWith(sid, email, returnTo, nil)
 }
 
 func cookieNamed(rec *httptest.ResponseRecorder, name string) *http.Cookie {
@@ -1275,6 +1273,7 @@ func TestMeetConsent_MergesGrantedScope(t *testing.T) {
 		"include_granted_scopes": "true",
 		"access_type":            "offline",
 		"login_hint":             fakeoidc.AliceEmail,
+		"prompt":                 "consent", // the dedicated consent route always shows Google's screen: only then does Google issue a refresh token
 		"code_challenge_method":  "S256",
 		"redirect_uri":           callbackURL,
 	} {
@@ -1303,6 +1302,185 @@ func TestMeetConsent_MergesGrantedScope(t *testing.T) {
 	f.consent(f.mustSignIn(fakeoidc.AliceEmail), fakeoidc.AliceEmail, "/")
 	if _, again, _ := f.oauthRow(alice); !slices.Equal(again, want) {
 		t.Errorf("scopes after a second consent = %v, want %v", again, want)
+	}
+}
+
+// dropPrompt is what a Google that remembers the grant does with an authorization
+// request that has no prompt: it skips the consent screen and so issues no refresh
+// token. The fake provider does the same for a request without prompt=consent.
+func dropPrompt(q url.Values) { q.Del("prompt") }
+
+// forgetGrant deletes the stored Google grant of u: what a database reset, a
+// restored backup or a rotated key leaves, while Google still remembers it.
+func (f *fixture) forgetGrant(u userRow) {
+	f.t.Helper()
+	f.asOwner(u.WorkspaceID, func(ctx context.Context, tx pgx.Tx) {
+		if _, err := tx.Exec(ctx, `DELETE FROM identity.oauth_tokens WHERE user_id = $1`, u.ID); err != nil {
+			f.t.Fatalf("forget grant: %v", err)
+		}
+	})
+}
+
+// consentWith is consent after tamper has changed the authorization request.
+func (f *fixture) consentWith(sid *http.Cookie, email, returnTo string, tamper func(url.Values)) *httptest.ResponseRecorder {
+	f.t.Helper()
+	rec := f.serve(http.MethodGet, "/api/auth/meet-consent?return_to="+url.QueryEscape(returnTo), sid)
+	authURL := f.providerRedirect(rec)
+	return f.callback(f.approveWith(authURL, email, tamper), cookieNamed(rec, stateCookie))
+}
+
+// captureLogs makes the module log into the returned buffer, one JSON record per line.
+func (f *fixture) captureLogs() *bytes.Buffer {
+	logs := new(bytes.Buffer)
+	f.mod.log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return logs
+}
+
+const missingGrantLog = "meet consent completed without a refresh token"
+
+func TestLogin_DoesNotForcePromptOrIncrementalScopes(t *testing.T) {
+	f := newFixture(t)
+	authURL, _ := f.login("/")
+	q := authURL.Query()
+	if _, has := q["prompt"]; has {
+		t.Errorf("the sign-in route sends prompt=%q: only the consent route forces Google's screen", q.Get("prompt"))
+	}
+	if q.Get("include_granted_scopes") != "" {
+		t.Errorf("include_granted_scopes = %q on sign-in", q.Get("include_granted_scopes"))
+	}
+}
+
+func TestBegin_StateRecordsWhetherItIsAConsentFlow(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+
+	for name, tc := range map[string]struct {
+		target  string
+		cookies []*http.Cookie
+		want    bool
+	}{
+		"login":   {"/api/auth/login", nil, false},
+		"consent": {"/api/auth/meet-consent", []*http.Cookie{sid}, true},
+	} {
+		state := f.providerRedirect(f.serve(http.MethodGet, tc.target, tc.cookies...)).Query().Get("state")
+		got, err := f.cache.TakeOAuthState(t.Context(), state)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.Consent != tc.want {
+			t.Errorf("%s: state.Consent = %v, want %v", name, got.Consent, tc.want)
+		}
+	}
+}
+
+// The user's second real run: Google remembered the Meet grant the database had
+// lost, so the consent request (no prompt) was answered with a code and no refresh
+// token, nothing was stored and the next Start meeting repeated the cycle. The
+// consent route now forces the screen, which is what makes Google issue a token.
+func TestMeetConsent_LostGrant_IsGivenAgainBecauseTheConsentScreenIsForced(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+	alice := f.userByEmail(fakeoidc.AliceEmail)
+	f.consent(sid, fakeoidc.AliceEmail, "/") // Google now remembers the Meet grant
+	f.forgetGrant(alice)
+	logs := f.captureLogs()
+
+	done := f.consent(sid, fakeoidc.AliceEmail, "/channels/q4")
+
+	if got := done.Header().Get("Location"); got != "/channels/q4" {
+		t.Errorf("consent callback -> %q, want the return_to unchanged: the grant was stored", got)
+	}
+	enc, scopes, found := f.oauthRow(alice)
+	if !found || !slices.Contains(scopes, meetScope) {
+		t.Fatalf("grant stored = %v with scopes %v, want a row holding the Meet scope", found, scopes)
+	}
+	if got, err := f.vault().Decrypt(enc); err != nil || string(got) != f.idp.RefreshToken(fakeoidc.AliceEmail) {
+		t.Errorf("stored refresh token = %q, %v; want the one Google just issued", got, err)
+	}
+	if _, err := f.mod.UserTokenSource(t.Context(), alice.ID, meetScope); err != nil {
+		t.Errorf("UserTokenSource after the consent: %v", err)
+	}
+	if strings.Contains(logs.String(), missingGrantLog) {
+		t.Errorf("a consent that stored the grant was logged as missing it: %s", logs.String())
+	}
+}
+
+func TestMeetConsent_EndsWithoutAGrant_IsNotSilent(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+	alice := f.userByEmail(fakeoidc.AliceEmail)
+	f.forgetGrant(alice)
+	logs := f.captureLogs()
+
+	// A Google that does not show the consent screen answers with a code and no
+	// refresh token: there is nothing to store and no row for the scopes to widen.
+	done := f.consentWith(sid, fakeoidc.AliceEmail, "/channels/q4?x=1", dropPrompt)
+
+	if got := done.Header().Get("Location"); got != "/channels/q4?x=1&meet_consent=missing" {
+		t.Errorf("consent callback -> %q, want the return_to with its query and meet_consent=missing", got)
+	}
+	if cookieNamed(done, SessionCookie) == nil {
+		t.Error("the user was not signed in: a consent without a grant is still a sign-in")
+	}
+	if _, _, found := f.oauthRow(alice); found {
+		t.Error("a grant was stored although Google issued no refresh token")
+	}
+	var rec map[string]any
+	for line := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err == nil && r["msg"] == missingGrantLog {
+			rec = r
+		}
+	}
+	if rec == nil {
+		t.Fatalf("no %q record in the log: %s", missingGrantLog, logs.String())
+	}
+	if rec["level"] != "WARN" || rec["user_id"] != alice.ID.String() || rec["workspace_id"] != alice.WorkspaceID.String() {
+		t.Errorf("record = %v, want a WARN with the user and workspace ids", rec)
+	}
+}
+
+// A refresh token Google did not send is not a missing grant when the one stored
+// already holds the Meet scope: the consent only widened it.
+func TestMeetConsent_NoRefreshTokenButGrantStored_IsNotFlagged(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+	alice := f.userByEmail(fakeoidc.AliceEmail)
+	logs := f.captureLogs()
+
+	done := f.consentWith(sid, fakeoidc.AliceEmail, "/channels/q4", dropPrompt)
+
+	if got := done.Header().Get("Location"); got != "/channels/q4" {
+		t.Errorf("consent callback -> %q, want the return_to unchanged: the grant exists", got)
+	}
+	if _, scopes, found := f.oauthRow(alice); !found || !slices.Contains(scopes, meetScope) {
+		t.Errorf("grant = %v with scopes %v, want the stored row widened with the Meet scope", found, scopes)
+	}
+	if strings.Contains(logs.String(), missingGrantLog) {
+		t.Errorf("logged as missing a grant that exists: %s", logs.String())
+	}
+}
+
+// Google's consent screen lets a person untick the Meet permission: the callback
+// then carries a refresh token for the sign-in scopes only. The grant row exists,
+// but it does not hold the Meet scope, so the person is told.
+func TestMeetConsent_MeetScopeUnticked_IsFlagged(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	sid := f.mustSignIn(fakeoidc.AliceEmail)
+	alice := f.userByEmail(fakeoidc.AliceEmail)
+
+	done := f.consentWith(sid, fakeoidc.AliceEmail, "/channels/q4", func(q url.Values) { q.Set("scope", "openid email profile") })
+
+	if got := done.Header().Get("Location"); got != "/channels/q4?meet_consent=missing" {
+		t.Errorf("consent callback -> %q, want meet_consent=missing", got)
+	}
+	if _, scopes, _ := f.oauthRow(alice); slices.Contains(scopes, meetScope) {
+		t.Errorf("scopes = %v, want no Meet scope", scopes)
 	}
 }
 

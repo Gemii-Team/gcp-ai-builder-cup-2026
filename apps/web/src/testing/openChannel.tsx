@@ -8,10 +8,10 @@ import { createStubApi, seedApi, type StubApi, type World } from './stubApi';
 /** The stream of `#q4-launch`, by its accessible name. */
 export const LOG = { name: 'Messages in #q4-launch' };
 
-/** `#q4-launch` in the shell. `messages` are newest first, as the server sends them. */
-export function openChannel(world: World = {}, api: StubApi = createStubApi()) {
+/** `#q4-launch` in the shell, at `path` (a query a redirect brought back included). `messages` are newest first, as the server sends them. */
+export function openChannel(world: World = {}, api: StubApi = createStubApi(), path = '/c/ch-q4') {
   seedApi(api, { channels: [channel({ id: 'ch-q4', name: 'q4-launch', lastSeq: 5n })], ...world });
-  return renderApp({ path: '/c/ch-q4', api, routes: [{ path: '/c/$channelId', element: <ChannelScreen channelId="ch-q4" /> }] });
+  return renderApp({ path, api, routes: [{ path: '/c/$channelId', element: <ChannelScreen channelId="ch-q4" /> }] });
 }
 
 /** The request of the `call`th `SendMessage`. */

@@ -216,3 +216,71 @@ describe('Start meeting: failures of Meet', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+describe('Start meeting: a consent round trip that gave no permission', () => {
+  const MISSING =
+    "Google did not give K.I.W.I. permission to create meetings. Try Start meeting again; if this repeats, remove K.I.W.I. in your Google account's third-party access (myaccount.google.com/permissions) and try again.";
+
+  it('StartMeeting_ConsentMissing_ShowsOneAlertAndClearsTheAddress', async () => {
+    const api = createStubApi();
+    const { router } = openChannel({}, api, '/c/ch-q4?meet_consent=missing');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent(MISSING);
+    expect(alert).toHaveClass('head-notice');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    // The address no longer carries the flag (so a reload does not repeat the alert), and it replaced the entry rather than adding one.
+    await waitFor(() => {
+      expect(router.state.location.href).toBe('/c/ch-q4');
+    });
+    expect(router.history.length).toBe(1);
+    expect(api.meetings.startMeeting).not.toHaveBeenCalled();
+  });
+
+  it('keeps the rest of the query and the fragment when it removes the flag', async () => {
+    const { router } = openChannel({}, createStubApi(), '/c/ch-q4?x=1&meet_consent=missing&y=two#top');
+
+    await screen.findByRole('alert');
+
+    await waitFor(() => {
+      expect(router.state.location.href).toBe('/c/ch-q4?x=1&y=two#top');
+    });
+  });
+
+  it('says nothing for a channel opened without the flag, or with a value it does not know', async () => {
+    const { router } = openChannel({}, createStubApi(), '/c/ch-q4?meet_consent=granted');
+
+    await screen.findByRole('button', { name: 'Start meeting' });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(router.state.location.href).toBe('/c/ch-q4?meet_consent=granted');
+  });
+
+  it('sends the next Start meeting to consent with a return address that has no flag, and drops the alert', async () => {
+    const api = createStubApi();
+    const { user } = openChannel({}, api, '/c/ch-q4?meet_consent=missing');
+    vi.spyOn(hardNavigate, 'to').mockImplementation(() => undefined);
+    api.meetings.startMeeting.mockRejectedValue(new ConnectError('consent required', Code.FailedPrecondition));
+    await screen.findByRole('alert');
+
+    await user.click(await startButton());
+
+    await waitFor(() => {
+      expect(hardNavigate.to).toHaveBeenCalledWith('/api/auth/meet-consent?return_to=%2Fc%2Fch-q4');
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says it in Thai, with the Latin words and the address in en runs', async () => {
+    useUiStore.setState({ lang: 'th' });
+    openChannel({}, createStubApi(), '/c/ch-q4?meet_consent=missing');
+
+    const alert = await screen.findByRole('alert');
+
+    expect(alert).toHaveTextContent('ไม่ได้ให้สิทธิ์');
+    expect(alert).not.toHaveTextContent('Google did not give');
+    const latin = Array.from(alert.querySelectorAll('[lang="en"]')).map((run) => run.textContent);
+    expect(latin).toEqual(expect.arrayContaining(['Google', 'K.I.W.I.', 'myaccount.google.com/permissions']));
+  });
+});

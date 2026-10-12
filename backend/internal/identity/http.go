@@ -45,7 +45,7 @@ func (m *Module) AuthHandler() http.Handler {
 }
 
 func (m *Module) handleLogin(w http.ResponseWriter, r *http.Request) {
-	authURL, state, err := m.begin(r.Context(), r.URL.Query().Get("return_to"), loginScopes)
+	authURL, state, err := m.begin(r.Context(), r.URL.Query().Get("return_to"), loginScopes, false)
 	if err != nil {
 		m.log.ErrorContext(r.Context(), "sign-in could not start", "err", err)
 		http.Error(w, "sign-in is unavailable", http.StatusInternalServerError)
@@ -57,7 +57,10 @@ func (m *Module) handleLogin(w http.ResponseWriter, r *http.Request) {
 // handleMeetConsent sends a signed-in user to Google for the Meet scope, keeping
 // what they already granted. The sign-in scopes ride along (Google shows no new
 // consent for them): the callback identifies the account that consented by its ID
-// token, which carries email and hd only when those scopes are asked for.
+// token, which carries email and hd only when those scopes are asked for. It always
+// forces the consent screen (prompt=consent): Google issues a refresh token only
+// when it shows that screen, and without one a grant our database lost while Google
+// still remembers it could never be stored again.
 func (m *Module) handleMeetConsent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var email string
@@ -71,9 +74,10 @@ func (m *Module) handleMeetConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	var authURL, state string
 	if err == nil {
-		authURL, state, err = m.begin(ctx, r.URL.Query().Get("return_to"), append(slices.Clone(loginScopes), meetScope),
+		authURL, state, err = m.begin(ctx, r.URL.Query().Get("return_to"), append(slices.Clone(loginScopes), meetScope), true,
 			oauth2.SetAuthURLParam("include_granted_scopes", "true"),
 			oauth2.SetAuthURLParam("login_hint", email),
+			oauth2.SetAuthURLParam("prompt", "consent"),
 		)
 	}
 	if err != nil {
