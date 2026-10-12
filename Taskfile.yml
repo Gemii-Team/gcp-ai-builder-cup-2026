@@ -64,7 +64,12 @@ tasks:
     cmds:
       - kubectl --context k3d-kiwi -n kiwi exec deploy/kiwi -- /app/kiwi reindex {{.CLI_ARGS}}
 
+  reset:
+    desc: "WIPE the workspace data of the running cluster (every table of the application schemas, Valkey; a real-Google Team workspace and grant included) and restart kiwi; run task seed afterwards"
+    cmds:
+      - bash scripts/smoke/reset.sh
+
   smoke:
-    desc: "Run the five flows in headless Chromium against the k3d stack from a clean state (recorded LLM, mock sign-in); KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM instead; flags after -- go to Playwright"
+    desc: "WIPES the cluster's workspace data, then runs the five flows in headless Chromium from a clean seed (recorded LLM, mock sign-in) and leaves the cluster on mockauth, freshly seeded; KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM; flags after -- go to Playwright (-- --list lists the suite and touches nothing)"
     cmds:
       - bash scripts/smoke/run.sh {{.CLI_ARGS}}

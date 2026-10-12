@@ -4,9 +4,12 @@ import { account, ask, attachFile, ghostsSeen, isPhone, signIn, signedIn, watchG
 // The five flows the demo shows, in order, on the seeded workspace: each builds on the data the one before it left.
 test.describe.configure({ mode: 'serial' });
 
-const HELLO = 'Hello team · สวัสดีทุกคน';
+// The project name is part of it: the phone run follows the desktop run in the same workspace, and its assertions must not
+// be satisfied by the desktop run's message.
+const hello = (project: string) => `Hello team · สวัสดีทุกคน ${project}`;
 
 test('flow 1: sign in and chat', { tag: '@phone' }, async ({ browser }, testInfo) => {
+  const HELLO_TEXT = hello(testInfo.project.name);
   // Nobody signed in is sent to the sign-in page, and comes back to the page they asked for.
   const anon = await browser.newContext();
   const anonPage = await anon.newPage();
@@ -30,11 +33,11 @@ test('flow 1: sign in and chat', { tag: '@phone' }, async ({ browser }, testInfo
   const row = (page: typeof alice.page, text: string) => log(page).locator('article').filter({ hasText: text });
 
   // A message reaches the other member without a reload, and its Thai run is marked as Thai.
-  await alice.page.getByRole('combobox', { name: 'Message #general' }).fill(HELLO);
+  await alice.page.getByRole('combobox', { name: 'Message #general' }).fill(HELLO_TEXT);
   await alice.page.getByRole('button', { name: 'Send' }).click();
-  await expect(row(alice.page, HELLO).last()).toBeVisible();
-  await expect(row(bob.page, HELLO).last()).toBeVisible({ timeout: 5_000 });
-  await expect(row(bob.page, HELLO).last().locator('[lang="th"]')).toHaveText('สวัสดีทุกคน');
+  await expect(row(alice.page, HELLO_TEXT).last()).toBeVisible();
+  await expect(row(bob.page, HELLO_TEXT).last()).toBeVisible({ timeout: 5_000 });
+  await expect(row(bob.page, HELLO_TEXT).last().locator('[lang="th"]')).toHaveText('สวัสดีทุกคน');
 
   // Offline, a send waits and says so; back online it reaches the other member exactly once.
   const offline = `Offline hello · ส่งตอนออฟไลน์ · ${testInfo.project.name}`;
@@ -50,7 +53,7 @@ test('flow 1: sign in and chat', { tag: '@phone' }, async ({ browser }, testInfo
 
   // A reload keeps the history.
   await alice.page.reload();
-  await expect(row(alice.page, HELLO).last()).toBeVisible();
+  await expect(row(alice.page, HELLO_TEXT).last()).toBeVisible();
   await expect(row(alice.page, offline)).toHaveCount(1);
   await alice.context.close();
   await bob.context.close();
@@ -329,6 +332,7 @@ test('flow 2 live: a recording becomes a meeting summary', { tag: '@live' }, asy
   await context.close();
 });
 
+const QUESTION_TH_LIVE = 'วันเปิดตัวตามแผนไตรมาสสี่คือวันที่เท่าไร';
 test('flow 4 live: questions get slips with a REF, a Thai one in Thai', { tag: '@live' }, async ({ browser }) => {
   test.setTimeout(240_000);
   const { context, page } = await signedIn(browser, 'alice');
@@ -337,7 +341,9 @@ test('flow 4 live: questions get slips with a REF, a Thai one in Thai', { tag: '
   const slips = thread.locator('.kiwi-slip').filter({ hasText: /REF ANS-\d{4}/ });
   await ask(page, QUESTION_EN);
   await expect(slips).toHaveCount(1, { timeout: LIVE_WAIT });
-  await ask(page, QUESTION_TH);
+  // A different topic from the English question: the agent keeps its session, and a real model answers a follow-up on the same
+  // topic from that memory, without searching, which gives plain text with no source and no REF (not a slip).
+  await ask(page, QUESTION_TH_LIVE);
   await expect(slips).toHaveCount(2, { timeout: LIVE_WAIT });
   await expect(slips.first().locator('.kiwi-prose [lang="th"]').first()).toBeVisible();
   await context.close();
