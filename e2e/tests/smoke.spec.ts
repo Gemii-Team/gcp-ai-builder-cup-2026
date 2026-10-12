@@ -254,7 +254,7 @@ test('flow 5: a file becomes a summary, an unsupported one is refused, a scan fa
   await expect(log.getByText('Summarizing file…')).toHaveCount(0);
 
   // A Word document is refused where it is attached, inline, and nothing is left pending. (CreateUpload refuses a type with
-  // a message of its own, not the `upload rejected (<reason>)` shape of CompleteUpload, so the notice gives no reason.)
+  // the same `upload rejected (<reason>)` text as CompleteUpload, so the notice names its reason: this file type isn't supported.)
   await attachFile(page, 'notes.docx');
   await expect(page.getByRole('alert').filter({ hasText: "Couldn't upload notes.docx" })).toHaveCount(1);
   await expect(log.getByText('notes.docx')).toHaveCount(0);
