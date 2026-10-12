@@ -24,10 +24,10 @@ export type AskOutcome =
   | { kind: 'answered'; answer: ArtifactView }
   | { kind: 'failed'; reason: string; at: string };
 
-/** How a question ended: with an answer (found or not found) or without one. */
+/** How a question ended: with an answer (found, not found, or a channel summary) or without one. */
 export type AskSettled = Exclude<AskOutcome, { kind: 'pending' }>;
 
-/** One question of the thread and what became of it. A not-found answer is `answered`: it has a REF and is no failure. */
+/** One question of the thread and what became of it. A not-found answer and a channel summary are `answered`: each has a REF and is no failure. */
 export type AskExchange = {
   id: string;
   question: string;

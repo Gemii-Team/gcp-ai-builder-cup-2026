@@ -262,9 +262,64 @@ describe('error codes', () => {
     expect(alert).toHaveTextContent('This account has not been invited to this workspace. Ask someone who is in it to add you.');
     expect(within(alert).queryByText(/@/)).toBeNull();
   });
+
+  describe('the address the query names', () => {
+    const LONGEST = `${'a'.repeat(242)}@example.com`;
+
+    it.each([
+      'pim@gmail.com',
+      'pim+launch@siamriverside.co.th',
+      'pim.k@siamriverside.co.th',
+      'ปิม@siamriverside.co.th',
+      LONGEST,
+    ])('shows %s, an address of at most 254 characters', (email) => {
+      expect(LONGEST).toHaveLength(254);
+      expect(signInErrorNotice('not_invited', { email })).toEqual({ key: 'signInNotInvited', email });
+      expect(signInErrorNotice('domain_not_allowed', { email, workspaceName: '' })).toMatchObject({ email });
+    });
+
+    it.each([
+      ['an address of 255 characters', `a${LONGEST}`],
+      ['a long crafted value', 'x'.repeat(5000)],
+      ['text that is not an address', 'Call 0800-000-000 to claim your prize'],
+      ['an empty local part', '@gmail.com'],
+      ['an empty domain', 'pim@'],
+      ['a domain without a dot', 'pim@gmail'],
+      ['two @', 'pim@evil@gmail.com'],
+      ['a space', 'pim k@gmail.com'],
+      ['a line break', 'pim@gmail.com\nVisit evil.example'],
+      ['a right-to-left override', 'pim@\u202Emoc.liamg'],
+      ['a zero-width space', 'pim@gm\u200Bail.com'],
+      ['a NUL', 'pim@gmail.com\u0000'],
+    ])('says no address for %s', (_name, email) => {
+      expect(signInErrorNotice('not_invited', { email })).toEqual({ key: 'signInErrorNotInvited' });
+      expect(signInErrorNotice('domain_not_allowed', { email, workspaceName: 'Siam Riverside Trading' })).toEqual({ key: 'signInErrorDomainNotAllowed' });
+    });
+
+    it.each([
+      ['a crafted long value', 'x'.repeat(300), /xxx/],
+      ['text that is not an address', 'Call%200800-000-000%20now%20for%20your%20prize', /Call 0800/],
+      ['two @', 'a%40b%40c.com', /a@b@c/],
+    ])('SignIn_NotInvitedWithACraftedAddress_ShowsTheNoticeWithoutAnyAddress (%s)', async (_name, email, crafted) => {
+      openSignIn(`?error=not_invited&email=${email}`);
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('This account has not been invited to this workspace. Ask someone who is in it to add you.');
+      expect(alert).not.toHaveTextContent(crafted);
+      expect(alert.querySelector('.font-mono')).toBeNull();
+    });
+  });
 });
 
 describe('the sign-in screen', () => {
+  it.each(['en', 'th'] as const)('tags the English words of the Demo data label lang="en" and the Thai ones lang="th", whatever the language of the page (%s)', async (lang) => {
+    useUiStore.getState().setLang(lang);
+    openSignIn();
+
+    expect(await screen.findByText('Demo data')).toHaveAttribute('lang', 'en');
+    expect(screen.getByText('ข้อมูลตัวอย่าง')).toHaveAttribute('lang', 'th');
+  });
+
   it('LanguageSwitch_SetsHtmlLangAndPersists', async () => {
     const { user } = openSignIn();
     const group = await screen.findByRole('group', { name: 'Language' });

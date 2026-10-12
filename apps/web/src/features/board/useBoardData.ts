@@ -140,7 +140,7 @@ export function groupBoard(
   return { lanes: ordered, drafts, counts };
 }
 
-/** The cell (`lane/status`) each confirmed task on the board sits in: what `useGlide` compares to see a card move. */
+/** The cell (`lane/status`) each confirmed task on the board sits in: what `Glide` compares to see a card move. */
 export function cellsOf(board: BoardData | undefined): ReadonlyMap<string, string> {
   const cells = new Map<string, string>();
   for (const lane of board?.lanes ?? []) {

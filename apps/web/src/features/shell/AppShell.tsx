@@ -37,7 +37,7 @@ export function AppShell({ client }: { /** The live connection; tests pass a fak
     <RealtimeProvider client={client}>
       <div className="shell">
         <p className="demo-tag">
-          Demo data · <span lang="th">ข้อมูลตัวอย่าง</span>
+          <span lang="en">Demo data</span> · <span lang="th">ข้อมูลตัวอย่าง</span>
         </p>
         <div className="app">
           <Rail />

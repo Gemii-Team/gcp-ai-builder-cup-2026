@@ -106,7 +106,8 @@ export async function fetchMessagePage(
 
 /**
  * The latest page of a channel. The cursor store learns its newest seq, so the realtime client asks only for what came
- * after it. Messages this person has not got to the server yet survive a reload of the page.
+ * after it. Messages this person has not got to the server yet are kept when the query is fetched again (a refetch of this
+ * query, not a reload of the page: they live only in this tab's memory, and a reload loses them).
  */
 export const messagesQuery = (api: Api, cursors: CursorStore, channelId: string) =>
   queryOptions({

@@ -92,6 +92,14 @@ describe('Rail', () => {
     expect(rail.getByRole('link', { name: 'บอร์ด' })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe('th');
   });
+
+  it.each(['en', 'th'] as const)('tags the English words of the Demo data label lang="en" and the Thai ones lang="th", whatever the language of the page (%s)', async (lang) => {
+    useUiStore.getState().setLang(lang);
+    shellWithChannels('/c/ch-q4');
+
+    expect(await screen.findByText('Demo data')).toHaveAttribute('lang', 'en');
+    expect(screen.getByText('ข้อมูลตัวอย่าง')).toHaveAttribute('lang', 'th');
+  });
 });
 
 describe('RealtimeProvider in the shell', () => {

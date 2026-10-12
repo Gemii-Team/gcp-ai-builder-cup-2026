@@ -7,8 +7,9 @@
  * somebody forgot to list, with the shell, once the worker controls the tab.
  *
  * Workbox tests each pattern against the URL's pathname plus its query string, so every pattern allows one:
- * the sign-in route is also opened as `/signin?error=...`. Add a route to `router.tsx` and to this list together;
- * `pwaRoutes.test.ts` pins both lists.
+ * the sign-in route is also opened as `/signin?error=...`. Add a route to `router.tsx` and to this list together:
+ * `pwaRoutes.test.ts` reads the router's route tree and fails for a route this list does not answer, and for a server
+ * path (`/api`, `/ws`, `/mockoidc`) that it does.
  */
 export const SPA_NAVIGATION_ALLOWLIST: RegExp[] = [
   /^\/(?:\?.*)?$/,
