@@ -491,8 +491,9 @@ func TestKeyedLock_SerialisesOneKeyAndNotOthers(t *testing.T) {
 	}
 	other()
 
-	acquired := make(chan struct{})
+	acquired, released := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(released)
 		u, err := k.lock(t.Context(), "a")
 		if err == nil {
 			close(acquired)
@@ -518,8 +519,17 @@ func TestKeyedLock_SerialisesOneKeyAndNotOthers(t *testing.T) {
 		t.Errorf("a cancelled wait = %v, want context.Canceled", err)
 	}
 	held()
-	if len(k.entries) != 0 {
-		t.Errorf("%d keys are still tracked after every lock was released", len(k.entries))
+	// The waiter releases after it signals, so wait for that, and read under the lock.
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiter never released the key")
+	}
+	k.mu.Lock()
+	tracked := len(k.entries)
+	k.mu.Unlock()
+	if tracked != 0 {
+		t.Errorf("%d keys are still tracked after every lock was released", tracked)
 	}
 }
 
