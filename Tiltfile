@@ -15,7 +15,7 @@
 # kiwi-config is the ConfigMap of that name on a resource of its own: mockoidc and kiwi both
 # read it, and Tilt applies an object only after the resource that owns it has its
 # dependencies (it used to belong to kiwi, which waits for mockoidc, whose pod then never
-# started on a cluster that had not run the local overlay first). resource_deps make a
+# started on a cluster that did not have the ConfigMap yet). resource_deps make a
 # resource wait until its dependencies are ready (a Job is ready once it has
 # completed); they do not order later updates: after a code change kiwi and
 # migrate are rebuilt and redeployed in parallel.
