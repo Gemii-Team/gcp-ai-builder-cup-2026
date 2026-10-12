@@ -1,5 +1,5 @@
 import type { Lang } from '@kiwi/core';
-import { dueAtToDate } from '@kiwi/ui';
+import { dayParts, dueAtToDate } from '@kiwi/ui';
 
 const BANGKOK = 'Asia/Bangkok';
 
@@ -8,31 +8,15 @@ export function dayKey(iso: string): string {
   return dueAtToDate(new Date(iso));
 }
 
-const formats = new Map<Lang, Intl.DateTimeFormat>();
-
-function formatFor(lang: Lang): Intl.DateTimeFormat {
-  let format = formats.get(lang);
-  if (format === undefined) {
-    format = new Intl.DateTimeFormat(lang === 'th' ? 'th-TH-u-ca-gregory' : 'en-GB', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      timeZone: BANGKOK,
-    });
-    formats.set(lang, format);
-  }
-  return format;
-}
-
 /**
- * `Tue, 13 Oct 2026`: the label of a day divider, built from the parts so the comma and the order are the same under
+ * `Tue, 13 Oct 2026` (Thai: `อ., 13 ต.ค. 2026`, in the Gregorian year): the label of a day divider. The weekday and the month
+ * are the design's abbreviations from `dayParts`'s tables, never the runtime's own names, so the label is the same under
  * every ICU version. `today` says whether the day is the current one in Bangkok, which the divider names.
  */
 export function dayLabel(iso: string, lang: Lang, now: Date): { text: string; today: boolean } {
-  const parts = Object.fromEntries(formatFor(lang).formatToParts(new Date(iso)).map((part) => [part.type, part.value]));
+  const { weekday, day, month, year } = dayParts(new Date(iso), lang, BANGKOK);
   return {
-    text: `${parts.weekday ?? ''}, ${parts.day ?? ''} ${parts.month ?? ''} ${parts.year ?? ''}`,
+    text: `${weekday}, ${day} ${month} ${year}`,
     today: dayKey(iso) === dayKey(now.toISOString()),
   };
 }

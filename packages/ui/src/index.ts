@@ -5,7 +5,7 @@ import './draft/draft.css';
 import './task/task.css';
 
 export { Button, ButtonLink } from './Button';
-export { dateToDueAt, dueAtToDate, formatClock, formatDay, formatOffset, formatSize } from './format';
+export { dateToDueAt, dayParts, dueAtToDate, formatClock, formatDay, formatOffset, formatSize } from './format';
 export { isImeKey } from './ime';
 export { Icon, type IconName } from './icons';
 export { IconButton } from './IconButton';

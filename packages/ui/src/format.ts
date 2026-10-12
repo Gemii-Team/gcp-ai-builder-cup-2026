@@ -60,6 +60,31 @@ export function dueAtToDate(d: Date): string {
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+// The weekday and month abbreviations as DESIGN.md and the prototypes write them, indexed by the calendar numbers of a
+// date. Tables, never `Intl` names: those are the runtime's CLDR data, which changes between releases (CLDR 48 writes the
+// Thai weekday in full, `ศุกร์`, where the design has `ศ.`; en-GB writes September `Sept`), so two browsers would label
+// the same day differently. `Intl` is asked for numbers only, which every release writes the same way.
+const WEEKDAYS = {
+  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  th: ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'],
+} as const;
+
+const MONTHS = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  th: ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'],
+} as const;
+
+/**
+ * The weekday, day, month and Gregorian year of an instant in `timeZone`, the weekday and the month as the design
+ * abbreviates them (`Fri`, `Oct`; `ศ.`, `ต.ค.`) and the day and the year as plain numbers. The one place a day label gets
+ * its words: `formatDay` and the day dividers of a channel both write theirs from it.
+ */
+export function dayParts(date: Date, lang: 'en' | 'th', timeZone: string): { weekday: string; day: string; month: string; year: string } {
+  const { year, month, day } = parts(formatter('en-US', { year: 'numeric', month: 'numeric', day: 'numeric', timeZone }), date);
+  const weekday = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDay();
+  return { weekday: WEEKDAYS[lang][weekday], day, month: MONTHS[lang][Number(month) - 1], year };
+}
+
 /**
  * `Fri 16 Oct` (Thai: `ศ. 16 ต.ค.`): the day label of a due date, a done date or a message day, never a time of day.
  * A date-only string is a calendar day and keeps its day in any zone; an instant is read in `timeZone`.
@@ -67,10 +92,6 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 export function formatDay(d: Date | string, lang: 'en' | 'th', timeZone: string = BANGKOK): string {
   const calendarDay = typeof d === 'string' && DATE_ONLY.test(d);
   const date = calendarDay ? new Date(`${d}T12:00:00Z`) : new Date(d);
-  const locale = lang === 'th' ? 'th-TH-u-ca-gregory' : 'en-US';
-  const { weekday, day, month } = parts(
-    formatter(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: calendarDay ? 'UTC' : timeZone }),
-    date,
-  );
+  const { weekday, day, month } = dayParts(date, lang, calendarDay ? 'UTC' : timeZone);
   return `${weekday} ${day} ${month}`;
 }
