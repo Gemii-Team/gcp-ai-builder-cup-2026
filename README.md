@@ -18,6 +18,8 @@ Every statement here about how something was checked says whether it was **autom
 
 Every AI result is a **slip**: it carries its sources and a REF code (`MTG-…` for a meeting, `DOC-…` for a file, `ANS-…` for an answer, `TSK-…` for a task). A failed attempt shows its reason with Retry and issues no REF.
 
+**Which channels an answer searches.** An @mention of the assistant in a channel and an Ask opened from a channel search only that channel, so a channel reply can never republish another channel's content. An Ask opened from the Ask panel without a channel searches every channel the person belongs to. A same-topic question about content that lives in another channel therefore answers "not found" in the wrong channel: ask in the right channel, or from the Ask panel.
+
 ## How it runs locally
 
 ```mermaid
@@ -64,7 +66,7 @@ flowchart LR
 
 ## Run it locally
 
-**You need** Docker (running), [mise](https://mise.jdx.dev), and Chromium or Firefox. Run the commands in a shell where mise is activated, or prefix them with `mise exec --`.
+**You need** Docker (running), [mise](https://mise.jdx.dev), and Chromium or Firefox. Run the commands in a shell where mise is activated, or prefix them with `mise exec --`. `task smoke` and `task reset` also need GNU coreutils `timeout` (on macOS, `brew install coreutils` provides `gtimeout`, which the scripts use when there is no `timeout`).
 
 ### 1. Toolchain and dependencies
 
@@ -99,6 +101,8 @@ task local:up
 ```
 
 This creates (or starts) the k3d cluster `kiwi`, loads `.env` into the cluster, and runs Tilt with the `mockauth` overlay. Tilt builds the images and deploys Postgres, the migration job, Valkey, Ollama (the first start downloads the embedding model), then `kiwi` and `web`. It stays in the foreground: use a second terminal for the next step, and wait until Tilt shows every resource ready.
+
+The app is published on `127.0.0.1:8080` only, so other machines on your network cannot reach it: the default stack lets whoever reaches it sign in as a demo person without a password, and the cluster holds your LLM key. To use it from another machine, tunnel to it with `ssh -N -L 8080:127.0.0.1:8080 <host>` and open `http://localhost:8080` there: the browser origin has to stay `http://localhost:8080`, which the OAuth redirect URI requires. A cluster created before this binding existed keeps its old one (every interface) until it is recreated with `task local:down` and `task local:up` (that deletes its data); `task local:up` prints a WARNING when it finds such a cluster. The Kubernetes API port that k3d publishes is separate (observed on every interface of the existing cluster) and this binding does not change it.
 
 If, after a Docker or host restart, the k3d agent node stays `NotReady` with "failed to find interface with specified node ip", `docker restart k3d-kiwi-agent-0` fixes it (seen once, on rootless Docker: **real-condition**).
 
@@ -152,20 +156,22 @@ How this was checked: **real-condition**, by a human, once, through an External/
 ```bash
 task test
 task lint
+task check:scripts
 task smoke
 KIWI_LIVE_E2E=1 task smoke
 ```
 
 - `task test` runs the Go tests with the race detector, then the TypeScript tests. The Go tests start real Postgres and Valkey containers, so Docker must be running. On rootless Docker, if starting containers fails with `bind: address already in use`, run `cd backend && go test -race -p 1 ./...` instead.
 - `task lint` checks Go formatting, runs golangci-lint and the TypeScript linters.
+- `task check:scripts` runs the guard suites of the manifests and scripts, offline (no cluster, no Docker): `scripts/local/render.test.sh` (the rendered overlays through kustomize and kubeconform, the Tiltfile, the cluster scripts), `scripts/hygiene/{check-paths,gitleaks,readme}.test.sh` (the private-path and secret guards, and this README: its commands exist and it holds no secret, private address or dead link) and `scripts/smoke/run.test.sh` (the end of `task smoke` and `task reset`: the order of their steps, what they refuse, their exit status and last line, with every program they call replaced by a stub). It needs kustomize, kubeconform, gitleaks and task on `PATH` (`mise install` provides them); the checks of the README suite that read your `.env` are skipped, loudly, where there is none. `task gen:check` runs the generated-code drift check (`task gen`, then a diff: stage generated files first).
 - `task smoke` runs the five flows in headless Chromium (a desktop viewport; flows 1 and 3 again at a 390x844 phone viewport) from a clean seed, with a recorded LLM and the mock sign-in, so it needs no model session. **It wipes the workspace data of the cluster** (every table of the application schemas and Valkey: a real-Google "Team" workspace and its Meet grant included), seeds `demo.example` with alice and bob, and runs the suite. It installs the JavaScript dependencies as the lockfile has them, builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set (elsewhere, point that variable at a Playwright browsers directory with the chromium headless shell that the pinned `@playwright/test` runs), and at the end removes the older Tilt-built images from the host (the newest of each repository, and every image a container uses, are kept). A machine with the five LLM values (`KIWI_LLM_BASE_URL`, `KIWI_LLM_API_KEY`, `KIWI_LLM_MODEL_FLASH`, `KIWI_LLM_MODEL_PRO`, `KIWI_ASR_MODEL`) in `.env` ends on the `mockauth` overlay, wiped again and freshly seeded with the default seed (`demo.example`: alice and bob). A machine without them cannot start `mockauth`: it ends on the `smoke` overlay, still holding the replay's seed, and says so on its last line. Flags after `--` go to Playwright; `task smoke -- --list` lists the suite and touches nothing.
+- `task smoke` and `task reset` bound every step that can wait on kiwi, the database or a model with GNU coreutils `timeout --foreground`, so Ctrl-C reaches the command being waited for. The clean-up at the end of `task smoke` removes only the older Tilt-built images of this stack from the host; nothing else is pruned.
 - The smoke suite never touches live Meet: flow 2 goes through the WAV recording upload, with a recorded transcript.
 - `KIWI_LIVE_E2E=1 task smoke` runs the three `@live` tests (flows 2, 4 and 5) against the real LiteLLM and Ollama (overlay `mockauth` throughout) instead of the recorded LLM. It is opt-in and never part of the default run; it needs the five LLM values in `.env`. It wipes and seeds the same way, and ends on `mockauth`, freshly seeded.
 - `task reset` wipes the workspace data of the running cluster and nothing else: kiwi is stopped while the tables are truncated, Valkey is flushed, kiwi is started again; run `task seed` afterwards.
 - `task reindex` rebuilds the knowledge embeddings after you change the embedding model.
-- `bash scripts/smoke/run.test.sh` tests the end of `task smoke` and `task reset` (the order of their steps, what they refuse, their exit status and last line) with every program they call replaced by a stub, so it needs no cluster. It is not part of CI.
 
-Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race tests; lint, typecheck and tests of the web workspaces) and the hygiene workflow (no private paths, no secrets). Neither builds an image or deploys.
+Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race tests; lint, typecheck and tests of the web workspaces; the `scripts` job, which runs `render.test.sh` and `run.test.sh` with kustomize, kubeconform and task built by `go install` at pinned versions; and the `gen-drift` job, which runs `scripts/check-gen-drift.sh` with buf, sqlc and task built the same way) and the hygiene workflow (no private paths, no secrets, and the three hygiene suites). None of it builds an image or deploys. **CI jobs added; first GitHub run pending:** the `scripts` job, the `gen-drift` job and the hygiene suites step have never run on GitHub. Their commands pass locally (`task check:scripts`, `task gen:check`).
 
 ## What was checked, and how
 
@@ -184,8 +190,11 @@ Pull requests run `.github/workflows/ci.yml` (Go formatting, build and race test
 | The five flows in a browser | `task smoke` (the replay run: recorded LLM, mock sign-in, headless Chromium; desktop, and flows 1 and 3 also at 390x844), run on the k3d cluster twice in a row through the task itself: 9 tests each (6 desktop, 3 phone), all passed | **automated** and **simulated**: headless browsers, not a device |
 | Go and TypeScript logic | `task test`: real Postgres and Valkey in containers, jsdom for the web | **automated** |
 | The real LLM and embeddings | `KIWI_LIVE_E2E=1 task smoke`, once, through the task itself on the k3d cluster: the 3 live tests passed (flow 2 with one real WAV transcription, flow 4 with four Ask runs in English and Thai that each ended in a slip with its REF, flow 5 with a file summary) and the end-of-run wipe and default seed completed | **real-condition** for the LLM and the embeddings only; the sign-in (mock) and the headless Chromium are still **simulated** |
+| The app port bound to `127.0.0.1` | `render.test.sh` pins the line of the k3d configuration, and `k3d config migrate` accepts it; the cluster has not yet been recreated with it | **automated** only: the binding itself is unobserved |
+| The web container (user 65532, port 8080, read-only root filesystem, no capabilities) | `render.test.sh` pins the manifest, the Dockerfile and the Caddyfile. The image was built and run once by hand outside the cluster with `docker run --read-only --cap-drop ALL`: it answered `/healthz` on 8080 as user 65532, with the three headers. The base image `caddy:2-alpine` cannot start with every capability dropped (observed: `exec /usr/bin/caddy: operation not permitted`, because its binary carries a file capability), which the Dockerfile removes | **automated**, plus one local container run by hand; not yet run in the cluster |
+| The guard suites in CI | Added to the workflows; `task check:scripts` and the generated-code check pass locally; the `go install` lines of the jobs were run locally, and the two suites of the `scripts` job also passed on a runner-like `PATH` | **automated** locally; the jobs have never run on GitHub |
 
-These runs were made on one machine; CI does not run them. The default checks are `task test` and the pull-request workflows.
+Every run reported in this README was made on one x86-64 Linux machine with rootless Docker. The kiwi binary is built for the architecture that `go env GOARCH` reports on the host (the cluster follows the host's Docker); no other architecture, macOS or rootful Docker has been tried. CI does not run the cluster runs: the default checks are `task test` and the pull-request workflows.
 
 Real-device behaviour of everything on the web side is **simulated** (headless Chromium, jsdom): a physical phone and installing the app as a PWA have not been checked.
 
@@ -195,11 +204,13 @@ Real-device behaviour of everything on the web side is **simulated** (headless C
 
 - **Google sign-in and Meet are real only where [What was checked, and how](#what-was-checked-and-how) says so.** Sign-in, Start meeting and the Meet tab were checked against real Google by a human (**real-condition**); transcript polling and ingestion are **simulated** only, because no real transcript has ever been obtained.
 - **Sign-in is invite-only.** Only an address that has a user row can sign in, and the rows are made by `kiwi seed --members <emails>`: there is no invite flow yet. A Google account without a row gets K.I.W.I.'s "has not been invited" page naming the address. A token with a Workspace hosted domain (`hd`) must match the domain of an existing workspace, and sign-in never creates a workspace. The invite rule was checked **real-condition** once; the `hd` branch is **automated** and **simulated** only.
+- **An unadopted placeholder can be claimed.** A seeded address that has not signed in yet is a placeholder row: any Google account that proves that exact address, without a hosted domain, can claim it until the first sign-in binds the row to its Google subject. Placeholders never expire, and there is no unbind or admin path. The seed refuses an address that is already present in another workspace. The demo personas use the reserved `.example` and `.invalid` domains, which no Google account can verify. A mistyped real address in `--members` therefore stays claimable: the only cure today is `task reset` and a reseed, or fixing the row by hand.
 - **The app is External in Testing status.** Google expires its refresh tokens after 7 days, so Meet access needs re-consent about weekly: Start meeting sends you through Google's consent screen again (K.I.W.I. forces that screen so a lost grant can be given again). Only test users can sign in, and Google shows an "unverified app" warning.
 - **No push delivery.** A transcript is noticed up to 30 seconds (one poll interval) after Meet makes it available, on top of Meet's own delay. Meetings that were not started from K.I.W.I. are never seen.
-- **The host's token must stay valid.** If the host revokes access or the refresh token expires, the meeting fails with a reason and a Retry after re-consent.
+- **The host's token must stay valid.** If the host revokes access or the refresh token expires, Start meeting sends the host through Google's consent screen again. A meeting that is already being polled when that happens fails on the server with the reason `meet_access`, and the web shows no Retry for it (next bullet).
+- **A Meet-started meeting has no failure surface in the web.** When one fails (for example `meet_access` or `meet_unavailable`), the server stores the reason on the meeting, but the web shows neither the failure nor a Retry. One that ends with no transcript only gets an assistant message in its channel asking for a recording (tested against a fake Google client; not observed against real Meet). The recording upload is the supported route, and it shows its own failures with their reasons.
 - **One transcript per meeting.** If transcription is stopped and restarted inside one meeting, only the first transcript is ingested.
-- **The live-Meet transcript path is unavailable for a personal Gmail account** (verified by a human against the real Meet API in three calls: **real-condition**). Start meeting works and the poll saw each conference start and end, but in none of the three calls did Meet offer Transcripts or "Take notes" to the personal Gmail account that hosted the meeting, and no transcript was exposed: automatic transcription is a Google Workspace feature. K.I.W.I. creates the space without transcription and tells the host, in English and Thai, to turn it on in Meet if the account offers it. Meeting summaries therefore come from the WAV recording upload, the supported route, and that is how flow 2 runs. The Meet transcript path (polling, ingestion, summary) stays wired and is tested only against a fake Google client: it has never ingested a real transcript, and a Google Workspace account that offers transcription has not been tried. By design, a meeting with no transcript ends as `no_transcript` 30 minutes after it ends; that outcome has not been observed against real Meet.
+- **The live-Meet transcript path is unavailable for a personal Gmail account** (verified by a human against the real Meet API in three calls: **real-condition**). Start meeting works and the poll saw each conference start and end, but in none of the three calls did Meet offer Transcripts or "Take notes" to the personal Gmail account that hosted the meeting, and no transcript was exposed: that is what was **observed**. It is probably because automatic transcription is a Google Workspace feature; that cause is an inference, not something observed. The Meet API itself refused, twice, to create a space with automatic transcription for this account (`FEATURE_UNAVAILABLE_TO_USER`). K.I.W.I. then creates the space without transcription and tells the host, in English and Thai, to turn it on in Meet if the account offers it. Meeting summaries therefore come from the WAV recording upload, the supported route, and that is how flow 2 runs. The Meet transcript path (polling, ingestion, summary) stays wired and is tested only against a fake Google client: it has never ingested a real transcript, and a Google Workspace account that offers transcription has not been tried. By design, a meeting with no transcript ends as `no_transcript` 30 minutes after it ends; that outcome has not been observed against real Meet.
 - **The Meet tab opens with `authuser=<your email>`**, so a browser signed in to several Google accounts joins as the space owner. A human verified this on a real multi-account browser (**real-condition**), though Google documents nothing about the parameter, so it may stop working.
 
 ### Recordings, models and indexing
@@ -215,11 +226,13 @@ Real-device behaviour of everything on the web side is **simulated** (headless C
 ### The web app and devices
 
 - **No Safari.** The session cookie uses the `__Host-` prefix and the stack is served over plain `http://localhost`; Safari is not supported.
-- **No phone check.** A phone cannot use this stack over your network, because that cookie needs HTTPS off localhost. The phone layout was checked only in headless Chromium at 390x844 (**simulated**); PWA install has not been checked.
+- **No phone check.** A phone cannot use this stack over your network: the app port is bound to `127.0.0.1`, and the session cookie needs HTTPS off localhost anyway. The phone layout was checked only in headless Chromium at 390x844 (**simulated**); PWA install has not been checked.
 - **Unsent messages are lost on reload.**
 - A recording's pending or failed slip follows only the browser session that uploaded it: after a reload, a failed recording shows no slip.
-- The message `Meeting started: <link>` is posted under the `@assistant` label: the API has no system author kind.
+- The message `Meeting started: <link>` is posted under the `@assistant` label (the API has no system author kind) and is plain text: the other members must copy the link, and only the host's tab opens it.
 - An @mention of the assistant in a channel can still be answered in plain text with no source and no REF; only the Ask page always ends in a slip with its sources.
+- The assistant advertises tools to the Ask page that cannot work there: a request to write a message or to list tasks, typed into Ask, ends as an unrelated sourced answer or as the not-found slip.
+- Caddy adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` to every response of the web app. A Content-Security-Policy and the other browser security headers need a pass in a real browser (the PWA, its service worker, the self-hosted fonts) and are a GCP-phase item.
 - Not built: typing and presence indicators, rate limits and spend budgets, Board drag and drop (cards move through a menu).
 - No claim about users, connections or requests per second is made for this phase.
 
