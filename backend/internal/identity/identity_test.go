@@ -1506,6 +1506,88 @@ func TestMeetConsent_MeetScopeUnticked_IsFlagged(t *testing.T) {
 	}
 }
 
+// withMeetConsentMissing puts exactly one meet_consent=missing in the query of a path the flow already validated, whatever
+// shape that path has: its query and fragment are kept as they were, and no other parameter and no host is ever added.
+func TestWithMeetConsentMissing_KeepsPathQueryAndFragmentAndAddsOneParameter(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"/", "/?meet_consent=missing"},
+		{"/c/x", "/c/x?meet_consent=missing"},
+		{"/c/x?a=b", "/c/x?a=b&meet_consent=missing"},
+		{"/c/x#f", "/c/x?meet_consent=missing#f"},
+		{"/c/x?a=b#f", "/c/x?a=b&meet_consent=missing#f"},
+		{"/c/x#f?z", "/c/x?meet_consent=missing#f?z"}, // a ? after the # belongs to the fragment, not the query
+		{"/c/x?", "/c/x?meet_consent=missing"},
+		{"/c/x?a=b&", "/c/x?a=b&meet_consent=missing"},
+		{"/c/x?a=b&&c=d", "/c/x?a=b&c=d&meet_consent=missing"},
+		{"/c/x?a=%26b&c=d+e", "/c/x?a=%26b&c=d+e&meet_consent=missing"}, // what the query says is kept byte for byte
+		// A return_to that already carries the parameter (the person came back flagged and the address was not cleaned)
+		// still ends up with one, and it says missing.
+		{"/c/x?meet_consent=missing", "/c/x?meet_consent=missing"},
+		{"/c/x?meet_consent=other&a=b", "/c/x?a=b&meet_consent=missing"},
+		{"/c/x?a=b&meet%5Fconsent=missing&meet_consent=again#f", "/c/x?a=b&meet_consent=missing#f"},
+	} {
+		got := withMeetConsentMissing(tc.in)
+		if got != tc.want {
+			t.Errorf("withMeetConsentMissing(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		path, query, _ := strings.Cut(strings.SplitN(got, "#", 2)[0], "?")
+		values, err := url.ParseQuery(query)
+		if err != nil || len(values["meet_consent"]) != 1 || values["meet_consent"][0] != "missing" {
+			t.Errorf("withMeetConsentMissing(%q) = %q: query %v (%v), want exactly one meet_consent=missing", tc.in, got, values, err)
+		}
+		if u, err := url.Parse(got); err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(path, "/") {
+			t.Errorf("withMeetConsentMissing(%q) = %q is not a local path (%v)", tc.in, got, err)
+		}
+		if wantPath, _, _ := strings.Cut(strings.SplitN(tc.in, "#", 2)[0], "?"); path != wantPath {
+			t.Errorf("withMeetConsentMissing(%q) = %q changed the path to %q", tc.in, got, path)
+		}
+		if _, frag, had := strings.Cut(tc.in, "#"); had && !strings.HasSuffix(got, "#"+frag) {
+			t.Errorf("withMeetConsentMissing(%q) = %q lost the fragment %q", tc.in, got, frag)
+		}
+	}
+}
+
+// A state written by the binary that came before the consent flag has no consent key. It must decode as a plain sign-in
+// and complete one: a sign-in begun just before a deploy is not broken by it.
+func TestCallback_StateWithoutAConsentKey_CompletesAsAPlainSignIn(t *testing.T) {
+	f := newFixture(t)
+	f.seedWorkspace(fakeoidc.DefaultDomain)
+	authURL, bind := f.login("/channels/q4?x=1")
+	key := "oauth:" + authURL.Query().Get("state")
+	raw, err := f.rdb.Get(t.Context(), key).Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	delete(stored, "consent")
+	if len(stored) != 3 || stored["verifier"] == nil || stored["return_to"] != "/channels/q4?x=1" || stored["nonce"] == nil {
+		t.Fatalf("state = %v, want the three keys the old binary wrote", stored)
+	}
+	old, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.rdb.Set(t.Context(), key, old, redis.KeepTTL).Err(); err != nil {
+		t.Fatal(err)
+	}
+	logs := f.captureLogs()
+
+	rec := f.callback(f.approve(authURL, fakeoidc.AliceEmail), bind)
+
+	if got := rec.Header().Get("Location"); got != "/channels/q4?x=1" {
+		t.Errorf("callback -> %q, want the return_to unchanged", got)
+	}
+	if cookieNamed(rec, SessionCookie) == nil {
+		t.Error("the sign-in issued no session")
+	}
+	if strings.Contains(logs.String(), missingGrantLog) {
+		t.Errorf("a sign-in was taken for a consent flow: %s", logs.String())
+	}
+}
+
 func TestMeetConsent_RequiresASession(t *testing.T) {
 	f := newFixture(t)
 	f.seedWorkspace(fakeoidc.DefaultDomain)

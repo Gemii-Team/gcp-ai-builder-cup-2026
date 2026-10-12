@@ -48,9 +48,12 @@ function Words({ text }: { text: string }) {
 
 /**
  * The text children of an element, each through `Words` (or through `LangRuns` alone where a marker must not go: inside a
- * link or a code span). A line break the model wrote inside a paragraph is a `<br>`: HTML would fold it into a space and
- * run the lines together. A hard break (two spaces or a backslash before the newline) already comes as a `<br>` element
- * followed by its newline, which must not become a second one. Code keeps its own newlines.
+ * link or a code span). A newline the model wrote inside the words of a line is a `<br>`: HTML would fold it into a space
+ * and run the lines together. Newlines that are not the model's line breaks stay as they are, for HTML to fold: a string
+ * that is only whitespace is the separator markdown puts between the elements of a list item (the `\n` around a loose
+ * item's paragraph, or between an item's text and its nested list), and a newline at the very start or end of the
+ * children would open or close an item with an empty line. A hard break (two spaces or a backslash before the newline)
+ * already comes as a `<br>` element followed by its newline, which must not become a second one. Code keeps its own newlines.
  */
 function inline(children: ReactNode, { markers, breaks = true }: { markers: boolean; breaks?: boolean }): ReactNode[] {
   const nodes = Children.toArray(children);
@@ -58,9 +61,20 @@ function inline(children: ReactNode, { markers, breaks = true }: { markers: bool
     if (typeof child !== 'string') {
       return child;
     }
-    const previous = nodes[index - 1];
-    const afterBreak = isValidElement(previous) && previous.type === 'br';
-    const lines = breaks ? (afterBreak ? child.replace(/^\n/, '') : child).split('\n') : [child];
+    let text = child;
+    if (breaks) {
+      const previous = nodes[index - 1];
+      if (index === 0 || (isValidElement(previous) && previous.type === 'br')) {
+        text = text.replace(/^\n+/, '');
+      }
+      if (index === nodes.length - 1) {
+        text = text.replace(/\n+$/, '');
+      }
+      if (text.trim() === '') {
+        return text;
+      }
+    }
+    const lines = breaks ? text.split('\n') : [text];
     return (
       <Fragment key={index}>
         {lines.map((line, at) => (
@@ -80,10 +94,12 @@ function Heading({ children }: { children?: ReactNode }) {
 }
 
 /**
- * Model output is untrusted, so it is only ever markdown: `skipHtml` drops every raw HTML node (a `<script>` or an
- * `<img onerror>` never reaches the DOM). A link is kept only when it is `http(s)`, and then opens in a new tab with
- * `rel="noopener noreferrer"`; any other link (`javascript:`, `data:`, `mailto:`) is its text. An image is its description:
- * a picture the model points at would be fetched, and carry what was asked, to a server of the model's choosing.
+ * Model output is untrusted, so it is only ever markdown, and what it writes is never markup: raw HTML is not parsed (no
+ * rehype-raw), react-markdown turns each raw tag into a text node, so a `<script>` or an `<img onerror>` is the characters
+ * it was written with and never an element, while `Result<T>` or `<name>` stay visible. A link is kept only when it is
+ * `http(s)`, and then opens in a new tab with `rel="noopener noreferrer"`; any other link (`javascript:`, `data:`,
+ * `mailto:`) is its text. An image is its description: a picture the model points at would be fetched, and carry what
+ * was asked, to a server of the model's choosing.
  */
 const COMPONENTS: Components = {
   p: ({ children }) => <p>{inline(children, { markers: true })}</p>,
@@ -124,7 +140,7 @@ export function Markdown({ markdown, cited }: MarkdownProps) {
   return (
     <CitedContext value={cited ?? null}>
       <div className="md">
-        <ReactMarkdown skipHtml components={COMPONENTS}>
+        <ReactMarkdown components={COMPONENTS}>
           {markdown}
         </ReactMarkdown>
       </div>

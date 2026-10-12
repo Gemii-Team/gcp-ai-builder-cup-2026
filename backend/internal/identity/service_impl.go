@@ -310,21 +310,30 @@ func (m *Module) holdsScope(ctx context.Context, u store.IdentityUser, scope str
 	return slices.Contains(row.Scopes, scope), nil
 }
 
-// withMeetConsentMissing adds meet_consent=missing to the query of returnTo, keeping
-// what it had and its fragment. returnTo is the local path safeReturnTo kept.
+// meetConsentParam is the query parameter the consent callback adds to the address it returns to when no Meet grant came
+// out of the flow; the web reads it (apps/web useStartMeeting) and takes it off the address again.
+const meetConsentParam = "meet_consent"
+
+// withMeetConsentMissing makes the query of returnTo carry meetConsentParam=missing exactly once: the rest of the query is
+// kept byte for byte and in order (empty pairs dropped), a meet_consent it already had, in whatever encoding, is replaced,
+// and the fragment, which may itself hold a "?", is kept as it was. returnTo is the local path safeReturnTo kept, so the
+// result is one too.
 func withMeetConsentMissing(returnTo string) string {
-	path, fragment, hasFragment := strings.Cut(returnTo, "#")
-	switch {
-	case !strings.Contains(path, "?"):
-		path += "?"
-	case !strings.HasSuffix(path, "?") && !strings.HasSuffix(path, "&"):
-		path += "&"
+	rest, fragment, hasFragment := strings.Cut(returnTo, "#")
+	path, query, _ := strings.Cut(rest, "?")
+	pairs := make([]string, 0, 4)
+	for pair := range strings.SplitSeq(query, "&") {
+		name, _, _ := strings.Cut(pair, "=")
+		if decoded, err := url.QueryUnescape(name); pair == "" || (err == nil && decoded == meetConsentParam) {
+			continue
+		}
+		pairs = append(pairs, pair)
 	}
-	path += "meet_consent=missing"
+	out := path + "?" + strings.Join(append(pairs, meetConsentParam+"=missing"), "&")
 	if hasFragment {
-		path += "#" + fragment
+		out += "#" + fragment
 	}
-	return path
+	return out
 }
 
 // grantedScopes reads the scope of a token response: sorted, without duplicates.

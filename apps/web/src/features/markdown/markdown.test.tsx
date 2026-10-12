@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CitationView } from '../../api/types';
@@ -21,7 +21,8 @@ afterEach(() => {
 // The one renderer of every slip that shows model text (the Ask answer, the file and meeting summaries, the agent's answers
 // and channel summaries). The test names that start with AnswerMarkdown_ are those of the Ask answer's first renderer.
 describe('Markdown', () => {
-  it('AnswerMarkdown_StripsScriptAndRawHtml', () => {
+  // Raw HTML is inert text: the model's `Result<T>` or `<name>` stays visible, and nothing it writes becomes an element.
+  it('AnswerMarkdown_RendersRawHtmlAsText', () => {
     const { container } = show(
       [
         'Safe sentence.[1]',
@@ -35,12 +36,20 @@ describe('Markdown', () => {
     for (const element of container.querySelectorAll('*')) {
       expect([...element.attributes].map((attribute) => attribute.name).filter((name) => name.startsWith('on'))).toEqual([]);
     }
-    expect(container).not.toHaveTextContent('<script');
-    expect(container).not.toHaveTextContent('window.pwned');
     expect('pwned' in window).toBe(false);
-    // What the model wrote as words is kept.
+    // What the model wrote is on the page as the characters it wrote.
     expect(container).toHaveTextContent('Safe sentence.[1]');
-    expect(container).toHaveTextContent('Hello there');
+    expect(container).toHaveTextContent('<script>window.pwned = true</script>');
+    expect(container).toHaveTextContent('Hello <img src="x" onerror="window.pwned = true"> there <b onclick="window.pwned = true">bold</b>.');
+    expect(container).toHaveTextContent('<iframe src="https://evil.example"></iframe>');
+  });
+
+  it('Markdown_AngleBracketWords_StayVisible', () => {
+    const { container } = show('The type is Result<T>, the section is <TBD>, and the file is <name>.\n\n- a generic `List<T>` and a bare <T> in a list');
+
+    expect(container.querySelector('p')).toHaveTextContent('The type is Result<T>, the section is <TBD>, and the file is <name>.');
+    expect(container.querySelector('li')).toHaveTextContent('a generic List<T> and a bare <T> in a list');
+    expect(container.querySelector('T, TBD, name')).toBeNull();
   });
 
   it('keeps a link only when it is http(s), opens it safely, and shows any other link as its text', () => {
@@ -89,6 +98,45 @@ describe('Markdown', () => {
     expect(container).not.toHaveTextContent('**');
   });
 
+  // The newline that sits between the elements of a list item is structure, not a line break the model wrote: only a
+  // newline inside the words of a line is turned into a `<br>`.
+  for (const [name, markdown, items] of [
+    ['a loose list', '- a\n\n- b', ['a', 'b']],
+    ['a loose numbered list', '1. a\n\n2. b', ['a', 'b']],
+    ['a nested list', '- a\n  - b\n- c', ['ab', 'c']],
+    ['a flat tight list', '- a\n- b\n- c', ['a', 'b', 'c']],
+    ['a loose nested list', '- a\n\n  - b\n\n- c', ['ab', 'c']],
+  ] as const) {
+    it(`Markdown_${name.replaceAll(' ', '')}_HasNoBreakInItsItems`, () => {
+      const { container } = show(markdown);
+
+      expect(container.querySelectorAll('li br')).toHaveLength(0);
+      const list = container.querySelector('ul, ol');
+      expect([...(list?.querySelectorAll(':scope > li') ?? [])].map((item) => item.textContent.replaceAll(/\s+/g, ''))).toEqual([...items]);
+      for (const item of container.querySelectorAll('li')) {
+        expect(item.firstChild?.nodeName, 'the first node of an item').not.toBe('BR');
+        expect(item.lastChild?.nodeName, 'the last node of an item').not.toBe('BR');
+      }
+    });
+  }
+
+  it('Markdown_ARealBreakInsideAParagraph_IsStillABreakBetweenTheWords', () => {
+    for (const markdown of ['a\nb', 'a  \nb', 'a\\\nb']) {
+      const { container } = show(markdown);
+
+      expect(container.querySelector('p')?.innerHTML, markdown).toBe('a<br>b');
+      cleanup();
+    }
+  });
+
+  it('Markdown_ARealBreakInsideAListItem_IsStillABreak', () => {
+    const { container } = show('- first line\n  second line\n- other');
+
+    const [first, other] = [...container.querySelectorAll('li')];
+    expect(first.innerHTML).toBe('first line<br>second line');
+    expect(other.querySelector('br')).toBeNull();
+  });
+
   it('Markdown_LineBreaks_Survive', () => {
     const { container } = show('First line\nSecond line\n\nNew paragraph\\\nafter a hard break');
 
@@ -129,6 +177,8 @@ describe('Markdown', () => {
 
     expect(container.querySelector('script, a')).toBeNull();
     expect(container).toHaveTextContent('click');
+    expect(container).toHaveTextContent('<script>window.pwned = true</script>');
+    expect(container).toHaveTextContent('<a href="javascript:window.pwned=true">raw</a>');
     expect('pwned' in window).toBe(false);
   });
 

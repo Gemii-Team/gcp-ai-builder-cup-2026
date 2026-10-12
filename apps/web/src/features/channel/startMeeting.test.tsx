@@ -9,6 +9,7 @@ import { useUiStore } from '../../state/ui';
 import { meeting } from '../../testing/fixtures';
 import { openChannel } from '../../testing/openChannel';
 import { createStubApi } from '../../testing/stubApi';
+import { withoutQueryParam } from './useStartMeeting';
 
 beforeEach(() => {
   localStorage.clear();
@@ -261,6 +262,16 @@ describe('Start meeting: a consent round trip that gave no permission', () => {
     });
   });
 
+  it('removes the flag when its name is percent-encoded (meet%5Fconsent), as a browser or proxy may write it', async () => {
+    const { router } = openChannel({}, createStubApi(), '/c/ch-q4?x=1&meet%5Fconsent=missing&y=two');
+
+    await screen.findByRole('alert');
+
+    await waitFor(() => {
+      expect(router.state.location.href).toBe('/c/ch-q4?x=1&y=two');
+    });
+  });
+
   it('says nothing for a channel opened without the flag, or with a value it does not know', async () => {
     const { router } = openChannel({}, createStubApi(), '/c/ch-q4?meet_consent=granted');
 
@@ -296,4 +307,23 @@ describe('Start meeting: a consent round trip that gave no permission', () => {
     const latin = Array.from(alert.querySelectorAll('[lang="en"]')).map((run) => run.textContent);
     expect(latin).toEqual(expect.arrayContaining(['Google', 'K.I.W.I.', 'myaccount.google.com/permissions']));
   });
+});
+
+// The router hands the hook a normalised href, so the end-to-end tests above pass whatever this function does with an
+// encoded name; the function itself must not depend on that.
+describe('withoutQueryParam', () => {
+  for (const [href, expected] of [
+    ['/c/x?a=b&meet_consent=missing', '/c/x?a=b'],
+    ['/c/x?a=b&meet%5Fconsent=missing', '/c/x?a=b'],
+    ['/c/x?meet%5fconsent=missing#f', '/c/x#f'],
+    ['/c/x?meet_consent=missing&meet%5Fconsent=again&z=1', '/c/x?z=1'],
+    ['/c/x?a+b=1&meet%5Fconsent=missing&c=%20d', '/c/x?a+b=1&c=%20d'],
+    ['/c/x?a=b&meet_consentx=1&xmeet_consent=2', '/c/x?a=b&meet_consentx=1&xmeet_consent=2'],
+    ['/c/x?a=b#meet_consent=missing', '/c/x?a=b#meet_consent=missing'],
+    ['/c/x', '/c/x'],
+  ] as const) {
+    it(`withoutQueryParam(${href})`, () => {
+      expect(withoutQueryParam(href, 'meet_consent')).toBe(expected);
+    });
+  }
 });

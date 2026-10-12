@@ -374,6 +374,42 @@ func TestMeetError_TokenEndpointRefusal_IsRefusedNotUnavailable(t *testing.T) {
 	}
 }
 
+// The token endpoint's own HTTP status says more than its error code when it is the endpoint that is limiting or failing:
+// 429 is rate limiting and 5xx is the endpoint being down, as for Meet itself. Everything else, whatever the status, is the
+// OAuth client being refused, and so is an error with no response to read.
+func TestMeetError_TokenEndpointStatus_FollowsTheRulesOfMeetsStatus(t *testing.T) {
+	user := uuid.New()
+	for _, tc := range []struct {
+		name      string
+		response  *http.Response
+		code      string
+		wantCause string
+	}{
+		{"429", &http.Response{StatusCode: 429}, "rate_limit_exceeded", google.CauseRateLimited},
+		{"500", &http.Response{StatusCode: 500}, "server_error", google.CauseUnavailable},
+		{"503", &http.Response{StatusCode: 503}, "temporarily_unavailable", google.CauseUnavailable},
+		{"400 invalid_client", &http.Response{StatusCode: 400}, "invalid_client", google.CauseRefused},
+		{"401 invalid_client", &http.Response{StatusCode: 401}, "invalid_client", google.CauseRefused},
+		{"401 unauthorized_client", &http.Response{StatusCode: 401}, "unauthorized_client", google.CauseRefused},
+		{"403", &http.Response{StatusCode: 403}, "access_denied", google.CauseRefused},
+		{"no response", nil, "invalid_client", google.CauseRefused},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMeetStub(t)
+			refusal := &oauth2.RetrieveError{Response: tc.response, ErrorCode: tc.code, ErrorDescription: googleText}
+			tokens := func(context.Context, uuid.UUID, string) (oauth2.TokenSource, error) { return revoked{refusal}, nil }
+
+			_, err := newClient(t, m, tokens).CreateMeetSpace(t.Context(), user, false)
+
+			expectMeetError(t, err, google.ReasonMeetUnavailable, tc.wantCause, 0)
+			var got *oauth2.RetrieveError
+			if !errors.As(err, &got) || !strings.Contains(err.Error(), googleText) {
+				t.Errorf("err = %v, want the token endpoint's own error kept whole in the chain for the operator's log", err)
+			}
+		})
+	}
+}
+
 // The same classification covers every method of the client, not only the one
 // StartMeeting calls, and the poll's access check still sees what it always saw.
 func TestMeetError_EveryClientMethodClassifies(t *testing.T) {

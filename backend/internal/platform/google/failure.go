@@ -69,10 +69,12 @@ func (f *meetFailure) Unwrap() []error { return []error{f.err, f.meet} }
 // own. Only what came back from the HTTP call counts: an answer from Meet (a
 // *googleapi.Error), an answer from Google's token endpoint refusing the OAuth client
 // (a *oauth2.RetrieveError, which the http.Client also wraps in a *url.Error because
-// the request failed before it left: invalid_client and unauthorized_client mean the
-// operator's credentials are wrong or disabled, so it is told as a refusal, the one that
-// asks the person to tell whoever runs K.I.W.I.) or no answer at all (every transport
-// error, timeouts included, in a *url.Error). The refusal has no Meet status.
+// the request failed before it left) or no answer at all (every transport error,
+// timeouts included, in a *url.Error). A token endpoint that is limiting (429) or failing
+// (5xx) is told as Meet's own would be; any other refusal of it (invalid_client and
+// unauthorized_client mean the operator's credentials are wrong or disabled) is a
+// refusal, the cause that asks the person to tell whoever runs K.I.W.I. The token
+// endpoint is not Meet, so none of these has a Meet status.
 func classify(err error) *MeetError {
 	if errors.Is(err, context.Canceled) {
 		return nil
@@ -83,7 +85,15 @@ func classify(err error) *MeetError {
 	}
 	var token *oauth2.RetrieveError
 	if errors.As(err, &token) {
-		return &MeetError{Reason: ReasonMeetUnavailable, Cause: CauseRefused}
+		me := &MeetError{Reason: ReasonMeetUnavailable, Cause: CauseRefused}
+		switch {
+		case token.Response == nil:
+		case token.Response.StatusCode == http.StatusTooManyRequests:
+			me.Cause = CauseRateLimited
+		case token.Response.StatusCode >= http.StatusInternalServerError:
+			me.Cause = CauseUnavailable
+		}
+		return me
 	}
 	var transport *url.Error
 	if errors.As(err, &transport) {

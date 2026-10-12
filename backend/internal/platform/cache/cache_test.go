@@ -347,6 +347,34 @@ func TestOAuthState_TakeOnce(t *testing.T) {
 	}
 }
 
+// A state written before the Consent field existed (an old binary's, still in Valkey during a deploy) has no `consent` key:
+// it decodes as a plain sign-in, and a plain sign-in's state does not carry the key at all.
+func TestOAuthState_WithoutAConsentKey_DecodesAsNoConsent(t *testing.T) {
+	c := open(t, Options{})
+	ctx := context.Background()
+	state := uuid.NewString()
+	old := `{"verifier":"pkce-verifier","return_to":"/channels/general","nonce":"nonce-of-the-flow"}`
+	if err := c.rdb.Set(ctx, "oauth:"+state, old, 10*time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := c.TakeOAuthState(ctx, state)
+
+	want := OAuthState{Verifier: "pkce-verifier", ReturnTo: "/channels/general", Nonce: "nonce-of-the-flow"}
+	if err != nil || got != want || got.Consent {
+		t.Fatalf("TakeOAuthState = %+v, %v; want %+v with Consent false", got, err, want)
+	}
+
+	plain := uuid.NewString()
+	if err := c.PutOAuthState(ctx, plain, want); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := c.rdb.Get(ctx, "oauth:"+plain).Result()
+	if err != nil || strings.Contains(raw, "consent") {
+		t.Errorf("stored state of a plain sign-in = %s (%v), want no consent key: an old binary reads what a new one writes", raw, err)
+	}
+}
+
 func sorted(ids []uuid.UUID) []string {
 	out := make([]string, len(ids))
 	for i, id := range ids {

@@ -25,8 +25,11 @@ const MEET_FAILURE_KEY: Record<string, I18nKey> = {
 const CONSENT_MISSING_PARAM = 'meet_consent';
 const CONSENT_MISSING_VALUE = 'missing';
 
-/** `href` without the query parameter `name`, keeping the rest of the query and the fragment as they were. */
-function withoutQueryParam(href: string, name: string): string {
+/**
+ * `href` without the query parameter `name`, keeping the rest of the query and the fragment as they were. Names are
+ * compared decoded, so `meet%5Fconsent=missing` is the parameter `meet_consent` too.
+ */
+export function withoutQueryParam(href: string, name: string): string {
   const hashAt = href.indexOf('#');
   const hash = hashAt === -1 ? '' : href.slice(hashAt);
   const beforeHash = hashAt === -1 ? href : href.slice(0, hashAt);
@@ -37,7 +40,7 @@ function withoutQueryParam(href: string, name: string): string {
   const kept = beforeHash
     .slice(queryAt + 1)
     .split('&')
-    .filter((pair) => pair !== '' && pair.split('=')[0] !== name);
+    .filter((pair) => pair !== '' && !new URLSearchParams(pair).has(name));
   return `${beforeHash.slice(0, queryAt)}${kept.length > 0 ? `?${kept.join('&')}` : ''}${hash}`;
 }
 
