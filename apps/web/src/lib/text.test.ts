@@ -72,4 +72,22 @@ describe('initialOf', () => {
     expect(initialOf('อาทิตย์')).toBe('อ');
     expect(initialOf('   ')).toBe('?');
   });
+
+  it('keeps a Thai prefix vowel together with the consonant it is written before: เอก, แอน, ไผ่, โต, ใจ', () => {
+    expect(initialOf('เอก')).toBe('เอ');
+    expect(initialOf('แอน')).toBe('แอ');
+    expect(initialOf('ไผ่')).toBe('ไผ');
+    expect(initialOf('โต')).toBe('โต');
+    expect(initialOf('ใจ')).toBe('ใจ');
+    expect(initialOf('  เอก')).toBe('เอ');
+  });
+
+  it('keeps a prefix vowel that no consonant follows as it is, and a vowel that is not a prefix vowel is never joined', () => {
+    expect(initialOf('เ')).toBe('เ');
+    expect(initialOf('เ-')).toBe('เ');
+    expect(initialOf('เA')).toBe('เ');
+    expect(initialOf('เ๑')).toBe('เ');
+    expect(initialOf('อเก')).toBe('อ');
+    expect(initialOf('ะก')).toBe('ะ');
+  });
 });

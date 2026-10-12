@@ -419,7 +419,7 @@ describe('under LabelsProvider lang="th"', () => {
     await screen.findByRole('option', { name: 'สมชาย ว.' });
     expect(screen.getByRole('form', { name: 'สร้างงานจากข้อความนี้' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'ชื่องาน' })).toHaveValue('ส่งใบเสนอราคาให้ ACME');
-    expect(screen.getByRole('combobox', { name: 'แชนเนล' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'ช่องสนทนา' })).toBeInTheDocument();
     expect(within(screen.getByRole('combobox', { name: 'ผู้รับผิดชอบ' })).getByRole('option', { name: 'ไม่มีผู้รับผิดชอบ' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'กำหนดส่ง' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'สร้างงาน' })).toBeInTheDocument();

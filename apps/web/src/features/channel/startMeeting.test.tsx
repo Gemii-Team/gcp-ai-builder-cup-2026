@@ -151,7 +151,7 @@ describe('Start meeting: the Meet link opens in the account that created the spa
     expect(await startAs(`${MEET}?authuser=2`)).toBe(`${MEET}?authuser=2`);
   });
 
-  it('leaves a link that is not https on meet.google.com exactly as it is', async () => {
+  it('leaves an https link that is not on exactly meet.google.com exactly as it is', async () => {
     for (const uri of [
       'https://meet.example/abc-defg-hij',
       'https://notmeet.google.com/abc-defg-hij',
@@ -159,10 +159,34 @@ describe('Start meeting: the Meet link opens in the account that created the spa
       'https://evil.example/meet.google.com',
       'https://user@meet.google.com/abc-defg-hij',
       'https://meet.google.com:8443/abc-defg-hij',
-      'http://meet.google.com/abc-defg-hij',
-      'meet.google.com/abc-defg-hij',
     ]) {
       expect(await startAs(uri), uri).toBe(uri);
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('StartMeeting_LinkThatIsNotHttps_IsNeverOpenedAndTheNoticeSaysSoGenerically', async () => {
+    for (const uri of [
+      'http://meet.google.com/abc-defg-hij',
+      'meet.google.com/abc-defg-hij',
+      '//meet.google.com/abc-defg-hij',
+      'javascript:alert(document.cookie)',
+      'data:text/html,<script>alert(1)</script>',
+      'file:///etc/passwd',
+      'ftp://meet.google.com/abc-defg-hij',
+      'HTTP://meet.google.com/abc-defg-hij',
+    ]) {
+      const api = createStubApi();
+      const { user } = openChannel({}, api);
+      vi.spyOn(hardNavigate, 'open').mockImplementation(() => undefined);
+      api.meetings.startMeeting.mockResolvedValue(create(StartMeetingResponseSchema, { meeting: meeting({ meetUri: uri }), transcriptionAutomatic: true }));
+
+      await user.click(await startButton());
+
+      const notice = await noticeWith("Couldn't start the meeting. Try again.", 'alert');
+      expect(notice, uri).toBeInTheDocument();
+      expect(hardNavigate.open, uri).not.toHaveBeenCalled();
       cleanup();
       vi.restoreAllMocks();
     }

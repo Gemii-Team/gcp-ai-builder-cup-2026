@@ -72,8 +72,9 @@ export function withoutQueryParam(href: string, name: string): string {
 /**
  * Starts a Meet meeting for the channel as the signed-in person. A `FailedPrecondition` the API does not name a Meet failure
  * for means Google has not been granted yet: the page leaves for the consent flow, which returns to this route. A started
- * meeting opens its Meet link in a new tab, and says so when Meet will not transcribe it by itself (the host has to turn
- * that on). Any other failure says why when the API told why, and is otherwise reported generically, never silently dropped.
+ * meeting opens its Meet link in a new tab (a link that is not https is not opened, and the generic failure is shown), and
+ * says so when Meet will not transcribe it by itself (the host has to turn that on). Any other failure says why when the API
+ * told why, and is otherwise reported generically, never silently dropped.
  */
 export function useStartMeeting(channelId: string) {
   const api = useApi();
@@ -102,7 +103,12 @@ export function useStartMeeting(channelId: string) {
         setNotice({ role: 'status', key: 'startMeetingManualTranscription' });
       }
       if (meeting !== undefined && meeting.meetUri !== '') {
-        hardNavigate.open(withAuthUser(meeting.meetUri, email));
+        // The link comes from the server and goes to `window.open`: only an https link is ever opened (`javascript:`, `data:` and `http:` are not).
+        if (URL.canParse(meeting.meetUri) && new URL(meeting.meetUri).protocol === 'https:') {
+          hardNavigate.open(withAuthUser(meeting.meetUri, email));
+        } else {
+          setNotice({ role: 'alert', key: 'startMeetingFailed' });
+        }
       }
     } catch (error) {
       setStarting(false);

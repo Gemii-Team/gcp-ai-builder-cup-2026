@@ -167,11 +167,11 @@ describe('under LabelsProvider lang="th"', () => {
         <PendingSteps phase={phase} channelCount={channelCount} />
       </LabelsProvider>
     );
-    expect(screen.getByRole('status', { name: 'ความคืบหน้าของคำตอบ' })).toHaveTextContent('กำลังค้นหาจาก 1 แชนเนล…');
+    expect(screen.getByRole('status', { name: 'ความคืบหน้าของคำตอบ' })).toHaveTextContent('กำลังค้นหาจาก 1 ช่องสนทนา…');
     rerender(thai('retrieving', 5));
-    expect(screen.getByRole('status')).toHaveTextContent('กำลังค้นหาจาก 5 แชนเนล…');
+    expect(screen.getByRole('status')).toHaveTextContent('กำลังค้นหาจาก 5 ช่องสนทนา…');
     rerender(thai('writing', 5));
-    expect(screen.getByRole('status')).toHaveTextContent('ค้นหาจาก 5 แชนเนลแล้ว');
+    expect(screen.getByRole('status')).toHaveTextContent('ค้นหาจาก 5 ช่องสนทนาแล้ว');
     expect(screen.getByRole('status')).toHaveTextContent('กำลังเขียนคำตอบ…');
     for (const fragment of ENGLISH_FRAGMENTS) {
       expect(readable(container), fragment).not.toContain(fragment);

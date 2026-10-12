@@ -1,6 +1,13 @@
-/** The first character of a name for an avatar tile: a whole code point, so a Thai consonant or an emoji is never cut. */
+/** A Thai prefix vowel (เ แ โ ใ ไ) and the consonant it is written before: one letter to read, though the vowel comes first in the text. */
+const THAI_PREFIX_VOWEL_AND_CONSONANT = /^[\u0E40-\u0E44][\u0E01-\u0E2E]/u;
+
+/**
+ * The first character of a name for an avatar tile: a whole code point, so a Thai consonant or an emoji is never cut; a Thai
+ * prefix vowel that a consonant follows keeps it (`เอก` is `เอ`, not a lone vowel).
+ */
 export function initialOf(name: string): string {
-  return Array.from(name.trim())[0]?.toUpperCase() ?? '?';
+  const trimmed = name.trim();
+  return (THAI_PREFIX_VOWEL_AND_CONSONANT.exec(trimmed)?.[0] ?? Array.from(trimmed)[0])?.toUpperCase() ?? '?';
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });

@@ -17,8 +17,8 @@ export const th: UiLabels = {
 
   // Pending
   answerProgress: 'ความคืบหน้าของคำตอบ',
-  retrieving: { one: 'กำลังค้นหาจาก {count} แชนเนล…', other: 'กำลังค้นหาจาก {count} แชนเนล…' },
-  retrieved: { one: 'ค้นหาจาก {count} แชนเนลแล้ว', other: 'ค้นหาจาก {count} แชนเนลแล้ว' },
+  retrieving: { one: 'กำลังค้นหาจาก {count} ช่องสนทนา…', other: 'กำลังค้นหาจาก {count} ช่องสนทนา…' },
+  retrieved: { one: 'ค้นหาจาก {count} ช่องสนทนาแล้ว', other: 'ค้นหาจาก {count} ช่องสนทนาแล้ว' },
   writingAnswer: 'เขียนคำตอบ',
   writingAnswerNow: 'กำลังเขียนคำตอบ…',
 
@@ -100,7 +100,7 @@ export const th: UiLabels = {
 
   // Task form and created card
   taskFieldTitle: 'ชื่องาน',
-  taskFieldChannel: 'แชนเนล',
+  taskFieldChannel: 'ช่องสนทนา',
   dueDate: 'กำหนดส่ง',
   createTask: 'สร้างงาน',
   createFailed: 'สร้างงานไม่ได้ ลองอีกครั้ง',
