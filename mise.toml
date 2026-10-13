@@ -9,7 +9,7 @@ pnpm = "10"
 # Code generation
 buf = "1.59"
 sqlc = "1.30"
-goose = "3.26"
+"aqua:pressly/goose" = "3.26" # the registry has no bare "goose" (ambiguous with aaif-goose/goose)
 
 # Local cluster
 kubectl = "1.34"
