@@ -88,14 +88,15 @@ resource "google_sql_database_instance" "this" {
       update_track = "stable"
     }
 
-    # max_connections on db-g1-small
+    # max_connections
     #
-    # The app opens up to 20 (kiwi_app) + 16 (kiwi_system) connections per process, and both sizes
-    # are constants in backend/internal/platform/db/db.go, not configuration. Cloud SQL's default
-    # max_connections follows memory: 25 on db-f1-micro, 50 on db-g1-small, 100 from 3.75 GB.
-    # One instance needs 36 of them. A rollout keeps the old revision alive for as long as its
-    # WebSockets stay open (up to the 60-minute request timeout), so two instances need 72, and the
-    # migrate and seed Jobs, Cloud SQL's own agents and the reserved superuser slots come on top.
+    # === The "full" profile: db-g1-small, max_connections 100 ===================================
+    # The app opens up to 20 (kiwi_app) + 16 (kiwi_system) connections per process unless told
+    # otherwise: those are its built-in sizes. Cloud SQL's default max_connections follows memory:
+    # 25 on db-f1-micro, 50 on db-g1-small, 100 from 3.75 GB. One instance needs 36 of them. A
+    # rollout keeps the old revision alive for as long as its WebSockets stay open (up to the
+    # 60-minute request timeout), so two instances need 72, and the migrate and seed Jobs, Cloud
+    # SQL's own agents and the reserved superuser slots come on top.
     #
     # The flag may be raised on db-g1-small: the Cloud SQL flags page gives its range as 14 to
     # "varies", bounded only by max_connections + autovacuum_max_workers + max_worker_processes
@@ -111,9 +112,63 @@ resource "google_sql_database_instance" "this" {
     # here; this is the first thing to check under the k6 run.] If memory pressure shows, raise
     # the tier (db-custom-1-3840) instead of lowering this number below 72 + Jobs.
     #
-    # App-side follow-up (architecture review F10): make the pool sizes configuration
-    # (KIWI_DB_APP_MAX_CONNS, KIWI_DB_SYSTEM_MAX_CONNS) and close idle connections after about two
-    # minutes. With 10 + 6 connections the default of 50 is enough through a rollout.
+    # === The "minimal" profile: db-g1-small, max_connections 50, pools of 6 + 6 ================
+    # The live unit passes tier = db-g1-small and max_connections = 50 (the default of that tier,
+    # pinned so a change of Cloud SQL's defaults cannot shrink it silently) and the app gets
+    # KIWI_DB_APP_MAX_CONNS = 6, KIWI_DB_SYSTEM_MAX_CONNS = 6 and KIWI_DB_MAX_CONN_IDLE = 2m
+    # (architecture review F10). 6 is the lowest system pool the app accepts: the outbox relay
+    # holds 4 system connections while jobs run, plus 2 of headroom.
+    #
+    # What Google documents, read 2026-10-14:
+    #  - pgvector: "PostgreSQL versions 13 and later support version 0.8.5", so PostgreSQL 17 has
+    #    it, and the page restricts no extension by machine type, shared-core included. Extensions
+    #    are created by members of cloudsqlsuperuser (the owner is one).
+    #    https://docs.cloud.google.com/sql/docs/postgres/extensions
+    #  - Memory: db-f1-micro 0.614 GB, db-g1-small 1.7 GB.
+    #    https://docs.cloud.google.com/sql/docs/postgres/machine-series-overview
+    #  - Shared-core machine types exist in the Enterprise edition only, and PostgreSQL 16 and
+    #    later default to Enterprise Plus, so the edition is always set (see the precondition).
+    #    https://docs.cloud.google.com/sql/docs/postgres/editions-intro
+    #  - max_connections defaults: tiny (~0.5 GB) 25, small (~1.7 GB) 50, from 3.75 GB 100. The
+    #    range is 14 to "varies" and nothing there ties it to a tier, so the flag CAN be raised on
+    #    db-f1-micro. shared_buffers defaults to a third of the instance's memory.
+    #    https://docs.cloud.google.com/sql/docs/postgres/flags
+    #  - Shared-core and single-zone instances are outside the Cloud SQL SLA: expect no
+    #    availability guarantee on either tier.
+    #    https://docs.cloud.google.com/sql/docs/postgres/operational-guidelines
+    #
+    # Connection math, the ceiling and not the usual case (a pool opens connections when it needs
+    # them and closes idle ones after 2m, so the old revision's pools shrink while it lingers):
+    #
+    #   the service, two revisions alive in a rollout   2 x (6 app + 6 system)    = 24
+    #   the seed Job, its own pools                         6 app + 6 system      = 12
+    #   the migrate Job, the owner's connection             goose, one at a time  =  2
+    #   reserved: PostgreSQL superuser_reserved_connections (default 3), Cloud SQL's
+    #     own agents and one operator's psql session    [INFERENCE: no Google page    =  8
+    #                                                    gives the agents' count]
+    #                                                                       total  = 46 <= 50
+    #
+    # scripts/iac/check.sh recomputes this from the rendered inputs of the cloudrun and cloudsql
+    # units and fails when the sum exceeds max_connections. Raising a pool without raising the
+    # flag (and checking memory) fails the check; the other way round (flag up, pools unchanged)
+    # passes.
+    #
+    # Why db-g1-small and not db-f1-micro. The flag could be raised to 50 on db-f1-micro, so the
+    # connection count is not what decides it: memory is. 0.614 GB with shared_buffers at a third
+    # (about 205 MB) leaves about 410 MB for the operating system, Cloud SQL's agents and every
+    # backend, and a backend that runs the row-security policies, a sort or an HNSW scan holds
+    # several MB of its own [INFERENCE: typical PostgreSQL behaviour, not measured here]. An
+    # out-of-memory kill restarts the instance and drops every connection in the middle of a demo,
+    # to save about $39.51 over 18 Oct - 4 Dec (Singapore list price, 1,152 h x ($0.0490 - $0.0147)).
+    # db-g1-small (1.7 GB, shared_buffers about 580 MB) leaves about 1.1 GB.
+    #
+    # Memory risk that remains on db-g1-small, and what to watch. Nothing here was measured. If the
+    # instance's memory metric stays above about 80% or it restarts, move to db-custom-1-3840
+    # (3.75 GB, default max_connections 100) before touching the pools. Shared-core CPU is
+    # burstable, and neither tier has an SLA.
+    #
+    # The flag restarts the instance when it changes. Pool sizes live in
+    # deploy/terraform/live/root.hcl.
     dynamic "database_flags" {
       for_each = var.max_connections == null ? [] : [var.max_connections]
       content {

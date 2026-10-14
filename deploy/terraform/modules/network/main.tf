@@ -27,8 +27,11 @@ resource "google_compute_subnetwork" "run" {
 }
 
 # The address Memorystore for Valkey gets through Private Service Connect is allocated from this
-# subnet by the service connection policy below.
+# subnet by the service connection policy below. Both exist only when valkey_enabled (the "full"
+# profile): the "minimal" profile has no Valkey, so it has no use for a reserved subnet or policy.
 resource "google_compute_subnetwork" "valkey" {
+  count = var.valkey_enabled ? 1 : 0
+
   project                  = var.project_id
   name                     = "${var.network_name}-valkey-psc"
   region                   = var.region
@@ -44,16 +47,30 @@ resource "google_compute_subnetwork" "valkey" {
 }
 
 resource "google_network_connectivity_service_connection_policy" "valkey" {
+  count = var.valkey_enabled ? 1 : 0
+
   project       = var.project_id
   name          = "${var.network_name}-memorystore"
   location      = var.region
   service_class = "gcp-memorystore"
   network       = google_compute_network.this.id
-  description   = "Lets Memorystore for Valkey create its Private Service Connect endpoint in ${google_compute_subnetwork.valkey.name}."
+  description   = "Lets Memorystore for Valkey create its Private Service Connect endpoint in ${google_compute_subnetwork.valkey[0].name}."
 
   psc_config {
-    subnetworks = [google_compute_subnetwork.valkey.id]
+    subnetworks = [google_compute_subnetwork.valkey[0].id]
   }
+}
+
+# A stack applied before these became optional keeps its subnet and policy: the same objects, a
+# new address in state.
+moved {
+  from = google_compute_subnetwork.valkey
+  to   = google_compute_subnetwork.valkey[0]
+}
+
+moved {
+  from = google_network_connectivity_service_connection_policy.valkey
+  to   = google_network_connectivity_service_connection_policy.valkey[0]
 }
 
 # Private services access for Cloud SQL: a reserved range and a peering with Google's service

@@ -1,4 +1,5 @@
-# The two Jobs, the same image as the sidecar:
+# The two Jobs, the same image as the service (in the minimal profile that is the one all-in-one
+# kiwi image; there is no other):
 #
 #   migrate  `kiwi migrate`: applies the migrations as the table owner and (app-side, F02)
 #            bootstraps the kiwi_app, kiwi_system and kiwi_ro roles from the passwords in their
@@ -8,8 +9,12 @@
 #            (the addresses are not in this repository; F20 asks for the canonical list).
 #
 # One task, no retries, no parallelism: a migration that fails must be read, not run again by
-# itself, and two at once would race (F27). Both run as kiwi-jobs and reach Cloud SQL and Valkey
-# through the same Direct VPC egress as the service.
+# itself, and two at once would race (F27). Both run as kiwi-jobs and reach Cloud SQL (and Valkey
+# in the full profile) through the same Direct VPC egress as the service.
+#
+# The seed Job loads the configuration of `kiwi serve`, so it gets the same cache and pool
+# variables as the service (env.tf) and opens its own pools: its app and system pools are part of
+# the Cloud SQL max_connections budget (modules/cloudsql/main.tf).
 resource "google_cloud_run_v2_job" "migrate" {
   project  = var.project_id
   name     = var.migrate_job_name

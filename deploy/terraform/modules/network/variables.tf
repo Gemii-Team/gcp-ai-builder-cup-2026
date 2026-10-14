@@ -73,3 +73,14 @@ variable "flow_log_sampling" {
     error_message = "flow_log_sampling must be greater than 0 and at most 1."
   }
 }
+
+variable "valkey_enabled" {
+  description = <<-EOT
+    Whether to create the Private Service Connect subnet and the service connection policy that
+    Memorystore for Valkey needs. True for the "full" profile; false for "minimal", which has no
+    Valkey (the app uses an in-process cache). Nothing else in this module depends on it: the VPC,
+    the Cloud Run subnet and private services access for Cloud SQL are always created.
+  EOT
+  type        = bool
+  default     = true
+}

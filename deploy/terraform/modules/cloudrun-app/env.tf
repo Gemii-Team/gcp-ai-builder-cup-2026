@@ -10,13 +10,23 @@
 #   KIWI_ROLES                  api,realtime,worker,agents             read (one process runs every role)
 #   KIWI_PUBLIC_URL             var.public_url                         read
 #   KIWI_BUS_PROVIDER           memory                                 read (the only bus; one instance only)
-#   KIWI_VALKEY_URL             var.valkey_url                         read
+#   KIWI_VALKEY_URL             var.valkey_url (full profile only)     read
+#   KIWI_CACHE_PROVIDER         memory (minimal profile only)          minimal-profile contract: the cache and the live-frame fan-out
+#                                                                      are in-process, so all four roles run in ONE process and the
+#                                                                      service is exactly one instance
+#   KIWI_WEB_DIR                /app/web (minimal profile only)        minimal-profile contract: kiwi serves the built web app itself
+#   KIWI_DB_APP_MAX_CONNS       var.db_app_max_conns                   minimal-profile contract (F10); set only when given
+#   KIWI_DB_SYSTEM_MAX_CONNS    var.db_system_max_conns                same; at least 6 (the relay holds 4 system connections, plus 2)
+#   KIWI_DB_MAX_CONN_IDLE       var.db_max_conn_idle                   same; a Go duration, idle connections are closed after it
 #   KIWI_BLOB_URL               var.blob_url (gs://...)                read, but config.go refuses every scheme but file:// (F03: GCS adapter)
 #   KIWI_LLM_PROVIDER           vertex                                 read; no vertex adapter is built (F01, F05)
 #   KIWI_LLM_MODEL_FLASH / _PRO var.vertex_model_flash / _pro          read
 #   KIWI_ASR_MODEL              var.vertex_asr_model                   read
 #   KIWI_EMBED_MODEL            var.vertex_embedding_model             read
-#   KIWI_LISTEN_ADDR            :<kiwi_port>                           NOT read: both containers hard-code :8080 (F07)
+#   KIWI_LISTEN_ADDR            :<kiwi_port> (full profile only)       NOT read: both containers hard-code :8080 (F07). The minimal
+#                                                                      profile leaves it EMPTY: kiwi then listens on :$PORT, which Cloud Run sets
+#   PORT                        <kiwi_port> (full profile sidecar)     never set in the minimal profile: Cloud Run sets it on the ingress
+#                                                                      container and rejects it in the environment
 #   KIWI_VERTEX_PROJECT         var.vertex_project_id                  NOT read (F45)
 #   KIWI_VERTEX_LOCATION        var.vertex_location                    NOT read (F45)
 #   KIWI_VERTEX_EMBED_LOCATION  var.vertex_embedding_location          NOT read (F45)
@@ -32,9 +42,13 @@
 # prod process refuses anything else). KIWI_LLM_BASE_URL, KIWI_LLM_API_KEY and KIWI_EMBED_BASE_URL
 # are the LiteLLM and Ollama endpoints; config.Load still requires them of the worker and agents
 # roles, which makes a Vertex-only deployment impossible until they become optional for the
-# vertex provider (F01). The ingress container gets KIWI_UPSTREAM and KIWI_PUBLIC_URL for the
-# production Caddyfile (proxy /api and /ws to the sidecar, redirect other hosts: F07, F17).
+# vertex provider (F01). In the full profile the ingress container gets KIWI_UPSTREAM and
+# KIWI_PUBLIC_URL for the production Caddyfile (proxy /api and /ws to the sidecar, redirect other
+# hosts: F07, F17); the minimal profile has no such container.
 locals {
+  # The minimal profile: one container, kiwi, which is also the ingress container.
+  single = var.single_container
+
   vertex_project = coalesce(var.vertex_project_id, var.project_id)
   model_pro      = coalesce(var.vertex_model_pro, var.vertex_model_flash)
   asr_model      = coalesce(var.vertex_asr_model, var.vertex_model_flash)
@@ -42,13 +56,27 @@ locals {
   kiwi_memory    = "${var.kiwi_memory_gib}Gi"
   gomemlimit_mib = floor(var.kiwi_memory_gib * 1024 * 0.8)
 
+  # The all-in-one image keeps the built web app here (deploy/minimal/Dockerfile).
+  web_dir = "/app/web"
+
+  # Valkey when there is a URL for one; otherwise the process keeps the cache itself, which only
+  # works while every role runs in one process: that is the one-instance rule of service.tf.
+  cache_env = var.valkey_url == null ? { KIWI_CACHE_PROVIDER = "memory" } : { KIWI_VALKEY_URL = var.valkey_url }
+
+  # The database pools, set only when given. The service and the seed Job both receive them, and
+  # the Cloud SQL max_connections budget counts both (modules/cloudsql/main.tf).
+  pool_env = merge(
+    var.db_app_max_conns == null ? {} : { KIWI_DB_APP_MAX_CONNS = tostring(var.db_app_max_conns) },
+    var.db_system_max_conns == null ? {} : { KIWI_DB_SYSTEM_MAX_CONNS = tostring(var.db_system_max_conns) },
+    var.db_max_conn_idle == null ? {} : { KIWI_DB_MAX_CONN_IDLE = var.db_max_conn_idle },
+  )
+
   core_env = merge(
     {
       KIWI_ENV                   = "prod"
       KIWI_ROLES                 = "api,realtime,worker,agents"
       KIWI_PUBLIC_URL            = var.public_url
       KIWI_BUS_PROVIDER          = "memory"
-      KIWI_VALKEY_URL            = var.valkey_url
       KIWI_BLOB_URL              = var.blob_url
       KIWI_LLM_PROVIDER          = "vertex"
       KIWI_LLM_MODEL_FLASH       = var.vertex_model_flash
@@ -60,23 +88,54 @@ locals {
       KIWI_VERTEX_LOCATION       = var.vertex_location
       KIWI_VERTEX_EMBED_LOCATION = var.vertex_embedding_location
     },
+    local.cache_env,
+    local.pool_env,
     var.vertex_location == "global" ? { KIWI_VERTEX_ALLOW_GLOBAL = "true" } : {},
   )
 
-  # The sidecar: everything above, the port it must listen on, and the memory ceiling the Go
-  # runtime should respect so the garbage collector works before the container is killed.
-  # PORT is for images that read it: the placeholder image listens on it, and a sidecar gets no
-  # PORT from Cloud Run (only the ingress container does), so without it the placeholder would
-  # try to take the ingress port. The real image ignores it.
-  kiwi_env = merge(var.extra_env, local.core_env, {
-    KIWI_LISTEN_ADDR = ":${var.kiwi_port}"
-    GOMEMLIMIT       = "${local.gomemlimit_mib}MiB"
-    PORT             = tostring(var.kiwi_port)
+  # What only the serving container is told, on top of core_env.
+  #
+  # Full: the sidecar's own port, and PORT for images that read it. The placeholder image listens
+  # on $PORT, and a sidecar gets no PORT from Cloud Run (only the ingress container does), so
+  # without it the placeholder would try to take the ingress port. The real image ignores it.
+  #
+  # Minimal: the web app's directory, and NO listen address and NO PORT. kiwi listens on :$PORT
+  # when KIWI_LISTEN_ADDR is empty, and Cloud Run injects PORT into the ingress container (the
+  # container's `ports` block below): setting either here would be a second source of truth, and
+  # Cloud Run does not accept PORT in the environment.
+  serving_env = merge(
+    local.single ? { KIWI_WEB_DIR = local.web_dir } : {},
+    local.single ? {} : { KIWI_LISTEN_ADDR = ":${var.kiwi_port}", PORT = tostring(var.kiwi_port) },
+  )
+
+  # The memory ceiling the Go runtime should respect so the garbage collector works before the
+  # container is killed.
+  kiwi_env = merge(var.extra_env, local.core_env, local.serving_env, {
+    GOMEMLIMIT = "${local.gomemlimit_mib}MiB"
   })
 
   web_env = {
     KIWI_UPSTREAM   = "localhost:${var.kiwi_port}"
     KIWI_PUBLIC_URL = var.public_url
+  }
+
+  # The port the probes of the kiwi container call: its own, which is the ingress port when it is
+  # the only container.
+  kiwi_probe_port = local.single ? var.web_port : var.kiwi_port
+
+  # The startup probe of the kiwi container. Both budgets are three minutes: Direct VPC egress can
+  # delay the start by a minute or more. The minimal profile polls every 2 s instead of 5 s so a
+  # new revision is declared ready, and takes the traffic, up to 3 s sooner: during a rollout the
+  # old revision and its in-process cache are still alive until then (see service.tf). The probe
+  # timeout cannot exceed the period (Cloud Run health checks documentation).
+  kiwi_startup_probe = local.single ? {
+    period_seconds    = 2
+    timeout_seconds   = 2
+    failure_threshold = 90
+    } : {
+    period_seconds    = 5
+    timeout_seconds   = 3
+    failure_threshold = 36
   }
 
   # The seed Job runs `kiwi seed`, which loads the configuration of `kiwi serve` (every role).
