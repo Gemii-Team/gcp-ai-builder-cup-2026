@@ -54,7 +54,7 @@ tasks:
       - bash scripts/check-gen-drift.sh
 
   iac:check:
-    desc: "Check deploy/terraform offline, with every Google credential removed: terraform fmt, init, validate and test of each module (mocked google provider), tflint, a trivy configuration scan, and a render, init and validate of the Terragrunt stack against mock outputs. Plans and applies nothing and never initialises the state backend. Needs terraform (>= 1.11), terragrunt, tflint and trivy on PATH and network access (provider and ruleset downloads)"
+    desc: "Check deploy/terraform offline, with every Google credential removed: terraform fmt, init, validate and test of each module (mocked google provider), tflint, a trivy configuration scan, and, for each profile (minimal and full), a render, init and validate of the Terragrunt stack against mock outputs plus the inputs the profile passes and the Cloud SQL connection budget. Plans and applies nothing and never initialises the state backend. Needs terraform (>= 1.11), terragrunt, tflint and trivy on PATH and network access (provider and ruleset downloads)"
     cmds:
       - bash scripts/iac/check.sh
 
