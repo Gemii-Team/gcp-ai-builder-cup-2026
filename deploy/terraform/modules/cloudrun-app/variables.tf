@@ -74,10 +74,11 @@ variable "subnet_name" {
 
 variable "single_container" {
   description = <<-EOT
-    The "minimal" profile's shape: one container, the all-in-one kiwi image, which serves the web
-    app itself (KIWI_WEB_DIR) and listens on the port Cloud Run passes ($PORT). There is no Caddy
-    ingress container and no sidecar: web_image, web_cpu, web_memory and kiwi_port are not used.
-    False builds the "full" profile: a Caddy ingress container plus the kiwi sidecar.
+    The "minimal" profile's shape: one container, the all-in-one kiwi image (deploy/minimal/Dockerfile),
+    which serves the web app itself (KIWI_WEB_DIR=/app/web) and listens on the port Cloud Run passes
+    ($PORT). There is no Caddy ingress container and no sidecar: web_image, web_cpu, web_memory
+    and kiwi_port are not used. False builds the "full" profile: a Caddy ingress container plus the
+    kiwi sidecar.
   EOT
   type        = bool
   default     = false
@@ -103,10 +104,13 @@ variable "web_image" {
 variable "kiwi_image" {
   description = <<-EOT
     The kiwi image, used by the service (the sidecar in the full profile, the only container in
-    the minimal one) and by both Jobs, or null for placeholders. A placeholder service container
-    is Google's public hello image; a placeholder Job is an image with no program in it, so
-    executing a Job before CI has deployed the real image fails at once instead of "succeeding"
-    without having migrated anything. As for web_image, CI owns the image after the first apply.
+    the minimal one) and by both Jobs, or null for placeholders. The minimal profile's image is
+    built from deploy/minimal/Dockerfile with the repository root as the context: /app/kiwi,
+    /app/web, ENTRYPOINT ["/app/kiwi"] and no CMD, so no arguments means `serve` and the Jobs
+    pass `migrate` and `seed`. A placeholder service container is Google's public hello image; a
+    placeholder Job is an image with no program in it, so executing a Job before CI has deployed
+    the real image fails at once instead of "succeeding" without having migrated anything. As for
+    web_image, CI owns the image after the first apply.
   EOT
   type        = string
   default     = null

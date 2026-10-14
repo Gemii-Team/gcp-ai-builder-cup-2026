@@ -1,8 +1,9 @@
 # The environment of the binary on Cloud Run, mapped from the variables it reads
 # (backend/internal/platform/config/config.go) plus the ones the architecture review names for
-# the parts that do not exist yet. "read today" is checked against config.go; the rest are
-# app-side dependencies this module can set but cannot make the binary honour. Nothing is
-# faked to get around one (no dummy value for a variable that would silence a check).
+# the parts that do not exist yet. "read" is checked against config.go as merged with the
+# minimal-profile app work; "NOT read" is an app-side dependency this module can set but cannot
+# make the binary honour. Nothing is faked to get around one (no dummy value for a variable that
+# would silence a check).
 #
 #   variable                    value                                  status in the binary
 #   --------------------------  -------------------------------------  ------------------------------
@@ -10,23 +11,25 @@
 #   KIWI_ROLES                  api,realtime,worker,agents             read (one process runs every role)
 #   KIWI_PUBLIC_URL             var.public_url                         read
 #   KIWI_BUS_PROVIDER           memory                                 read (the only bus; one instance only)
-#   KIWI_VALKEY_URL             var.valkey_url (full profile only)     read
-#   KIWI_CACHE_PROVIDER         memory (minimal profile only)          minimal-profile contract: the cache and the live-frame fan-out
-#                                                                      are in-process, so all four roles run in ONE process and the
-#                                                                      service is exactly one instance
-#   KIWI_WEB_DIR                /app/web (minimal profile only)        minimal-profile contract: kiwi serves the built web app itself
-#   KIWI_DB_APP_MAX_CONNS       var.db_app_max_conns                   minimal-profile contract (F10); set only when given
-#   KIWI_DB_SYSTEM_MAX_CONNS    var.db_system_max_conns                same; at least 6 (the relay holds 4 system connections, plus 2)
-#   KIWI_DB_MAX_CONN_IDLE       var.db_max_conn_idle                   same; a Go duration, idle connections are closed after it
+#   KIWI_VALKEY_URL             var.valkey_url (full profile only)     read; required only when KIWI_CACHE_PROVIDER is valkey (the default)
+#   KIWI_CACHE_PROVIDER         memory (minimal profile only)          read: the cache, tickets, OAuth state and live-frame fan-out are
+#                                                                      in-process and sessions are rows in Postgres, so all four roles
+#                                                                      must run in ONE process: the service is exactly one instance
+#   KIWI_WEB_DIR                /app/web (minimal profile only)        read: kiwi serves the built web app itself (the image also sets it)
+#   KIWI_DB_APP_MAX_CONNS       var.db_app_max_conns                   read (F10: done); set only when given, the app's own default is 20
+#   KIWI_DB_SYSTEM_MAX_CONNS    var.db_system_max_conns                read; at least 6 (the relay holds 4 system connections, plus 2); default 16
+#   KIWI_DB_MAX_CONN_IDLE       var.db_max_conn_idle                   read; a Go duration, idle connections are closed after it; default 30m
+#   KIWI_LISTEN_ADDR            :<kiwi_port> (full profile only)       read; empty means :$PORT, and without PORT :8080 (F07: done). The
+#                                                                      minimal profile leaves it EMPTY so kiwi listens on the port Cloud Run
+#                                                                      gives the ingress container; the full profile's sidecar needs its own
+#   PORT                        <kiwi_port> (full profile sidecar)     read by the binary only when KIWI_LISTEN_ADDR is empty. Cloud Run
+#                                                                      injects PORT into the ingress container and documents it as reserved
+#                                                                      ("you shouldn't set it yourself"); the minimal profile never sets it
 #   KIWI_BLOB_URL               var.blob_url (gs://...)                read, but config.go refuses every scheme but file:// (F03: GCS adapter)
 #   KIWI_LLM_PROVIDER           vertex                                 read; no vertex adapter is built (F01, F05)
 #   KIWI_LLM_MODEL_FLASH / _PRO var.vertex_model_flash / _pro          read
 #   KIWI_ASR_MODEL              var.vertex_asr_model                   read
 #   KIWI_EMBED_MODEL            var.vertex_embedding_model             read
-#   KIWI_LISTEN_ADDR            :<kiwi_port> (full profile only)       NOT read: both containers hard-code :8080 (F07). The minimal
-#                                                                      profile leaves it EMPTY: kiwi then listens on :$PORT, which Cloud Run sets
-#   PORT                        <kiwi_port> (full profile sidecar)     never set in the minimal profile: Cloud Run sets it on the ingress
-#                                                                      container and rejects it in the environment
 #   KIWI_VERTEX_PROJECT         var.vertex_project_id                  NOT read (F45)
 #   KIWI_VERTEX_LOCATION        var.vertex_location                    NOT read (F45)
 #   KIWI_VERTEX_EMBED_LOCATION  var.vertex_embedding_location          NOT read (F45)
@@ -38,13 +41,22 @@
 #   The Jobs: KIWI_MIGRATE_DATABASE_URL (migrate only, read), and the app, system and read-only
 #     strings for the migrate Job's role bootstrap (NOT built: F02).
 #
+# The image. The service and both Jobs run ONE image in the minimal profile, built from
+# deploy/minimal/Dockerfile with the repository root as the build context
+# (`docker build -f deploy/minimal/Dockerfile .`): the binary at /app/kiwi, the web app at
+# /app/web, ENV KIWI_WEB_DIR=/app/web, ENTRYPOINT ["/app/kiwi"] and no CMD. This module therefore
+# sets no `command` and no `args` on the service (no arguments means `serve`) and the Jobs pass
+# only the subcommand (`migrate`, `seed`). The full profile's sidecar runs backend/Dockerfile's
+# image (the same binary path and entrypoint, no web app), with a Caddy image in front.
+#
 # Not set, on purpose: KIWI_OIDC_ISSUER and KIWI_OIDC_INTERNAL_URL (the default is Google's, and a
 # prod process refuses anything else). KIWI_LLM_BASE_URL, KIWI_LLM_API_KEY and KIWI_EMBED_BASE_URL
 # are the LiteLLM and Ollama endpoints; config.Load still requires them of the worker and agents
 # roles, which makes a Vertex-only deployment impossible until they become optional for the
 # vertex provider (F01). In the full profile the ingress container gets KIWI_UPSTREAM and
 # KIWI_PUBLIC_URL for the production Caddyfile (proxy /api and /ws to the sidecar, redirect other
-# hosts: F07, F17); the minimal profile has no such container.
+# hosts: F07, F17); the minimal profile has no such container, and the binary has no host
+# redirect of its own (F17).
 locals {
   # The minimal profile: one container, kiwi, which is also the ingress container.
   single = var.single_container
@@ -95,14 +107,19 @@ locals {
 
   # What only the serving container is told, on top of core_env.
   #
-  # Full: the sidecar's own port, and PORT for images that read it. The placeholder image listens
+  # Full: the sidecar's own port as KIWI_LISTEN_ADDR, and PORT for the placeholder image. The
+  # binary no longer needs PORT (it reads KIWI_LISTEN_ADDR first); the hello placeholder listens
   # on $PORT, and a sidecar gets no PORT from Cloud Run (only the ingress container does), so
-  # without it the placeholder would try to take the ingress port. The real image ignores it.
+  # without it the placeholder would take the ingress port. Cloud Run documents PORT as reserved
+  # ("you shouldn't set it yourself": docs.cloud.google.com/run/docs/configuring/services/environment-variables);
+  # whether it is refused on a sidecar is unverified, and it is how the full profile has always
+  # been built. If it is refused, drop PORT here: the real image does not need it.
   #
   # Minimal: the web app's directory, and NO listen address and NO PORT. kiwi listens on :$PORT
   # when KIWI_LISTEN_ADDR is empty, and Cloud Run injects PORT into the ingress container (the
-  # container's `ports` block below): setting either here would be a second source of truth, and
-  # Cloud Run does not accept PORT in the environment.
+  # container's `ports` block): setting either here would be a second source of truth, and PORT is
+  # reserved. KIWI_WEB_DIR is also baked into the image; it is set here so the one place that
+  # lists the service's environment shows it.
   serving_env = merge(
     local.single ? { KIWI_WEB_DIR = local.web_dir } : {},
     local.single ? {} : { KIWI_LISTEN_ADDR = ":${var.kiwi_port}", PORT = tostring(var.kiwi_port) },

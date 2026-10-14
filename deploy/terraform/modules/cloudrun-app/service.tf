@@ -139,12 +139,13 @@ resource "google_cloud_run_v2_service" "this" {
       name  = "kiwi"
       image = local.kiwi_image
 
-      # No `args`: the image's entrypoint is /app/kiwi and the binary runs `serve` when it is
-      # given no subcommand (backend/cmd/kiwi/main.go), as in the Kubernetes manifests. The Jobs
-      # name their subcommand (jobs.tf). Leaving it unset also lets the placeholder image start.
+      # No `command` and no `args`: the image is built with ENTRYPOINT ["/app/kiwi"] and no CMD
+      # (deploy/minimal/Dockerfile, like backend/Dockerfile), and the binary runs `serve` when it
+      # is given no subcommand (backend/cmd/kiwi/main.go). The Jobs name their subcommand with
+      # `args` (jobs.tf). Leaving both unset also lets the placeholder image start.
 
       # Minimal profile only: kiwi is the ingress container. Cloud Run sets PORT to this value and
-      # kiwi listens on :$PORT when KIWI_LISTEN_ADDR is empty.
+      # the binary, with KIWI_LISTEN_ADDR empty, listens on :$PORT (and on :8080 if PORT is unset).
       dynamic "ports" {
         for_each = local.single ? [1] : []
 
