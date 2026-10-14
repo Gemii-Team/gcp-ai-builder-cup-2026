@@ -12,10 +12,12 @@
 //   - agents: the consumer agent.run.
 //
 // /healthz and /readyz are served by the listener itself. The process is ready when
-// everything is registered and for as long as Postgres and Valkey answer.
+// everything is registered and for as long as Postgres, and Valkey when it is the
+// cache, answer. With KIWI_WEB_DIR set the web app is served on everything else.
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -49,6 +51,7 @@ import (
 	"kiwi/internal/platform/llm"
 	"kiwi/internal/platform/llm/llmfactory"
 	"kiwi/internal/platform/outbox"
+	"kiwi/internal/platform/webstatic"
 	"kiwi/internal/realtime"
 	"kiwi/internal/tasks"
 )
@@ -59,9 +62,6 @@ const (
 	roleWorker   = config.RoleWorker
 	roleAgents   = config.RoleAgents
 
-	// listenAddr is the one port of the process: /api/, /ws, /healthz and /readyz.
-	listenAddr = ":8080"
-
 	// maxAttempts is how many times the bus delivers a message to a consumer before it
 	// gives up. docs and meetings settle a failure on their fifth delivery (their own
 	// finalAttempt constants) and agents on Deps.FinalAttempt, which is this number: the
@@ -70,11 +70,13 @@ const (
 	maxAttempts = 5
 
 	// relayConcurrency is how many outbox rows are in flight. Each held row pins one
-	// connection of the system pool (16) and an open transaction for as long as its
-	// handlers work, and the sign-in callback and the Meet poll need that pool as well,
-	// so this stays well below it. A meeting that is being transcribed or an agent run
-	// holds its row for minutes, and four of them at once is more than a laptop runs.
-	relayConcurrency = 4
+	// connection of the system pool (16 by default) and an open transaction for as long
+	// as its handlers work, and the sign-in callback, the session lookups of the
+	// Postgres session store and the Meet poll need that pool as well, so this stays
+	// well below it (config refuses a pool smaller than this + 2). A meeting that is
+	// being transcribed or an agent run holds its row for minutes, and four of them at
+	// once is more than a laptop runs.
+	relayConcurrency = config.RelayConcurrency
 
 	// defaultPollEvery is how often Meet is asked about the meetings that wait for a
 	// transcript.
@@ -146,7 +148,7 @@ type App struct {
 	opt options
 
 	db     *db.DB
-	cache  *cache.Cache
+	cache  cache.Cache
 	blob   blob.Store
 	llm    llm.Client
 	google google.Client
@@ -155,6 +157,7 @@ type App struct {
 	gateway  *realtime.Gateway // nil without the realtime role
 	handlers []api.Handler
 	api      http.Handler // nil without the api role
+	web      http.Handler // nil without KIWI_WEB_DIR
 	jobs     jobs
 
 	closeOnce sync.Once
@@ -164,8 +167,9 @@ type App struct {
 func (a *App) has(r config.Role) bool { return slices.Contains(a.cfg.Roles, r) }
 
 // New opens the ports and builds the services of the roles in cfg.Roles. It dials
-// Valkey and the sign-in provider, so it fails at once, naming the variable, when they
-// cannot be reached; Postgres is dialled lazily, and Run is not ready until it answers.
+// Valkey (when it is the cache) and the sign-in provider, so it fails at once, naming
+// the variable, when they cannot be reached; Postgres is dialled lazily, and Run is not
+// ready until it answers.
 // The caller closes the App, whether or not Run was called.
 func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err error) {
 	a := &App{cfg: cfg, opt: options{pollEvery: defaultPollEvery}}
@@ -182,10 +186,15 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		return nil, fmt.Errorf("app: %w", err)
 	}
 	a.closers = append(a.closers, a.db.Close)
-	if a.cache, err = cache.Open(ctx, cfg.ValkeyURL, cache.Options{}); err != nil {
-		return nil, fmt.Errorf("app: KIWI_VALKEY_URL: %w", err)
+	if a.cache, err = cache.Open(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("app: %w", err)
 	}
 	a.closers = append(a.closers, func() { _ = a.cache.Close() })
+	if cfg.WebDir != "" {
+		if a.web, err = webstatic.New(cfg.WebDir); err != nil {
+			return nil, fmt.Errorf("app: KIWI_WEB_DIR: %w", err)
+		}
+	}
 
 	if a.has(roleRealtime) {
 		// The gateway drains in httpx: Run keeps serving, not ready, before the
@@ -219,7 +228,26 @@ func (a *App) wire(ctx context.Context) error {
 		}
 	}
 
-	ident, err := identity.New(ctx, identity.Deps{Config: cfg, DB: a.db, Cache: a.cache})
+	// A cache that keeps sessions itself (Valkey) does. One that is the process's own
+	// does not, and loses them with it: they live in Postgres, so that a redeploy does
+	// not sign everyone out.
+	// The choice follows the provider, and the type is checked against it, so a cache
+	// that stops being a Sessions cannot silently move a Valkey deployment's sessions
+	// to Postgres, nor a memory one's into a store that a restart empties.
+	var sessions cache.Sessions
+	switch cfg.CacheProvider {
+	case config.CacheMemory:
+		sessions = identity.NewSessions(a.db, cache.Options{})
+		slog.Info("app: sessions are kept in Postgres")
+	default:
+		v, ok := a.cache.(cache.Sessions)
+		if !ok {
+			return fmt.Errorf("app: the %s cache keeps no sessions", cmp.Or(cfg.CacheProvider, config.CacheValkey))
+		}
+		sessions = v
+		slog.Info("app: sessions are kept in Valkey")
+	}
+	ident, err := identity.New(ctx, identity.Deps{Config: cfg, DB: a.db, Cache: a.cache, Sessions: sessions})
 	if err != nil {
 		return fmt.Errorf("app: sign-in provider (KIWI_OIDC_ISSUER, KIWI_OIDC_INTERNAL_URL): %w", err)
 	}
@@ -251,9 +279,10 @@ func (a *App) wire(ctx context.Context) error {
 	}
 	knownAgent := func(name string) bool { _, ok := registry[name]; return ok }
 
-	// Membership is read through Valkey (members:{channel}, a 10 minute backstop TTL; the
-	// invalidation counter members:{channel}:epoch is what keeps a stale fill out), so
-	// Valkey must not evict keys under memory pressure: the local one sets no maxmemory.
+	// Membership is read through the cache. Valkey holds members:{channel} (a 10 minute
+	// backstop TTL; the invalidation counter members:{channel}:epoch is what keeps a
+	// stale fill out), so it must not evict keys under memory pressure: the local one
+	// sets no maxmemory. The memory cache holds none, and every check reads Postgres.
 	az := authz.New(chat.NewMembership(a.db, a.cache))
 	chatSvc := chat.New(chat.Deps{DB: a.db, Authz: az, Cache: a.cache, KnownAgent: knownAgent})
 	docDeps := docs.Deps{DB: a.db, Authz: az, Blob: a.blob, Chat: chatSvc, LLM: a.llm}
@@ -299,7 +328,7 @@ func (a *App) wire(ctx context.Context) error {
 	if a.has(roleAPI) {
 		a.api = api.New(api.Deps{
 			PublicURL: cfg.PublicURL,
-			Sessions:  a.cache,
+			Sessions:  sessions,
 			Auth:      ident.AuthHandler(),
 			Blob:      blobHandler,
 			Handlers:  a.handlers,
@@ -359,7 +388,8 @@ func logDead(consumer string, m bus.Message, err error) {
 		"attempts", m.Attempt, "error", err)
 }
 
-// ping is the readiness check: the database pools and Valkey answer.
+// ping is the readiness check: the database pools answer, and Valkey when it is the
+// cache (the memory cache always does).
 func (a *App) ping(ctx context.Context) error {
 	if err := a.db.Ping(ctx); err != nil {
 		return err
@@ -380,11 +410,11 @@ func (a *App) Run(ctx context.Context) error {
 	ln := a.opt.listener
 	if ln == nil {
 		var err error
-		if ln, err = net.Listen("tcp", listenAddr); err != nil {
+		if ln, err = net.Listen("tcp", a.listenAddr()); err != nil {
 			return fmt.Errorf("app: %w", err)
 		}
 	}
-	srv := httpx.New(listenAddr, a.mux())
+	srv := httpx.New(a.listenAddr(), a.mux())
 	if a.opt.drain != nil {
 		srv.DrainTimeout = *a.opt.drain
 	}
@@ -423,8 +453,15 @@ func (a *App) Run(ctx context.Context) error {
 	return err
 }
 
-// mux routes the one port: the api role's handler under /api/ and the gateway at /ws.
-// The probes are the listener's.
+// listenAddr is where Run listens when it was not handed a listener: KIWI_LISTEN_ADDR,
+// else :$PORT, else :8080 (config.Load works that out; a Config built by hand has none).
+func (a *App) listenAddr() string { return cmp.Or(a.cfg.ListenAddr, config.DefaultListenAddr) }
+
+// mux routes the one port: the api role's handler under /api/, the gateway at /ws and,
+// with KIWI_WEB_DIR, the web app on everything else. The probes are the listener's. The
+// web app is the fallback of the mux, so the more specific routes always win, and it
+// answers 404 itself to the paths of the others (webstatic), so a role that is off
+// never shows the app in its place.
 func (a *App) mux() http.Handler {
 	mux := http.NewServeMux()
 	if a.api != nil {
@@ -432,6 +469,9 @@ func (a *App) mux() http.Handler {
 	}
 	if a.gateway != nil {
 		mux.Handle("/ws", a.gateway)
+	}
+	if a.web != nil {
+		mux.Handle("/", a.web)
 	}
 	return mux
 }

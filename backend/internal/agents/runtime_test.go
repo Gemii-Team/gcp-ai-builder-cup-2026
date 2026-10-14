@@ -94,13 +94,13 @@ func bootValkey() (string, error) {
 	return "redis://" + host + ":" + port.Port(), nil
 }
 
-func openCache(t *testing.T) *cache.Cache {
+func openCache(t *testing.T) *cache.Valkey {
 	t.Helper()
 	valkeyOnce.Do(func() { valkeyURL, valkeyErr = bootValkey() })
 	if valkeyErr != nil {
 		t.Fatalf("valkey: %v", valkeyErr)
 	}
-	c, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
+	c, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}
@@ -310,7 +310,7 @@ func chunks(s string, n int) []string {
 // that keeps @assistant mentions, as the one of the api does.
 type agentFixture struct {
 	*fixture
-	cache    *cache.Cache
+	cache    *cache.Valkey
 	model    *scriptedModel
 	mentions chat.Service
 	deps     Deps

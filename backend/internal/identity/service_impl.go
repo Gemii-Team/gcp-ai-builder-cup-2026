@@ -54,7 +54,14 @@ type Deps struct {
 	// encryption key, and the presentational WorkspaceName and WorkspaceDomain.
 	Config config.Config
 	DB     *db.DB
-	Cache  *cache.Cache
+	// Cache holds the state of a login in flight and the realtime tickets.
+	Cache interface {
+		cache.OAuthStates
+		cache.Tickets
+	}
+	// Sessions stores the browser sessions: the Valkey cache keeps them itself, a
+	// process whose cache is its own keeps them in Postgres (NewSessions).
+	Sessions cache.Sessions
 	// Logger receives rejected sign-ins and failures; nil selects slog.Default().
 	Logger *slog.Logger
 }
@@ -62,9 +69,13 @@ type Deps struct {
 // Module is the identity domain: the Service the other domains use, plus the HTTP
 // surface of sign-in (AuthHandler). Handler serves the same Service over Connect.
 type Module struct {
-	cfg      config.Config
-	db       *db.DB
-	cache    *cache.Cache
+	cfg   config.Config
+	db    *db.DB
+	cache interface {
+		cache.OAuthStates
+		cache.Tickets
+	}
+	sessions cache.Sessions
 	log      *slog.Logger
 	verifier *oidc.Verifier
 	vault    *vault.Vault
@@ -84,8 +95,8 @@ func New(ctx context.Context, d Deps) (*Module, error) {
 	if err != nil || (pub.Scheme != "http" && pub.Scheme != "https") || pub.Host == "" {
 		return nil, errors.New("identity: KIWI_PUBLIC_URL must be an absolute http(s) URL")
 	}
-	if d.DB == nil || d.Cache == nil {
-		return nil, errors.New("identity: Deps needs DB and Cache")
+	if d.DB == nil || d.Cache == nil || d.Sessions == nil {
+		return nil, errors.New("identity: Deps needs DB, Cache and Sessions")
 	}
 	// The key is configured as base64 and config decodes it; vault.New takes the
 	// configured form so a key is validated in one place.
@@ -104,6 +115,7 @@ func New(ctx context.Context, d Deps) (*Module, error) {
 		cfg:      cfg,
 		db:       d.DB,
 		cache:    d.Cache,
+		sessions: d.Sessions,
 		log:      cmp.Or(d.Logger, slog.Default()),
 		verifier: ver,
 		vault:    v,
@@ -131,7 +143,7 @@ func (m *Module) LoginURL(ctx context.Context, returnTo string) (string, error) 
 }
 
 // begin starts an authorization-code flow with PKCE S256 for scopes: it stores the
-// state, the verifier and a nonce in Valkey and returns the provider URL and the
+// state, the verifier and a nonce in the cache and returns the provider URL and the
 // state. consent marks the flow of the Meet consent route, whose callback says so
 // when it ends without a Meet grant.
 func (m *Module) begin(ctx context.Context, returnTo string, scopes []string, consent bool, extra ...oauth2.AuthCodeOption) (authURL, state string, err error) {
@@ -254,7 +266,7 @@ func (m *Module) HandleCallback(ctx context.Context, code, state string) (Sessio
 	if err != nil {
 		return Session{}, "", err
 	}
-	if err := m.cache.PutSession(ctx, sid, cache.SessionRecord{UserID: user.ID, WorkspaceID: user.WorkspaceID}); err != nil {
+	if err := m.sessions.PutSession(ctx, sid, cache.SessionRecord{UserID: user.ID, WorkspaceID: user.WorkspaceID}); err != nil {
 		return Session{}, "", fmt.Errorf("identity: open session: %w", err)
 	}
 	return Session{ID: sid, UserID: user.ID, WorkspaceID: user.WorkspaceID}, returnTo, nil
@@ -350,7 +362,7 @@ func grantedScopes(tok *oauth2.Token) []string {
 
 // Session implements Service. Reading a session slides its lifetime.
 func (m *Module) Session(ctx context.Context, sessionID string) (Session, error) {
-	rec, err := m.cache.GetSession(ctx, sessionID)
+	rec, err := m.sessions.GetSession(ctx, sessionID)
 	if err != nil {
 		return Session{}, fmt.Errorf("identity: session: %w", err)
 	}
@@ -359,7 +371,7 @@ func (m *Module) Session(ctx context.Context, sessionID string) (Session, error)
 
 // Logout implements Service. Ending a session that is already gone is not an error.
 func (m *Module) Logout(ctx context.Context, sessionID string) error {
-	if err := m.cache.DeleteSession(ctx, sessionID); err != nil {
+	if err := m.sessions.DeleteSession(ctx, sessionID); err != nil {
 		return fmt.Errorf("identity: logout: %w", err)
 	}
 	return nil

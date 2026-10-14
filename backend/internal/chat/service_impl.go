@@ -83,7 +83,7 @@ type Deps struct {
 	// NewMembership over the same DB and Cache.
 	Authz *authz.Authz
 	// Cache holds members:{channel}.
-	Cache *cache.Cache
+	Cache cache.Members
 	// KnownAgent reports whether name is a registered agent; an @mention of one
 	// that is not stays plain text. Nil means no agent is known.
 	KnownAgent func(name string) bool
@@ -92,7 +92,7 @@ type Deps struct {
 type service struct {
 	db         *db.DB
 	authz      *authz.Authz
-	cache      *cache.Cache
+	cache      cache.Members
 	knownAgent func(name string) bool
 	members    authz.Membership
 }

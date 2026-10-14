@@ -70,7 +70,7 @@ const (
 // Deps are the ports Run builds the domain services from, as the composition root does.
 type Deps struct {
 	DB    *db.DB
-	Cache *cache.Cache
+	Cache cache.Members
 	Blob  blob.Store
 	// LLM summarizes the document and embeds what is indexed.
 	LLM llm.Client

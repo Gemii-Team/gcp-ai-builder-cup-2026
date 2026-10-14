@@ -54,23 +54,56 @@ func insertChannel(ctx context.Context, tx pgx.Tx, ws uuid.UUID, name string) er
 	return err
 }
 
-func TestOpen_PoolSettings(t *testing.T) {
-	fx := start(t)
-	for _, tc := range []struct {
-		name string
-		pool *pgxpool.Pool
-		max  int32
-	}{
-		{"app", fx.db.app, 20},
-		{"system", fx.db.system, 16},
-	} {
-		cfg := tc.pool.Config()
-		if cfg.MaxConns != tc.max {
-			t.Errorf("%s MaxConns = %d, want %d", tc.name, cfg.MaxConns, tc.max)
+// poolSettings opens the pools for cfg (they connect lazily, so no database has to
+// answer) and returns each one's configuration.
+func poolSettings(t *testing.T, cfg config.Config) (app, system *pgxpool.Config) {
+	t.Helper()
+	cfg.DatabaseURL = "postgres://kiwi_app:pw@127.0.0.1:1/kiwi"
+	cfg.DatabaseSystemURL = "postgres://kiwi_system:pw@127.0.0.1:1/kiwi"
+	d, err := Open(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(d.Close)
+	return d.app.Config(), d.system.Config()
+}
+
+// A Config that did not come from config.Load has zero pool settings: they take the
+// defaults, which are what the pools were before they became configurable.
+func TestOpen_PoolDefaults(t *testing.T) {
+	app, system := poolSettings(t, config.Config{})
+	if app.MaxConns != 20 || system.MaxConns != 16 {
+		t.Errorf("MaxConns = %d app + %d system, want 20 + 16", app.MaxConns, system.MaxConns)
+	}
+	for name, pc := range map[string]*pgxpool.Config{"app": app, "system": system} {
+		if pc.MaxConnIdleTime != 30*time.Minute {
+			t.Errorf("%s MaxConnIdleTime = %v, want 30m", name, pc.MaxConnIdleTime)
+		}
+		if pc.MinConns != 0 {
+			t.Errorf("%s MinConns = %d, want 0: idle connections must be able to go away", name, pc.MinConns)
 		}
 		// No server-side prepared statements: safe behind a transaction-pooling proxy.
-		if cfg.ConnConfig.DefaultQueryExecMode != pgx.QueryExecModeExec {
-			t.Errorf("%s DefaultQueryExecMode = %v, want QueryExecModeExec", tc.name, cfg.ConnConfig.DefaultQueryExecMode)
+		if pc.ConnConfig.DefaultQueryExecMode != pgx.QueryExecModeExec {
+			t.Errorf("%s DefaultQueryExecMode = %v, want QueryExecModeExec", name, pc.ConnConfig.DefaultQueryExecMode)
+		}
+	}
+}
+
+func TestOpen_PoolOverrides(t *testing.T) {
+	app, system := poolSettings(t, config.Config{DBAppMaxConns: 6, DBSystemMaxConns: 7, DBMaxConnIdle: 2 * time.Minute})
+	if app.MaxConns != 6 || system.MaxConns != 7 {
+		t.Errorf("MaxConns = %d app + %d system, want 6 + 7", app.MaxConns, system.MaxConns)
+	}
+	if app.MaxConnIdleTime != 2*time.Minute || system.MaxConnIdleTime != 2*time.Minute {
+		t.Errorf("MaxConnIdleTime = %v app, %v system, want 2m for both", app.MaxConnIdleTime, system.MaxConnIdleTime)
+	}
+}
+
+func TestOpen_RefusesAPoolSizePgxCannotUse(t *testing.T) {
+	for _, n := range []int{-1, 1 << 40} {
+		_, err := Open(t.Context(), config.Config{DatabaseURL: "postgres://kiwi_app:pw@127.0.0.1:1/kiwi", DBAppMaxConns: n})
+		if err == nil || !strings.Contains(err.Error(), "pool size") {
+			t.Errorf("DBAppMaxConns %d: err = %v, want a pool size error", n, err)
 		}
 	}
 }
@@ -98,7 +131,7 @@ func TestInWorkspace_FailClosedOnReusedConnection(t *testing.T) {
 	fx := start(t)
 	// One connection, so the raw query below provably runs on the connection
 	// InWorkspace just used.
-	pool, err := newPool(t.Context(), fx.env.AppURL, 1)
+	pool, err := newPool(t.Context(), fx.env.AppURL, 1, time.Minute)
 	if err != nil {
 		t.Fatalf("newPool: %v", err)
 	}

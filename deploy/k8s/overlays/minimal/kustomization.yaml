@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The minimal stack: ONE kiwi pod serves everything (the API, the WebSocket and the
+# built web app, all on 8080), and nothing else sits between the Ingress and it. It is
+# the shape of the Google Cloud minimal profile, run on the k3d cluster: one process, no
+# Valkey, no separate web server, Postgres as the only store.
+#
+# It is the mockauth stack (mock sign-in provider, Postgres with pgvector, Ollama, the
+# migrate Job, kiwi) minus what one process makes unnecessary:
+#   - Valkey. kiwi runs with KIWI_CACHE_PROVIDER=memory (see config-patch.yaml);
+#   - the web Deployment and Service. kiwi serves the built app itself, from KIWI_WEB_DIR;
+#   - the Ingress rules for /api, /ws and / -> web: one rule, / -> kiwi, is left
+#     (ingress-patch.yaml). /mockoidc still goes to the mock (the more specific prefix).
+#
+# The image is the all-in-one image of deploy/minimal/Dockerfile (the kiwi binary and the
+# built web app). It keeps the name `kiwi`, so the mapping of ../local/images.yaml to the
+# k3d registry applies to it and to the migrate Job; the `web` entry of that mapping
+# matches nothing here, because no `web` image is left to name. The Secret kiwi-env is
+# built by scripts/local/load-env-secret.sh, as for the other overlays.
+#
+# Whatever the mockauth stack gains later is inherited. render.test.sh pins the list of
+# objects this overlay renders, so a Valkey or web object that sneaks back in fails the
+# suite.
+namespace: kiwi
+
+resources:
+  - ../mockauth
+
+patches:
+  - path: remove-fullstack.yaml
+  - path: config-patch.yaml
+  - path: ingress-patch.yaml

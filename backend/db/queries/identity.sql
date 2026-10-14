@@ -122,3 +122,36 @@ SET scopes = ARRAY(
     ),
     updated_at = now()
 WHERE user_id = $1;
+
+-- Sessions of a deployment whose cache is in the process (migration 0012). Every query
+-- below is a System query run by callback.go: a session is looked up by its id alone,
+-- before any workspace is known, and kiwi_system is the only role with grants on
+-- identity.sessions. The key is the SHA-256 of the session id, never the id.
+
+-- name: UpsertSession :exec
+INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id_hash) DO UPDATE
+SET user_id = excluded.user_id, workspace_id = excluded.workspace_id,
+    created_at = excluded.created_at, expires_at = excluded.expires_at;
+
+-- name: TouchSession :one
+-- The read of a live session, which also slides it: the new expiry is the sliding
+-- lifetime from now, never past the absolute lifetime from creation. A missing, expired
+-- or capped session matches no row. The cap is checked as well as the expiry, so a row
+-- written under a longer absolute lifetime than the current one is not resurrected.
+UPDATE identity.sessions
+SET expires_at = LEAST(
+    sqlc.arg(now)::timestamptz + make_interval(secs => sqlc.arg(sliding_secs)::float8),
+    created_at + make_interval(secs => sqlc.arg(absolute_secs)::float8))
+WHERE id_hash = sqlc.arg(id_hash)
+  AND expires_at > sqlc.arg(now)::timestamptz
+  AND created_at + make_interval(secs => sqlc.arg(absolute_secs)::float8) > sqlc.arg(now)::timestamptz
+RETURNING user_id, workspace_id, created_at;
+
+-- name: DeleteSession :exec
+DELETE FROM identity.sessions WHERE id_hash = $1;
+
+-- name: DeleteExpiredSessions :exec
+-- expires_at never passes created_at + the absolute lifetime, so it covers the cap too.
+DELETE FROM identity.sessions WHERE expires_at <= sqlc.arg(now)::timestamptz;

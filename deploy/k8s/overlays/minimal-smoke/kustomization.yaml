@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The minimal stack with the model replaced by recorded fixtures: what `smoke` is to
+# `mockauth`. The replay, its fixtures and the env patch that points kiwi at it are the
+# component ../../components/llmreplay, the same one `smoke` uses, so the fixtures live
+# in one place.
+namespace: kiwi
+
+resources:
+  - ../minimal
+
+components:
+  - ../../components/llmreplay

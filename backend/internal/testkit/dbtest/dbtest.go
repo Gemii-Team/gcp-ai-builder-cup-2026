@@ -249,6 +249,9 @@ func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain str
 			[]any{user, ws, "sub-" + domain, "owner@" + domain, "Owner of " + domain}},
 		{`INSERT INTO identity.oauth_tokens (user_id, workspace_id, refresh_token_enc) VALUES ($1, $2, '\x00')`,
 			[]any{user, ws}},
+		{`INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+			VALUES (sha256(convert_to($3::text, 'UTF8')), $1, $2, now(), now() + interval '1 hour')`,
+			[]any{user, ws, "session-id-of-" + domain}},
 		{`INSERT INTO chat.channels (id, workspace_id, name, kind, last_seq) VALUES ($1, $2, 'general', 'public', 1)`,
 			[]any{channel, ws}},
 		{`INSERT INTO chat.channel_members (channel_id, user_id, workspace_id, role) VALUES ($1, $2, $3, 'owner')`,

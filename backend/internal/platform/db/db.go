@@ -5,9 +5,12 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,11 +18,6 @@ import (
 
 	"kiwi/internal/platform/config"
 	"kiwi/internal/platform/errs"
-)
-
-const (
-	appMaxConns    = 20
-	systemMaxConns = 16
 )
 
 // DB holds the two pools. Both use pgx.QueryExecModeExec, so no server-side
@@ -31,18 +29,22 @@ type DB struct {
 
 // Open creates the application pool from cfg.DatabaseURL and, when
 // cfg.DatabaseSystemURL is set, the system pool. Connections are made lazily,
-// so Open does not need the database to be reachable.
+// so Open does not need the database to be reachable. The pool sizes and the time
+// an idle connection is kept are cfg.DBAppMaxConns, cfg.DBSystemMaxConns and
+// cfg.DBMaxConnIdle; a zero value (a Config that did not come from config.Load)
+// takes the default that config.Load applies.
 func Open(ctx context.Context, cfg config.Config) (*DB, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New("db: KIWI_DATABASE_URL is empty")
 	}
-	app, err := newPool(ctx, cfg.DatabaseURL, appMaxConns)
+	idle := cmp.Or(cfg.DBMaxConnIdle, config.DefaultDBMaxConnIdle)
+	app, err := newPool(ctx, cfg.DatabaseURL, cmp.Or(cfg.DBAppMaxConns, config.DefaultDBAppMaxConns), idle)
 	if err != nil {
 		return nil, fmt.Errorf("db: application pool: %w", err)
 	}
 	d := &DB{app: app}
 	if cfg.DatabaseSystemURL != "" {
-		if d.system, err = newPool(ctx, cfg.DatabaseSystemURL, systemMaxConns); err != nil {
+		if d.system, err = newPool(ctx, cfg.DatabaseSystemURL, cmp.Or(cfg.DBSystemMaxConns, config.DefaultDBSystemMaxConns), idle); err != nil {
 			app.Close()
 			return nil, fmt.Errorf("db: system pool: %w", err)
 		}
@@ -50,12 +52,18 @@ func Open(ctx context.Context, cfg config.Config) (*DB, error) {
 	return d, nil
 }
 
-func newPool(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, error) {
+func newPool(ctx context.Context, url string, maxConns int, maxConnIdle time.Duration) (*pgxpool.Pool, error) {
 	pc, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err // pgx redacts the password in its parse errors
 	}
-	pc.MaxConns = maxConns
+	if maxConns < 1 || maxConns > math.MaxInt32 {
+		return nil, fmt.Errorf("pool size %d is not between 1 and %d", maxConns, math.MaxInt32)
+	}
+	pc.MaxConns = int32(maxConns)
+	// MinConns stays at pgx's default of 0, so the connections the idle time closes
+	// are not opened again until a request needs them.
+	pc.MaxConnIdleTime = maxConnIdle
 	pc.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 	return pgxpool.NewWithConfig(ctx, pc)
 }

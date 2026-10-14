@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func getenv(env map[string]string) func(string) string {
@@ -168,6 +169,206 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+// The defaults of the new settings are what the full stack ran with before they existed.
+func TestLoad_DefaultsKeepTheFullStackAsItWas(t *testing.T) {
+	cfg, err := Load(nil, getenv(validEnv()))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CacheProvider != "valkey" {
+		t.Errorf("CacheProvider = %q, want valkey", cfg.CacheProvider)
+	}
+	if cfg.DBAppMaxConns != 20 || cfg.DBSystemMaxConns != 16 {
+		t.Errorf("pools = %d app + %d system, want 20 + 16", cfg.DBAppMaxConns, cfg.DBSystemMaxConns)
+	}
+	if cfg.DBMaxConnIdle != 30*time.Minute {
+		t.Errorf("DBMaxConnIdle = %v, want 30m (pgx's default)", cfg.DBMaxConnIdle)
+	}
+	if cfg.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want :8080", cfg.ListenAddr)
+	}
+	if cfg.WebDir != "" {
+		t.Errorf("WebDir = %q, want empty: no static files", cfg.WebDir)
+	}
+}
+
+func TestLoad_PoolsAndIdleTimeCanBeOverridden(t *testing.T) {
+	env := with(validEnv(), "KIWI_DB_APP_MAX_CONNS", "6", "KIWI_DB_SYSTEM_MAX_CONNS", "6", "KIWI_DB_MAX_CONN_IDLE", "90s")
+	cfg, err := Load(nil, getenv(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DBAppMaxConns != 6 || cfg.DBSystemMaxConns != 6 || cfg.DBMaxConnIdle != 90*time.Second {
+		t.Errorf("pools = %d app + %d system, idle %v; want 6 + 6, 90s", cfg.DBAppMaxConns, cfg.DBSystemMaxConns, cfg.DBMaxConnIdle)
+	}
+}
+
+func TestLoad_RejectsBadPoolsAndIdleTimes(t *testing.T) {
+	for _, tc := range []struct{ name, variable, value, want string }{
+		{"app pool of zero", "KIWI_DB_APP_MAX_CONNS", "0", "KIWI_DB_APP_MAX_CONNS must be at least 1"},
+		{"negative app pool", "KIWI_DB_APP_MAX_CONNS", "-3", "KIWI_DB_APP_MAX_CONNS must be at least 1"},
+		{"app pool that is not a number", "KIWI_DB_APP_MAX_CONNS", "many", "KIWI_DB_APP_MAX_CONNS must be a whole number"},
+		{"system pool of zero", "KIWI_DB_SYSTEM_MAX_CONNS", "0", "KIWI_DB_SYSTEM_MAX_CONNS must be at least 1"},
+		// The relay holds 4 connections, and the callback, sessions and poll need 2 more.
+		{"system pool below the relay's need", "KIWI_DB_SYSTEM_MAX_CONNS", "5", "KIWI_DB_SYSTEM_MAX_CONNS must be at least 6"},
+		{"system pool of the relay's size", "KIWI_DB_SYSTEM_MAX_CONNS", "4", "KIWI_DB_SYSTEM_MAX_CONNS must be at least 6"},
+		{"idle time that is not a duration", "KIWI_DB_MAX_CONN_IDLE", "soon", "KIWI_DB_MAX_CONN_IDLE must be a duration"},
+		{"idle time of zero", "KIWI_DB_MAX_CONN_IDLE", "0s", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"negative idle time", "KIWI_DB_MAX_CONN_IDLE", "-1m", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"idle time of a nanosecond", "KIWI_DB_MAX_CONN_IDLE", "1ns", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"app pool of a hundred thousand", "KIWI_DB_APP_MAX_CONNS", "100000", "KIWI_DB_APP_MAX_CONNS must be at most 1000"},
+		{"system pool of a hundred thousand", "KIWI_DB_SYSTEM_MAX_CONNS", "100000", "KIWI_DB_SYSTEM_MAX_CONNS must be at most 1000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(nil, getenv(with(validEnv(), tc.variable, tc.value)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load error = %v, want it to contain %q", err, tc.want)
+			}
+			// A bad value is reported once, not once as unparsable and again as too small.
+			if n := strings.Count(err.Error(), tc.variable); n != 1 {
+				t.Errorf("%s is named %d times in %q, want once", tc.variable, n, err)
+			}
+		})
+	}
+	// The smallest system pool the relay cannot starve is accepted.
+	if _, err := Load(nil, getenv(with(validEnv(), "KIWI_DB_SYSTEM_MAX_CONNS", "6"))); err != nil {
+		t.Errorf("system pool of 6: %v", err)
+	}
+}
+
+func TestLoad_ListenAddr(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"nothing set", nil, ":8080"},
+		{"PORT alone (Cloud Run)", []string{"PORT", "9090"}, ":9090"},
+		{"PORT with blanks", []string{"PORT", " 9090 "}, ":9090"},
+		{"KIWI_LISTEN_ADDR alone", []string{"KIWI_LISTEN_ADDR", "127.0.0.1:7000"}, "127.0.0.1:7000"},
+		{"KIWI_LISTEN_ADDR wins over PORT", []string{"KIWI_LISTEN_ADDR", ":7000", "PORT", "9090"}, ":7000"},
+		{"an empty KIWI_LISTEN_ADDR falls through to PORT", []string{"KIWI_LISTEN_ADDR", "", "PORT", "9090"}, ":9090"},
+		{"an empty PORT is no PORT", []string{"PORT", ""}, ":8080"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(nil, getenv(with(validEnv(), tc.env...)))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.ListenAddr != tc.want {
+				t.Errorf("ListenAddr = %q, want %q", cfg.ListenAddr, tc.want)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		env  []string
+	}{
+		{"PORT that is not a number", []string{"PORT", "http"}},
+		{"PORT out of range", []string{"PORT", "70000"}},
+		{"PORT of zero", []string{"PORT", "0"}},
+		{"address without a port", []string{"KIWI_LISTEN_ADDR", "127.0.0.1"}},
+		{"address with a bad port", []string{"KIWI_LISTEN_ADDR", ":eighty"}},
+		{"address with port 0", []string{"KIWI_LISTEN_ADDR", ":0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(nil, getenv(with(validEnv(), tc.env...)))
+			if err == nil || !strings.Contains(err.Error(), "KIWI_LISTEN_ADDR") {
+				t.Fatalf("Load error = %v, want it to name KIWI_LISTEN_ADDR", err)
+			}
+		})
+	}
+	// PORT is ignored, and so not validated, once KIWI_LISTEN_ADDR is set.
+	if _, err := Load(nil, getenv(with(validEnv(), "KIWI_LISTEN_ADDR", ":7000", "PORT", "not-a-port"))); err != nil {
+		t.Errorf("a bad PORT behind a set KIWI_LISTEN_ADDR: %v", err)
+	}
+}
+
+func TestLoad_WebDirMustBeAbsolute(t *testing.T) {
+	cfg, err := Load(nil, getenv(with(validEnv(), "KIWI_WEB_DIR", "/app/web")))
+	if err != nil || cfg.WebDir != "/app/web" {
+		t.Fatalf("Load = %q, %v; want /app/web", cfg.WebDir, err)
+	}
+	for _, dir := range []string{"web", "./web", "../web", "app/web"} {
+		if _, err := Load(nil, getenv(with(validEnv(), "KIWI_WEB_DIR", dir))); err == nil || !strings.Contains(err.Error(), "KIWI_WEB_DIR") {
+			t.Errorf("KIWI_WEB_DIR=%q: error = %v, want it to name KIWI_WEB_DIR", dir, err)
+		}
+	}
+}
+
+func TestLoad_CacheProvider(t *testing.T) {
+	cfg, err := Load(nil, getenv(with(validEnv(), "KIWI_CACHE_PROVIDER", "memory")))
+	if err != nil || cfg.CacheProvider != "memory" {
+		t.Fatalf("Load = %q, %v; want memory", cfg.CacheProvider, err)
+	}
+	_, err = Load(nil, getenv(with(validEnv(), "KIWI_CACHE_PROVIDER", "redis")))
+	if err == nil || !strings.Contains(err.Error(), "KIWI_CACHE_PROVIDER") {
+		t.Errorf("an unknown provider: error = %v, want it to name KIWI_CACHE_PROVIDER", err)
+	}
+}
+
+// The memory cache is the process's own, so a process that does not run every serving
+// role would issue tickets nobody redeems and publish frames nobody forwards.
+func TestLoad_MemoryCacheRequiresEveryServingRoleInOneProcess(t *testing.T) {
+	for _, tc := range []struct {
+		roles   string
+		wantErr bool
+	}{
+		{"api", true},
+		{"realtime", true},
+		{"api,worker,agents", true}, // enough for the memory bus, not for the memory cache
+		{"api,realtime,worker", true},
+		{"realtime,worker,agents", true},
+		{"api,realtime,worker,agents", false},
+		{"agents,worker,realtime,api", false},
+		{"", false}, // the default is every serving role
+	} {
+		t.Run(tc.roles, func(t *testing.T) {
+			env := with(validEnv(), "KIWI_ROLES", tc.roles, "KIWI_CACHE_PROVIDER", "memory")
+			_, err := Load(nil, getenv(env))
+			switch {
+			case !tc.wantErr && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tc.wantErr && err == nil:
+				t.Fatal("Load accepted the memory cache in a process that does not run every role")
+			case tc.wantErr && !strings.Contains(err.Error(), "KIWI_CACHE_PROVIDER=memory"):
+				t.Fatalf("error does not name KIWI_CACHE_PROVIDER=memory: %v", err)
+			}
+		})
+	}
+
+	// The valkey cache has no such rule: processes may split the roles.
+	if _, err := Load(nil, getenv(with(validEnv(), "KIWI_ROLES", "realtime", "KIWI_BUS_PROVIDER", "", "KIWI_CACHE_PROVIDER", "valkey"))); err != nil {
+		t.Errorf("a realtime-only process on Valkey: %v", err)
+	}
+	// The migrate Job shares the ConfigMap but uses no cache.
+	if _, err := Load([]Role{RoleMigrate}, getenv(with(validEnv(), "KIWI_CACHE_PROVIDER", "memory"))); err != nil {
+		t.Errorf("migrate alone with the memory cache: %v", err)
+	}
+}
+
+func TestLoad_ValkeyURLIsRequiredOnlyForTheValkeyCache(t *testing.T) {
+	env := validEnv()
+	delete(env, "KIWI_VALKEY_URL")
+	_, err := Load(nil, getenv(env))
+	if err == nil || !strings.Contains(err.Error(), "KIWI_VALKEY_URL") {
+		t.Fatalf("Valkey cache without KIWI_VALKEY_URL: error = %v, want it to name the variable", err)
+	}
+	// An unknown provider keeps the address required, so fixing the provider alone is not enough.
+	_, err = Load(nil, getenv(with(env, "KIWI_CACHE_PROVIDER", "redis")))
+	if err == nil || !strings.Contains(err.Error(), "KIWI_VALKEY_URL") {
+		t.Errorf("unknown provider without KIWI_VALKEY_URL: error = %v, want it to name the variable too", err)
+	}
+	cfg, err := Load(nil, getenv(with(env, "KIWI_CACHE_PROVIDER", "memory")))
+	if err != nil {
+		t.Fatalf("memory cache without KIWI_VALKEY_URL: %v", err)
+	}
+	if cfg.ValkeyURL != "" {
+		t.Errorf("ValkeyURL = %q, want empty", cfg.ValkeyURL)
+	}
+}
+
 func TestLoad_ReadsEveryVariableIntoItsField(t *testing.T) {
 	env := with(validEnv(),
 		"KIWI_ENV", "local",
@@ -176,6 +377,7 @@ func TestLoad_ReadsEveryVariableIntoItsField(t *testing.T) {
 		"KIWI_OIDC_INTERNAL_URL", "http://mockoidc.internal",
 		"KIWI_WORKSPACE_NAME", "Acme",
 		"KIWI_WORKSPACE_DOMAIN", "acme.example",
+		"KIWI_WEB_DIR", "/app/web",
 	)
 	cfg, err := Load(nil, getenv(env))
 	if err != nil {
@@ -189,6 +391,12 @@ func TestLoad_ReadsEveryVariableIntoItsField(t *testing.T) {
 		DatabaseSystemURL: "postgres://kiwi_system@db:5432/kiwi",
 		MigrateURL:        "postgres://kiwi_owner@db:5432/kiwi",
 		ValkeyURL:         "redis://valkey:6379",
+		CacheProvider:     "valkey",
+		DBAppMaxConns:     20,
+		DBSystemMaxConns:  16,
+		DBMaxConnIdle:     30 * time.Minute,
+		ListenAddr:        ":8080",
+		WebDir:            "/app/web",
 		BusProvider:       "memory",
 		BlobURL:           "file:///data/blobs",
 		BlobSigningKey:    bytes.Repeat([]byte{1}, 32),
@@ -468,6 +676,7 @@ var secretFields = []string{
 var publicFields = []string{
 	"Env", "Roles", "PublicURL", "BusProvider", "LLMProvider", "LLMModelFlash", "LLMModelPro", "EmbedModel", "ASRModel",
 	"OIDCIssuer", "OIDCInternalURL", "OAuthClientID", "WorkspaceName", "WorkspaceDomain",
+	"CacheProvider", "DBAppMaxConns", "DBSystemMaxConns", "DBMaxConnIdle", "ListenAddr", "WebDir",
 }
 
 func TestConfig_RedactsSecretsEverywhereItIsFormatted(t *testing.T) {

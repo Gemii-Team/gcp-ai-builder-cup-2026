@@ -25,7 +25,7 @@ func membersEpochKey(channelID uuid.UUID) string { return membersKey(channelID) 
 // is cached, and the caller reads Postgres and fills the set with
 // SetMembersAtEpoch. A cached empty set is stored as no key, so it also reads as
 // a miss.
-func (c *Cache) Members(ctx context.Context, channelID uuid.UUID) (ids []uuid.UUID, hit bool, err error) {
+func (c *Valkey) Members(ctx context.Context, channelID uuid.UUID) (ids []uuid.UUID, hit bool, err error) {
 	vals, err := c.rdb.SMembers(ctx, membersKey(channelID)).Result()
 	if err != nil {
 		return nil, false, fmt.Errorf("cache: read members: %w", err)
@@ -46,7 +46,7 @@ func (c *Cache) Members(ctx context.Context, channelID uuid.UUID) (ids []uuid.UU
 // unconditionally. A reader that filled the cache from Postgres must use
 // SetMembersAtEpoch instead: this write, landing after an InvalidateMembers, would
 // bring back a member the invalidation removed.
-func (c *Cache) SetMembers(ctx context.Context, channelID uuid.UUID, ids []uuid.UUID) error {
+func (c *Valkey) SetMembers(ctx context.Context, channelID uuid.UUID, ids []uuid.UUID) error {
 	key := membersKey(channelID)
 	_, err := c.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
 		p.Del(ctx, key)
@@ -68,7 +68,7 @@ func (c *Cache) SetMembers(ctx context.Context, channelID uuid.UUID, ids []uuid.
 // MembersEpoch returns how many times the channel's member set has been
 // invalidated (0 for a channel never invalidated). A cache-aside reader samples it
 // before it reads Postgres and hands it to SetMembersAtEpoch with the result.
-func (c *Cache) MembersEpoch(ctx context.Context, channelID uuid.UUID) (int64, error) {
+func (c *Valkey) MembersEpoch(ctx context.Context, channelID uuid.UUID) (int64, error) {
 	n, err := c.rdb.Get(ctx, membersEpochKey(channelID)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, nil
@@ -101,7 +101,7 @@ return 1`)
 //
 // The set and the epoch are two keys read by one server-side script, so this
 // assumes a single Valkey, as the rest of the package does.
-func (c *Cache) SetMembersAtEpoch(ctx context.Context, channelID uuid.UUID, epoch int64, ids []uuid.UUID) (stored bool, err error) {
+func (c *Valkey) SetMembersAtEpoch(ctx context.Context, channelID uuid.UUID, epoch int64, ids []uuid.UUID) (stored bool, err error) {
 	args := make([]any, 0, 2+len(ids))
 	args = append(args, epoch, membersBackstopTTL.Milliseconds())
 	for _, id := range ids {
@@ -118,7 +118,7 @@ func (c *Cache) SetMembersAtEpoch(ctx context.Context, channelID uuid.UUID, epoc
 // in one transaction, so the next read goes to Postgres and any fill still in
 // flight from before this call is refused. Call it on every membership change,
 // after the change has committed.
-func (c *Cache) InvalidateMembers(ctx context.Context, channelID uuid.UUID) error {
+func (c *Valkey) InvalidateMembers(ctx context.Context, channelID uuid.UUID) error {
 	_, err := c.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
 		p.Del(ctx, membersKey(channelID))
 		p.Incr(ctx, membersEpochKey(channelID))
