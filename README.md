@@ -83,7 +83,7 @@ flowchart LR
 
 ### Production on Google Cloud
 
-**Prepared, not applied.** The Terraform and Terragrunt code exists and is checked offline. No resource exists, nothing has been planned against Google Cloud, and the app cannot serve production yet. This is the design that code builds.
+**Prepared, not applied.** The Terraform and Terragrunt code exists and is checked offline. No resource exists, nothing has been planned against Google Cloud, and the app cannot serve production yet. This is the design that code builds by default: the **minimal** profile, sized for about ten people. A second profile, **full**, is the way to scale up ([below](#scale-up-the-full-profile)).
 
 ```mermaid
 flowchart LR
@@ -93,34 +93,35 @@ flowchart LR
     subgraph gcp["Google Cloud, asia-southeast1: PREPARED, NOT APPLIED"]
         direction LR
         subgraph run["Cloud Run service: exactly 1 instance, CPU always on"]
-            direction LR
-            web["web<br/>Caddy ingress container"]
-            kiwi["kiwi sidecar<br/>api, realtime, worker, agents"]
+            kiwi["kiwi, one container<br/>web app + API + live chat + jobs<br/>in-memory cache"]
         end
         jobs["Cloud Run Jobs<br/>kiwi-migrate, kiwi-seed"]
         sql[("Cloud SQL<br/>PostgreSQL 17, private IP")]
-        vk[("Memorystore<br/>for Valkey")]
         gcs[("Cloud Storage<br/>uploads")]
         vertex["Vertex AI<br/>Gemini"]
         sm["Secret Manager"]
-        ar["Artifact Registry"]
+        ar["Artifact Registry<br/>one image: kiwi"]
     end
-    you -->|"HTTPS"| web
-    web -->|"/api, /ws on localhost"| kiwi
-    kiwi --> sql & vk & gcs & vertex & google
+    you -->|"HTTPS"| kiwi
+    kiwi --> sql & gcs & vertex & google
     jobs --> sql
     sm -.->|"secrets at start"| run
     sm -.-> jobs
     gha -->|"keyless, via Workload Identity Federation"| ar
-    ar -.->|"images"| run
+    ar -.->|"image"| run
     classDef missing stroke-dasharray: 5 4
     class gcs,vertex missing
 ```
 
-**What to notice:** only the Caddy ingress container is reachable from outside; `kiwi` sits behind it. Cloud SQL and Memorystore have private addresses only. The dashed boxes are parts the app cannot use yet: it has no Vertex AI provider and no Cloud Storage blob store.
+**What to notice:** one Cloud Run service with one container. `kiwi` serves the web app, `/api` and `/ws` itself and keeps its cache in its own memory, so there is no Caddy container and no Valkey. The service takes the traffic on the one port Cloud Run passes it, and Cloud SQL has a private address only. The dashed boxes are parts the app cannot use yet: it has no Vertex AI provider and no Cloud Storage blob store.
 
-- **Exactly one instance.** The message bus is in-process, and the Meet poll, the outbox relay and delayed jobs run inside the process, so a second instance would run them twice. A rollout briefly runs two. Meet works as it does locally: the worker polls, nothing pushes.
+- **Exactly one instance.** The message bus and the cache are in-process, and the Meet poll, the outbox relay and delayed jobs run inside the process, so a second instance would split or repeat them. Meet works as it does locally: the worker polls, nothing pushes.
+- **A rollout briefly runs two instances, and the in-memory cache is not shared between them.** Until the old revision's browser connections close (up to the one-hour request timeout), live events published by one revision do not reach the browsers on the other until they reconnect and resync, and a sign-in that began on the old revision may need a retry. Sessions survive: the app keeps them in Postgres. The stack starts the new revision faster (startup CPU boost, a probe every two seconds) but no setting removes the overlap, so deploy outside demo hours.
 - **No keys.** Three service accounts without keys. GitHub Actions deploys through Workload Identity Federation, which accepts only this repository's `main` branch.
+
+#### Scale up: the full profile
+
+Set `profile` to `full` in `env.hcl` to build what this stack was before the minimal profile existed: a Caddy ingress container in front of the `kiwi` sidecar, and Memorystore for Valkey (one cluster-disabled node) for sessions, tickets and live events. It is still exactly one instance. Over the demo window it costs about $140 more than the minimal profile (the Caddy container, one vCPU always on, about $95, and the Valkey node, about $45). It needs a second image (`web`, the Caddy ingress), the app changes marked *full profile* in [the list below](#what-the-app-still-needs-before-real-images-can-serve), and a proof that Cloud Run's Direct VPC egress reaches a Valkey endpoint, which Google's pages do not settle. Both profiles are checked offline; the minimal one is the deploy path this README describes.
 
 ### One job, start to finish
 
@@ -154,15 +155,15 @@ sequenceDiagram
 
 | | Local (built and checked) | Production (prepared, not applied) |
 |---|---|---|
-| Runtime | k3d cluster, Tilt; `web` and `kiwi` are separate pods behind Traefik | One Cloud Run service: Caddy ingress container plus the `kiwi` sidecar |
+| Runtime | k3d cluster, Tilt; `web` and `kiwi` are separate pods behind Traefik | One Cloud Run service with one container: `kiwi` serves the web app too (`full` profile: a Caddy ingress container plus the `kiwi` sidecar) |
 | Database | Postgres + pgvector in the cluster | Cloud SQL, PostgreSQL 17, private IP, TLS, backups |
-| Cache | Valkey in the cluster | Memorystore for Valkey, one cluster-disabled node |
+| Cache | Valkey in the cluster | In the `kiwi` process, sessions in Postgres (`full` profile: Memorystore for Valkey, one cluster-disabled node) |
 | Uploads | A volume on the `kiwi` pod, signed URLs served by `kiwi` | A private Cloud Storage bucket (app adapter not built) |
 | Models and embeddings | Your LiteLLM for chat and speech; Ollama `embeddinggemma` on the CPU | Vertex AI Gemini (`gemini-3.5-flash`, `gemini-embedding-001` by default; app provider not built) |
 | Sign-in | Mock provider; real Google with `OVERLAY=local` | Google, with an OAuth web client you create; same invite-only rule |
 | Meet events | The worker polls every 30 seconds | The same poll, inside the one instance |
 | Secrets | Git-ignored `.env`, loaded into a Secret of the cluster | Secret Manager, one secret per variable |
-| Deploy | `task local:up`; Tilt rebuilds on save | Terragrunt apply by the owner; images by GitHub Actions (workflow not written) |
+| Deploy | `task local:up`; Tilt rebuilds on save | Terragrunt apply by the owner; one image by GitHub Actions (workflow not written) |
 | Scale | One `kiwi` pod | Exactly one instance (min = max = 1), CPU always on |
 
 ## Run it locally
@@ -258,19 +259,19 @@ Pull requests run `.github/workflows/ci.yml` and the hygiene workflow (no privat
 
 ## Deploy to Google Cloud (prepared, not applied)
 
-`deploy/terraform` holds the infrastructure for [the production design above](#production-on-google-cloud): reusable Terraform modules (`modules/`) and a Terragrunt stack (`live/`) that runs them, in a project and region of your choice (the plan targets `asia-southeast1`). **Nothing has been planned against Google Cloud or applied: no resource exists.** The code is checked offline, with every Google credential removed (`task iac:check`), so none of its claims about Google's APIs has run for real. **The binary of this phase cannot serve production yet:** it exits at startup when `KIWI_ENV` is prod, because the model provider a production deployment requires is not built.
+`deploy/terraform` holds the infrastructure for [the production design above](#production-on-google-cloud): reusable Terraform modules (`modules/`) and a Terragrunt stack (`live/`) that runs them, in a project and region of your choice (the plan targets `asia-southeast1`). One value, `profile` in `env.hcl`, picks its shape: **`minimal`** (the default, and the path this section describes: one Cloud Run container, no Valkey, the smallest workable Cloud SQL tier, about ten people) or **`full`** ([scale up](#scale-up-the-full-profile)). **Nothing has been planned against Google Cloud or applied: no resource exists.** The code is checked offline, for both profiles, with every Google credential removed (`task iac:check`), so none of its claims about Google's APIs has run for real. **The binary of this phase cannot serve production yet:** it exits at startup when `KIWI_ENV` is prod, because the model provider a production deployment requires is not built.
 
 ### The path to production
 
-1. **Change the app** (not done). It needs a Vertex AI model provider for chat, speech and embeddings; a Cloud Storage blob store (browser uploads through signed URLs); a production port and Caddyfile so one origin serves the app and proxies `/api` and `/ws` to `kiwi`; database role setup in `kiwi migrate` (Cloud SQL cannot grant `BYPASSRLS`); a production configuration guard; configurable database pools; a short, safe shutdown; and a few smaller fixes ([full list](#what-the-app-still-needs-before-real-images-can-serve)).
-2. **Write the deploy workflow** (not written). GitHub Actions builds `web` and `kiwi`, pushes them to Artifact Registry and deploys, signing in as the `kiwi-deploy` account through Workload Identity Federation. The account and the federation are in the stack.
+1. **Change the app** (partly done). The minimal profile's own app work is in: an in-process cache with sessions in Postgres, `kiwi` serving the web app on the port Cloud Run passes, configurable database pools, and the one all-in-one image (`deploy/minimal/Dockerfile`). Still to do: a Vertex AI model provider for chat, speech and embeddings; a Cloud Storage blob store (browser uploads through signed URLs); database role setup in `kiwi migrate` (Cloud SQL cannot grant `BYPASSRLS`); a production configuration guard; a short, safe shutdown; and a few smaller fixes ([full list](#what-the-app-still-needs-before-real-images-can-serve)).
+2. **Write the deploy workflow** (not written). GitHub Actions builds the one image, `kiwi`, pushes it to Artifact Registry and deploys, signing in as the `kiwi-deploy` account through Workload Identity Federation. The account and the federation are in the stack.
 3. **First apply by the owner**, unit by unit, then the post-apply steps ([How to apply](#how-to-apply)).
 
-**Estimated cost of the demo window** (18 Oct – 4 Dec 2026): about **$422 at 20 people and $564 at 50** for the setup this stack builds (`db-g1-small`). These are gross Google list prices of 12 Oct 2026, before free tiers and credits, and an estimate, not a measurement: they assume the usage model of the team's price comparison (35 working days) and one always-on instance for the whole window. The larger Cloud SQL tier (1 vCPU, 3.75 GiB), the fallback if `db-g1-small` runs short of memory, would make it about $475 and $616. `db-g1-small` (1.7 GB) allows 50 connections while one instance needs 36 and a rollout briefly runs two, so `max_connections` is raised to 100; under load that could run it short of memory (an inference, not measured).
+**Estimated cost of the demo window** (18 Oct – 4 Dec 2026): about **$224 for ten people** on the minimal profile. That is a gross Google list price of 12 Oct 2026 in Singapore, before free tiers and credits, and an estimate, not a measurement: it assumes the usage model of the team's price comparison (35 working days, scaled to ten people) and one always-on instance for the whole window. About $109 of it is the one Cloud Run instance (1 vCPU, 2 GiB), $65 is Cloud SQL `db-g1-small` with a 20 GB disk, and $47 is Vertex AI, which the app cannot call yet. The smaller `db-f1-micro` would save about $40, but its 0.6 GB of memory is judged too little for the connections of a rollout (an inference, not measured), so the stack does not use it. Memory on `db-g1-small` (1.7 GB) is the remaining risk, also unmeasured; the larger tier (1 vCPU, 3.75 GiB) is the fallback.
 
 ### How to apply
 
-The owner applies it once, signed in with `gcloud auth application-default login` as the project Owner (no service-account key is ever used or created). In order: create the Terraform state bucket by hand (Terragrunt never creates it; versioning matters, because state is the only record of what exists); copy `deploy/terraform/live/env.hcl.example` to the git-ignored `env.hcl` and set `project_id`, `state_bucket` and `github_repository`; then apply unit by unit. **For every unit: plan to a file, review it, apply exactly that file, delete the file.** Never use `run --all apply`: it would apply without a reviewed plan. After the apply: add the OAuth client id and secret as Secret Manager versions, register the redirect URI the `public-url` unit prints, deploy the images, then run the `kiwi-migrate` and `kiwi-seed` Jobs. The commands are in the block below.
+The owner applies it once, signed in with `gcloud auth application-default login` as the project Owner (no service-account key is ever used or created). In order: create the Terraform state bucket by hand (Terragrunt never creates it; versioning matters, because state is the only record of what exists); copy `deploy/terraform/live/env.hcl.example` to the git-ignored `env.hcl` and set `project_id`, `state_bucket` and `github_repository` (leave `profile` empty for the minimal profile); then apply unit by unit. **For every unit: plan to a file, review it, apply exactly that file, delete the file.** Never use `run --all apply`: it would apply without a reviewed plan. After the apply: add the OAuth client id and secret as Secret Manager versions, register the redirect URI the `public-url` unit prints, deploy the image, then run the `kiwi-migrate` and `kiwi-seed` Jobs. The commands are in the block below.
 
 <details>
 <summary>Apply and post-apply, step by step</summary>
@@ -285,13 +286,13 @@ The owner applies it once, signed in with `gcloud auth application-default login
    gcloud storage buckets update gs://<state bucket> --versioning
    ```
 
-2. **Write your values.** `env.hcl` is git-ignored; the example lists names only. Set the three required values (`project_id`, `state_bucket`, `github_repository` as owner/name). Everything else is optional: `region`, `zone`, `custom_domain` (changes the app URL, the OAuth redirect URI and the bucket's CORS origin, and nothing else; mapping the name to the service is not part of this stack), `billing_account` (only then is a budget with alerts created), the Vertex AI location and model ids, and the two image names.
+2. **Write your values.** `env.hcl` is git-ignored; the example lists names only. Set the three required values (`project_id`, `state_bucket`, `github_repository` as owner/name). Everything else is optional: `profile` (empty means `minimal`; `full` is the scale-up shape), `region`, `zone`, `custom_domain` (changes the app URL, the OAuth redirect URI and the bucket's CORS origin, and nothing else; mapping the name to the service is not part of this stack), `billing_account` (only then is a budget with alerts created), the Vertex AI location and model ids, and the image name `kiwi_image` (`web_image` exists only for the `full` profile; setting it with `minimal` stops every unit with an error instead of being ignored).
 
    ```bash
    cp deploy/terraform/live/env.hcl.example deploy/terraform/live/env.hcl
    ```
 
-3. **Apply unit by unit.** For every unit: plan to a file, review it, apply exactly that file, delete it. Do not use `run --all apply`: it would apply without a reviewed plan. The order is `apis`; then `iam`, `network` and `public-url`; then `registry`, `storage`, `cloudsql`, `valkey` and `secrets`; then `cloudrun`. `budget` can go any time after `apis`. A unit whose dependencies are not applied stops with an error: mock outputs are used only to validate, never to plan. The `apis` unit waits a minute after enabling APIs so the next unit does not meet one that is not ready.
+3. **Apply unit by unit.** For every unit: plan to a file, review it, apply exactly that file, delete it. Do not use `run --all apply`: it would apply without a reviewed plan. The order is `apis`; then `iam`, `network` and `public-url`; then `registry`, `storage`, `cloudsql` and `secrets` (and `valkey`, which exists only in the `full` profile: the `minimal` profile leaves that unit out of every run); then `cloudrun`. `budget` can go any time after `apis`. A unit whose dependencies are not applied stops with an error: mock outputs are used only to validate, never to plan. The `apis` unit waits a minute after enabling APIs so the next unit does not meet one that is not ready.
 
    ```bash
    cd deploy/terraform/live/apis
@@ -312,7 +313,7 @@ The owner applies it once, signed in with `gcloud auth application-default login
 
    Terraform created each secret with a placeholder version so the first apply could start a revision; the version you add is the one the service reads.
 2. **Register the redirect URI** the `public-url` unit prints (`terragrunt output -raw oauth_redirect_uri` in `deploy/terraform/live/public-url`) as an authorised redirect URI of that client, and add every person who should sign in as a test user of the consent screen (External, Testing).
-3. **Deploy the images.** The first apply starts the service from Google's public hello image, so it needs no image of ours. Build and push `web` and `kiwi` to the repository the `registry` unit reports and deploy them with `gcloud run deploy` or CI. After that Terraform ignores the images: applying never rolls a deployed image back. No deploy workflow exists yet.
+3. **Deploy the image.** The first apply starts the service from Google's public hello image, so it needs no image of ours. Build the one image, `kiwi` (it holds the binary and the web app: `docker build -f deploy/minimal/Dockerfile .` from the repository root), push it to the repository the `registry` unit reports and deploy it with `gcloud run deploy` or CI. After that Terraform ignores the image: applying never rolls a deployed image back. No deploy workflow exists yet. Every later deploy briefly runs two instances (see [Production on Google Cloud](#production-on-google-cloud)): do it outside demo hours.
 4. **Migrate, then seed**, once real images are deployed (executing a Job before that fails at once, by design): `gcloud run jobs execute kiwi-migrate --region asia-southeast1 --project <project id> --wait`, then the seed Job with the people to invite, using gcloud's alternate-delimiter syntax because the addresses contain commas: `--args='^|^seed|--members|you@example.com,teammate@example.com'`.
 
 </details>
@@ -328,20 +329,21 @@ The infrastructure sets variables that the current binary does not honour, or ca
 
 - **A Vertex AI provider** (F01, F05, F45): none is built, and a prod process refuses every other provider. It must read `KIWI_VERTEX_PROJECT`, `KIWI_VERTEX_LOCATION`, `KIWI_VERTEX_EMBED_LOCATION` and `KIWI_VERTEX_ALLOW_GLOBAL`, refuse the global endpoint unless allowed, and the three LiteLLM and Ollama endpoint variables must stop being required of the worker and agents roles when the provider is Vertex (F01). The embedding width is fixed at 768 in three places (F05).
 - **A Cloud Storage blob store** (F03, F24, F26): `KIWI_BLOB_URL` is a `gs://` bucket, and only `file://` is accepted today. Uploads must go from the browser to the bucket through signed URLs the service signs with its own identity, create-only. The bucket deletes anything left under `uploads/` after seven days, so an accepted upload must be moved out of that prefix or it is deleted.
-- **Two ports and a proxy** (F07, F17): `KIWI_LISTEN_ADDR` for kiwi (the stack sets it to its own port); a production Caddyfile that listens on the port Cloud Run passes, proxies `/api/*` and `/ws` to `KIWI_UPSTREAM` and redirects any other host to the host of `KIWI_PUBLIC_URL`.
+- **Host and origin handling in `kiwi` itself** (F17): the minimal profile has no proxy in front of `kiwi`, so `kiwi` has to compare the browser's `Origin` with `KIWI_PUBLIC_URL` exactly and refuse or redirect requests for any other host (a Cloud Run service answers on more than one hostname); whether the app does the redirect is not checked here. The port part of F07 is done in the minimal-profile app work: with `KIWI_LISTEN_ADDR` empty, `kiwi` listens on the port Cloud Run passes. *Full profile:* a production Caddyfile that listens on that port, proxies `/api/*` and `/ws` to `KIWI_UPSTREAM` and redirects any other host to the host of `KIWI_PUBLIC_URL`; the stack gives the sidecar its own port through `KIWI_LISTEN_ADDR`.
 - **A database role bootstrap in `kiwi migrate`** (F02): Cloud SQL cannot grant `BYPASSRLS`, and Terraform creates only the table owner. The migrate step must create `kiwi_app`, `kiwi_system` and `kiwi_ro` with the passwords in the connection strings the Job receives, the migration must give `kiwi_system` fallback row-security policies on the three tables it reads, and the tests must stop creating the role with a real superuser. The owner is a member of `cloudsqlsuperuser`; whether that suffices for `CREATE EXTENSION vector` is unchecked.
 - **A prod configuration guard** (F06): the prod environment required whenever `K_SERVICE` is set, an https public URL with no path, TLS in the database URLs, a `gs://` blob URL.
-- **Pool sizes as configuration and idle connection cleanup** (F10): the pools are fixed at 20 + 16 per process, which is why `max_connections` is 100 on a 1.7 GB tier; with 10 + 6 the default would do.
-- **Shutdown in under eight seconds, a schema gate and an advisory lock in the migrate step** (F08, F27), **the PDF reader's self-check on the second-generation environment** (F25), **`seed` and `reindex` allowed under prod** (F28), **log severity** (F35), **retrying the Google sign-in discovery at start** (F44), and **per-user limits on model use** (F19; the budget only alerts).
+- **Pool sizes as configuration and idle connection cleanup** (F10): done in the minimal-profile app work (`KIWI_DB_APP_MAX_CONNS`, `KIWI_DB_SYSTEM_MAX_CONNS`, `KIWI_DB_MAX_CONN_IDLE`; the system pool must be at least 6). The minimal profile sets 6 + 6 and closes idle connections after two minutes, which fits `max_connections` 50; the `full` profile keeps the built-in 20 + 16, which is why its `max_connections` is 100. Neither has run on Cloud SQL.
+- **The in-process cache and the served web app** (the minimal profile): done in the minimal-profile app work and never run on Cloud Run. With the cache provider set to `memory`, sessions are kept in Postgres and read as `kiwi_system` on every request, so that role and its pool must reach Cloud SQL; the cache, the live-event fan-out and the OAuth state live in the process, so all four roles must run in one process and the service must stay one instance.
+- **Shutdown in under eight seconds, a schema gate and an advisory lock in the migrate step** (F08, F27), **the PDF reader's self-check on the second-generation environment** (F25), **`seed` and `reindex` allowed under prod** (F28), **log severity** (F35), **retrying the Google sign-in discovery at start** (F44), and **per-user limits on model use** (F19; the budget only alerts). For the two-instance overlap of a rollout, which the in-memory cache makes more visible: F08 (the old revision keeps relaying and can lose a row for a topic it has no consumer for), F13 (duplicate Meet polls) and F14 (a per-process lock on knowledge indexing, which can leave stale chunks).
 
 </details>
 
 <details>
 <summary>Not verified on Google Cloud, what the stack builds, outputs, and the offline check</summary>
 
-**Not verified**, because nothing has been applied: that Cloud Run's Direct VPC egress reaches a Memorystore for Valkey endpoint (Google's pages disagree: prove it on a scratch revision first), that a `db-g1-small` holds `max_connections` of 100 under load (the memory risk is noted next to the flag), that the sidecar placeholder starts as configured, and the exact roles a deploy needs.
+**Not verified**, because nothing has been applied: that a `db-g1-small` holds `max_connections` of 50 with the minimal profile's pools (6 + 6) under load (the memory risk and the connection math are written next to the flag), that `CREATE EXTENSION vector` works for the table owner on a shared-core tier (Google's page restricts no extension by machine type, but nobody has tried), that the one-container placeholder starts as configured, how long a rollout's overlap lasts in practice and what the old revision does with its open connections, and the exact roles a deploy needs. The `full` profile adds one more: that Cloud Run's Direct VPC egress reaches a Memorystore for Valkey endpoint (Google's pages disagree: prove it on a scratch revision first).
 
-**What the stack builds.** One Cloud Run service (a Caddy ingress container and the `kiwi` sidecar, one instance, CPU always allocated, a one-hour request timeout, second generation, Direct VPC egress for private ranges only), two Cloud Run Jobs (`kiwi-migrate`, `kiwi-seed`), Cloud SQL for PostgreSQL 17 on the smallest tier that can work (`db-g1-small`, Enterprise edition, zonal, private IP only, TLS required, backups and deletion protection on, `max_connections` raised to 100 for two overlapping instances), Memorystore for Valkey (one cluster-disabled node, private endpoint), a private Cloud Storage bucket for uploads, Secret Manager (one secret per variable, generated values never in Terraform state), an Artifact Registry Docker repository, three keyless service accounts (`kiwi-run`, `kiwi-jobs`, `kiwi-deploy`), Workload Identity Federation that accepts only this repository's `main` branch, and an optional billing budget.
+**What the stack builds.** One Cloud Run service (minimal: one `kiwi` container that also serves the web app; `full`: a Caddy ingress container and the `kiwi` sidecar; one instance either way, CPU always allocated, a one-hour request timeout, second generation, Direct VPC egress for private ranges only), two Cloud Run Jobs (`kiwi-migrate`, `kiwi-seed`) on the same image, Cloud SQL for PostgreSQL 17 (`db-g1-small`, Enterprise edition, zonal, private IP only, TLS required, backups and deletion protection on; `max_connections` 50 for the minimal profile's small pools, 100 for the `full` profile's 20 + 16), Memorystore for Valkey in the `full` profile only (one cluster-disabled node, private endpoint), a private Cloud Storage bucket for uploads, Secret Manager (one secret per variable, generated values never in Terraform state), an Artifact Registry Docker repository, three keyless service accounts (`kiwi-run`, `kiwi-jobs`, `kiwi-deploy`), Workload Identity Federation that accepts only this repository's `main` branch, and an optional billing budget.
 
 **Outputs.** Run `terragrunt output` in the unit's directory. No output holds a secret.
 
@@ -353,10 +355,10 @@ The infrastructure sets variables that the current binary does not honour, or ca
 | Deploy service account email | `iam` | `deploy_service_account_email` |
 | Image registry path | `registry` | `repository_path` |
 | Cloud SQL connection name | `cloudsql` | `connection_name` |
-| Valkey endpoint | `valkey` | `url` |
+| Valkey endpoint (`full` profile only: the `minimal` profile has no `valkey` unit) | `valkey` | `url` |
 | Uploads bucket | `storage` | `bucket_name` |
 
-**Checking it.** `task iac:check` runs, with every Google credential removed and the state backend never initialised: formatting, then `init`, `validate` and `terraform test` of every module against a mocked Google provider, tflint (Terraform and Google rulesets), a Trivy configuration scan with no findings, and a render, `init` and `validate` of the whole Terragrunt stack against mock outputs. It plans and applies nothing. It needs `terraform`, `terragrunt`, `tflint` and `trivy` on `PATH` and network access (provider and ruleset downloads). Pull requests run it as the `iac` job.
+**Checking it.** `task iac:check` runs, with every Google credential removed and the state backend never initialised: formatting, then `init`, `validate` and `terraform test` of every module against a mocked Google provider, tflint (Terraform and Google rulesets), a Trivy configuration scan with no findings, and, for each of the two profiles, a render, `init` and `validate` of the whole Terragrunt stack against mock outputs, the inputs each profile passes to its modules, and the Cloud SQL connection budget of the minimal profile. It plans and applies nothing. It needs `terraform`, `terragrunt`, `tflint` and `trivy` on `PATH` and network access (provider and ruleset downloads). Pull requests run it as the `iac` job.
 
 </details>
 
@@ -391,7 +393,7 @@ The infrastructure sets variables that the current binary does not honour, or ca
 - **The web container** (user 65532, port 8080, read-only root filesystem, no capabilities). `render.test.sh` pins the manifest, the Dockerfile and the Caddyfile. The image was built and run once by hand outside the cluster with `docker run --read-only --cap-drop ALL`: it answered `/healthz` on 8080 as user 65532, with the three headers. The base image `caddy:2-alpine` cannot start with every capability dropped (observed: `exec /usr/bin/caddy: operation not permitted`, because its binary carries a file capability), which the Dockerfile removes. In the recreated cluster the pod was Ready with no restart, its log had no `permission denied`, it ran as uid and gid 65532 with its permitted, effective and bounding capability sets empty (`CapPrm`, `CapEff` and `CapBnd` 0), `touch` failed with "Read-only file system" under `/usr/share/caddy` and `/etc/caddy` and worked in the three emptyDirs (`/data`, `/config`, `/tmp`); through the Ingress `/`, `/signin`, `/c/x`, `/board`, `/ask`, `/sw.js`, `/manifest.webmanifest` and `/healthz` answered 200, a missing `/assets/...` file 404, and the web responses carried `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` and no `Content-Security-Policy` (responses of the API and the mock provider come from other pods and do not carry them).
 - **A first start on an empty cluster** (overlay `mockauth`). The steps of `task local:up` up to its Tilt step, run on a freshly created cluster: `scripts/local/k3d-up.sh`, `scripts/local/gen-env.sh`, `scripts/local/load-env-secret.sh mockauth`, then `tilt ci -- --overlay mockauth` in place of the foreground `tilt up` (`task local:up` itself was not run on the empty cluster). The first `tilt ci` did not finish within 40 minutes: kiwi waited for the mock sign-in provider, whose pod sat in `CreateContainerConfigError` (`configmap "kiwi-config" not found`) because Tilt applied that ConfigMap together with the kiwi resource. It now has a resource of its own that both wait for; `render.test.sh` pins it (shown failing on the old Tiltfile, passing on the new one), and a second cluster created from nothing, with the same steps, came up with every workload healthy in about five minutes.
 - **CI.** Before the GitHub runs, `task check:scripts` and the generated-code check passed locally; the `go install` lines of the jobs (kustomize, kubeconform, task, caddy, buf, sqlc) were run locally, and the two suites of the `scripts` job passed on a runner-like `PATH` that holds only those tools, with `GITHUB_ACTIONS=true` (where a missing caddy fails the suite).
-- **Terraform and Terragrunt.** `task iac:check`: 39 checks, all passed, run with every Google credential removed: formatting, `init`, `validate` and `terraform test` of the 12 modules against a mocked Google provider (the two modules that generate secrets use the real `random` provider, which only computes locally), tflint, a Trivy scan with no findings, and a render, `init` and `validate` of the 11 Terragrunt units against mock outputs. Each invariant that a plausible mistake would break (no public Cloud SQL address, TLS, deletion protection, backups, cluster-disabled Valkey, a private bucket, one always-on Cloud Run instance in prod with private-range egress, the repository and branch pin of the GitHub federation, no service-account key) was shown to fail its test when the setting was broken in a throwaway copy. Never planned or applied against Google Cloud, so no resource exists and the provider's schema checks are all that tested the arguments.
+- **Terraform and Terragrunt.** `task iac:check`: 51 checks, all passed, run with every Google credential removed: formatting, `init`, `validate` and `terraform test` of the 12 modules against a mocked Google provider (101 tests; the two modules that generate secrets use the real `random` provider, which only computes locally), tflint, a Trivy scan with no findings, and, for each of the two profiles (`minimal` and `full`), a render, `init` and `validate` of the Terragrunt units against mock outputs, an assertion of the inputs each profile passes to its modules, and, for `minimal`, a recomputation of the Cloud SQL connection budget from the rendered inputs. Each invariant that a plausible mistake would break (no public Cloud SQL address, TLS, deletion protection, backups, cluster-disabled Valkey, a private bucket, one always-on Cloud Run instance in prod with private-range egress, one container, no Valkey variable and an in-process cache in the minimal profile, the pool sizes, the connection budget, the Valkey unit left out of the minimal stack, CI owning the deployed images, the repository and branch pin of the GitHub federation, no service-account key) was shown to fail its test or check when the setting was broken in a throwaway copy. Never planned or applied against Google Cloud, so no resource exists and the provider's schema checks are all that tested the arguments.
 - **Hosts.** Every cluster run reported in this README was made on one x86-64 Linux machine with rootless Docker. The real-Google and `authuser` checks by a human drove that stack from Chrome on a Mac through an SSH tunnel; no macOS host has been tried. The kiwi binary is built for the architecture that `go env GOARCH` reports on the host (the cluster follows the host's Docker); no other host architecture and no rootful Docker has been tried. CI does not run the cluster runs: the default checks are `task test` and the pull-request workflows.
 
 </details>
