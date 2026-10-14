@@ -50,7 +50,13 @@ unset IFS
 case "$name" in
   node) echo 1194 ;;
   nix) echo "$STUB_BROWSERS" ;;
-  kubectl) case " $* " in *" get configmap "*) printf 'configmap/kiwi-config\nconfigmap/llmreplay-fixtures-abc\n' ;; esac ;;
+  kubectl)
+    case " $* " in
+      *" get configmap "*) printf 'configmap/kiwi-config\nconfigmap/llmreplay-fixtures-abc\n' ;;
+      # The question reset.sh asks first: the full stack has a Valkey Deployment, the minimal one does not.
+      *" get deploy/valkey "*) [ "${STUB_NO_VALKEY:-}" = 1 ] || echo deployment.apps/valkey ;;
+    esac
+    ;;
   docker) case "$1" in images) printf '%s\n' '127.0.0.1:5001/kiwi-registry.localhost_5001_kiwi tilt-new' '127.0.0.1:5001/kiwi-registry.localhost_5001_kiwi tilt-old' 'registry 2' ;; esac ;;
 esac
 exit 0
@@ -90,6 +96,15 @@ before() {
   b=$(lineno "$2")
   [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
 }
+# The same for whole lines: the overlay names minimal and minimal-smoke are prefixes of each other.
+logged_x() { grep -qxF -- "$1" "$LOG"; }
+lineno_x() { grep -nxF -- "$1" "$LOG" | head -n 1 | cut -d: -f1; }
+before_x() {
+  local a b
+  a=$(lineno_x "$1")
+  b=$(lineno_x "$2")
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
+}
 last_line() { printf '%s\n' "$OUT" | tail -n 1; }
 
 # Every call of timeout the script made went through `bounded`: --foreground, then the seconds.
@@ -116,6 +131,10 @@ MOCKAUTH='tilt ci --timeout 20m -- --overlay mockauth'
 SUITE='pnpm --filter e2e smoke'
 DEL_DEPLOY='delete deployment/llmreplay service/llmreplay'
 DEL_CM='delete configmap/llmreplay-fixtures-abc'
+MINIMAL='tilt ci --timeout 20m -- --overlay minimal'
+MINSMOKE='tilt ci --timeout 20m -- --overlay minimal-smoke'
+KDEL_DEPLOY="kubectl --context k3d-kiwi -n kiwi $DEL_DEPLOY --ignore-not-found --timeout=60s"
+KDEL_CM="kubectl --context k3d-kiwi -n kiwi $DEL_CM --ignore-not-found --timeout=60s"
 
 # --- a replay run on a keyed machine ------------------------------------------------------
 run_case "$WORK/env.keyed" "" smoke/run.sh
@@ -260,6 +279,141 @@ contains "$(last_line)" 'freshly seeded' || verdict=bad
 msg="run.sh (live): overlay mockauth throughout, no replay objects to delete, wipe and default seed at the end"
 if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
 
+# --- the minimal profile: KIWI_SMOKE_PROFILE=minimal ---------------------------------------------
+# The replay run uses overlay minimal-smoke and the cluster goes back to overlay minimal, never to
+# smoke or mockauth. minimal is a prefix of minimal-smoke, so these cases compare whole lines.
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+run_case "$WORK/env.keyed" "" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+before 'pnpm install --frozen-lockfile' 'load-env-secret.sh minimal-smoke' || verdict=bad
+before_x 'load-env-secret.sh minimal-smoke' "$MINSMOKE" || verdict=bad
+# The stub logs "name args", so a script called with no arguments leaves "reset.sh " (with a space).
+before_x "$MINSMOKE" 'reset.sh ' || verdict=bad
+before_x 'reset.sh ' 'task seed -- --domain demo.example --members alice@demo.example,bob@demo.example' || verdict=bad
+before_x 'task seed -- --domain demo.example --members alice@demo.example,bob@demo.example' "$SUITE" || verdict=bad
+before_x "$SUITE" 'load-env-secret.sh minimal' || verdict=bad
+before_x 'load-env-secret.sh minimal' "$MINIMAL" || verdict=bad
+before_x "$MINIMAL" "$KDEL_DEPLOY" || verdict=bad
+before_x "$KDEL_DEPLOY" "$KDEL_CM" || verdict=bad
+# Never the overlays of the default profile.
+for line in "$SMOKE" "$MOCKAUTH" 'load-env-secret.sh smoke' 'load-env-secret.sh mockauth'; do
+  logged_x "$line" && { verdict=bad; printf 'minimal profile ran: %s\n' "$line"; }
+done
+[ "$(grep -c '^reset.sh' "$LOG")" -eq 2 ] || verdict=bad
+[ "$(grep -c '^task seed' "$LOG")" -eq 2 ] || verdict=bad
+grep -qxF 'task seed' "$LOG" || verdict=bad
+contains "$(last_line)" 'the cluster is on overlay minimal;' || verdict=bad
+contains "$(last_line)" 'freshly seeded with the default seed' || verdict=bad
+all_foreground || verdict=bad
+msg="run.sh (minimal profile, keyed, replay): minimal-smoke up, wipe, seed, suite, back to minimal, replay objects deleted, wipe and default seed; never smoke or mockauth"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+run_case "$WORK/env.keyed" "$SUITE" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+logged_x "$MINIMAL" || verdict=bad
+logged "$DEL_DEPLOY" || verdict=bad
+contains "$(last_line)" 'done (exit 1)' || verdict=bad
+contains "$(last_line)" 'overlay minimal;' || verdict=bad
+msg="run.sh (minimal profile): a failing suite exits non-zero and the cluster still goes back to minimal"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(last_line)"; fi
+
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+run_case "$WORK/env.keyless" "" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+logged_x "$MINIMAL" && verdict=bad
+logged_x 'load-env-secret.sh minimal' && verdict=bad
+logged 'kubectl --context k3d-kiwi -n kiwi delete' && verdict=bad
+[ "$(grep -c '^reset.sh' "$LOG")" -eq 1 ] || verdict=bad
+contains "$OUT" 'STAYS on overlay minimal-smoke' || verdict=bad
+contains "$OUT" 'so minimal cannot start on this machine' || verdict=bad
+contains "$(last_line)" 'the cluster is on overlay minimal-smoke' || verdict=bad
+contains "$(last_line)" 'freshly seeded' && verdict=bad
+msg="run.sh (minimal profile, keyless): the cluster stays on minimal-smoke and says so, nothing is deleted, no second wipe, exit 0"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+run_case "$WORK/env.keyless" "=$MINSMOKE" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+contains "$OUT" 'overlay minimal-smoke did not come up' || verdict=bad
+contains "$OUT" 'STAYS on overlay' && verdict=bad
+logged 'reset.sh' && verdict=bad
+contains "$(last_line)" 'unknown' || verdict=bad
+msg="run.sh (minimal profile): a failed tilt ci of minimal-smoke is never reported as staying on it, and nothing is wiped"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT"; fi
+
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+run_case "$WORK/env.keyed" "=$MINIMAL" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+logged "$DEL_DEPLOY" && verdict=bad
+[ "$(grep -c '^reset.sh' "$LOG")" -eq 1 ] || verdict=bad
+contains "$OUT" 'could not return the cluster to minimal' || verdict=bad
+contains "$OUT" 'half way between minimal-smoke and minimal' || verdict=bad
+contains "$OUT" 'run OVERLAY=minimal task local:up' || verdict=bad
+contains "$(last_line)" 'unknown' || verdict=bad
+msg="run.sh (minimal profile): a failed return to minimal is non-zero, keeps the replay server, names the minimal way to start it and says the state is unknown"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal KIWI_LIVE_E2E=1)
+run_case "$WORK/env.keyed" "" smoke/run.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+logged_x "$MINIMAL" || verdict=bad
+logged 'minimal-smoke' && verdict=bad
+logged_x "$SMOKE" && verdict=bad
+logged_x "$MOCKAUTH" && verdict=bad
+logged 'delete deployment/llmreplay' && verdict=bad
+[ "$(grep -c '^reset.sh' "$LOG")" -eq 2 ] || verdict=bad
+contains "$(last_line)" 'the cluster is on overlay minimal;' || verdict=bad
+contains "$(last_line)" 'freshly seeded' || verdict=bad
+msg="run.sh (minimal profile, live): overlay minimal throughout, no replay objects to delete, wipe and default seed at the end"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+# An unknown profile is refused before anything is touched: nothing is called, not even
+# pnpm for `-- --list`, and the exit status is 2.
+for profile in bogus Minimal full smoke mockauth minimal-smoke; do
+  for args in "" "-- --list"; do
+    EXTRA_ENV=(KIWI_SMOKE_PROFILE="$profile")
+    # shellcheck disable=SC2086
+    run_case "$WORK/env.keyed" "" smoke/run.sh $args
+    EXTRA_ENV=()
+    verdict=ok
+    [ "$RC" -eq 2 ] || verdict=bad
+    [ ! -s "$LOG" ] || verdict=bad
+    contains "$OUT" "unknown KIWI_SMOKE_PROFILE '$profile'" || verdict=bad
+    contains "$OUT" 'want default or minimal' || verdict=bad
+    contains "$OUT" 'nothing was touched' || verdict=bad
+    msg="run.sh: KIWI_SMOKE_PROFILE='$profile'${args:+ with $args} is refused with exit 2 before any program runs"
+    if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+  done
+done
+
+# `default`, spelled out or empty, is the unset profile: today's overlays.
+for profile in default ""; do
+  EXTRA_ENV=(KIWI_SMOKE_PROFILE="$profile")
+  run_case "$WORK/env.keyed" "" smoke/run.sh
+  EXTRA_ENV=()
+  verdict=ok
+  [ "$RC" -eq 0 ] || verdict=bad
+  logged_x "$SMOKE" || verdict=bad
+  logged_x "$MOCKAUTH" || verdict=bad
+  logged 'minimal' && verdict=bad
+  contains "$(last_line)" 'the cluster is on overlay mockauth' || verdict=bad
+  msg="run.sh: KIWI_SMOKE_PROFILE='$profile' runs the default profile (smoke, back to mockauth)"
+  if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+done
+
 mkdir "$WORK/no-browsers"
 BROWSERS_PATH="$WORK/no-browsers"
 run_case "$WORK/env.keyed" "" smoke/run.sh
@@ -326,6 +480,50 @@ contains "$OUT" "COULD NOT" && verdict=bad
 msg="reset.sh: a scale-back that works is not announced as failed"
 if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$OUT"; fi
 
+# --- reset.sh and Valkey: flushed where the cluster has one, skipped where it has not ---------
+# The full stack has a Valkey Deployment and the minimal stack has none (its in-process state goes
+# with the kiwi restart, its sessions are in the identity schema the TRUNCATE covers).
+GET_VALKEY="$KC get deploy/valkey --ignore-not-found -o name"
+run_case "" "" smoke/reset.real.sh
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+before "$GET_VALKEY" "$KC scale deploy/kiwi --replicas=0" || verdict=bad
+before "$KC exec -i deploy/postgres" "$KC exec deploy/valkey -- valkey-cli FLUSHALL" || verdict=bad
+timed "30 $GET_VALKEY" || verdict=bad
+all_foreground || verdict=bad
+contains "$OUT" 'no Valkey' && verdict=bad
+msg="reset.sh (full stack): asks first whether Valkey exists, before kiwi is touched, and flushes it after the TRUNCATE"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+EXTRA_ENV=(STUB_NO_VALKEY=1)
+run_case "" "" smoke/reset.real.sh
+EXTRA_ENV=()
+verdict=ok
+[ "$RC" -eq 0 ] || verdict=bad
+logged 'valkey-cli' && verdict=bad
+logged 'exec deploy/valkey' && verdict=bad
+before "$KC scale deploy/kiwi --replicas=0" "$KC exec -i deploy/postgres" || verdict=bad
+before "$KC exec -i deploy/postgres" "$KC scale deploy/kiwi --replicas=1" || verdict=bad
+before "$KC scale deploy/kiwi --replicas=1" "$KC rollout status deploy/kiwi --timeout=180s" || verdict=bad
+grep -q 'TRUNCATE' "$STDIN" || verdict=bad
+contains "$OUT" 'no Valkey in this cluster' || verdict=bad
+msg="reset.sh (minimal stack, no Valkey): wipes the tables, flushes nothing, says so, and kiwi is back up"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
+# A cluster that cannot say whether it has Valkey is not wiped half way: nothing is changed and
+# nothing is flushed, and the exit status is non-zero (an absent Deployment is an empty answer, any
+# other failure of the question is a failure).
+run_case "" "get deploy/valkey" smoke/reset.real.sh
+verdict=ok
+[ "$RC" -ne 0 ] || verdict=bad
+logged 'replicas=0' && verdict=bad
+logged 'exec -i deploy/postgres' && verdict=bad
+logged 'FLUSHALL' && verdict=bad
+[ ! -s "$STDIN" ] || verdict=bad
+contains "$(grep -n 'scale deploy/kiwi' "$LOG" | tail -n 1)" '--replicas=1' || verdict=bad
+msg="reset.sh: a failing Valkey lookup stops the reset before anything is truncated or flushed, with kiwi left at 1"
+if [ "$verdict" = ok ]; then ok "$msg"; else bad "$msg" "rc=$RC" "$(cat "$LOG")" "$OUT"; fi
+
 # --- bounded.sh: GNU timeout, or gtimeout on macOS, always with --foreground ----------------
 for dir in only-timeout only-gtimeout both none; do mkdir -p "$WORK/p-$dir"; done
 cat >"$WORK/tlogstub" <<'EOF'
@@ -377,6 +575,25 @@ fi
 if mutant 'bounded drops --foreground' 's/ --foreground//' bounded.sh; then
   run_case "$WORK/env.keyed" "" smoke/run.sh
   if ! all_foreground; then ok "mutant caught: a bounded call without --foreground is seen (the keyed-run test fails on it)"; else bad "mutant: dropping --foreground changed nothing observable" "$(cat "$TLOG")"; fi
+fi
+
+if mutant 'reset.sh flushes Valkey whether or not the cluster has one' 's/^if \[ -n "\$valkey" \]; then$/if true; then/' reset.real.sh; then
+  EXTRA_ENV=(STUB_NO_VALKEY=1)
+  run_case "" "" smoke/reset.real.sh
+  EXTRA_ENV=()
+  if logged 'valkey-cli FLUSHALL'; then ok "mutant caught: a reset that flushes unconditionally calls valkey-cli on a cluster without Valkey (the minimal-stack test fails on it)"; else bad "mutant: the unconditional flush changed nothing observable" "$(cat "$LOG")"; fi
+fi
+if mutant 'the minimal profile returns to mockauth' 's/^    base_overlay=minimal$/    base_overlay=mockauth/' run.sh; then
+  EXTRA_ENV=(KIWI_SMOKE_PROFILE=minimal)
+  run_case "$WORK/env.keyed" "" smoke/run.sh
+  EXTRA_ENV=()
+  if logged_x "$MOCKAUTH"; then ok "mutant caught: a minimal profile that returns to mockauth logs overlay mockauth (the minimal-profile test fails on it)"; else bad "mutant: the base overlay mutation changed nothing observable" "$(cat "$LOG")"; fi
+fi
+if mutant 'an unknown profile is accepted' 's/^    exit 2$/    :/' run.sh; then
+  EXTRA_ENV=(KIWI_SMOKE_PROFILE=bogus)
+  run_case "$WORK/env.keyed" "" smoke/run.sh
+  EXTRA_ENV=()
+  if [ "$RC" -ne 2 ]; then ok "mutant caught: a run that does not refuse an unknown profile does not exit 2 (the refusal tests fail on it)"; else bad "mutant: accepting an unknown profile still exits 2"; fi
 fi
 
 if [ "$failures" -gt 0 ]; then

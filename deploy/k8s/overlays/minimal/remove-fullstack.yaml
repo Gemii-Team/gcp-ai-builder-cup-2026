@@ -1,0 +1,27 @@
+# The two things of the full stack that one process makes unnecessary: Valkey (kiwi keeps
+# its cache, realtime tickets and OAuth state in memory, and its sessions in Postgres) and
+# the web server (kiwi serves the built app). Each is a Deployment and a Service; the
+# images of both go with them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+$patch: delete
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+$patch: delete
