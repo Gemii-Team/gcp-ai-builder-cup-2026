@@ -471,6 +471,22 @@ func sessionHash(id string) []byte {
 
 func timestamptz(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
 
+// wellFormedSessionID reports whether id has the shape newSessionID produces: 256 random
+// bits as 43 unpadded base64url characters.
+func wellFormedSessionID(id string) bool {
+	if len(id) != 43 {
+		return false
+	}
+	for i := range len(id) {
+		switch c := id[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // PutSession implements cache.Sessions.
 func (s *Sessions) PutSession(ctx context.Context, id string, rec cache.SessionRecord) error {
 	if id == "" {
@@ -503,6 +519,12 @@ func (s *Sessions) PutSession(ctx context.Context, id string, rec cache.SessionR
 
 // GetSession implements cache.Sessions: one UPDATE that matches a live session and slides it.
 func (s *Sessions) GetSession(ctx context.Context, id string) (cache.SessionRecord, error) {
+	// A cookie that cannot be a session id of ours (newSessionID makes 43 base64url
+	// characters) is answered without a transaction on the system pool, which anyone
+	// can send. It does not stop a flood of well-formed junk, only the cheap kind.
+	if !wellFormedSessionID(id) {
+		return cache.SessionRecord{}, fmt.Errorf("identity: session: %w", errs.ErrNotFound)
+	}
 	var row store.TouchSessionRow
 	err := s.db.System(ctx, func(ctx context.Context, tx pgx.Tx) (err error) {
 		row, err = store.New(tx).TouchSession(ctx, store.TouchSessionParams{

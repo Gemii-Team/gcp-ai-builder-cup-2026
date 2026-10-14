@@ -45,7 +45,10 @@ CREATE POLICY workspace_isolation ON identity.sessions
 REVOKE ALL ON identity.sessions FROM kiwi_app;
 -- kiwi_system: the session store (identity/callback.go) reads, slides, creates and
 -- deletes sessions, and nothing else on this table or any other. This is the only
--- DELETE kiwi_system holds.
+-- DELETE kiwi_system holds. The grant is for the role, not for the file: the relay and
+-- the Meet poll share it, so a bug in their SQL could mint or delete a session. That is
+-- the price of looking a session up before its workspace is known, and the db.System
+-- allowlist is what keeps the callers to three files.
 GRANT SELECT, INSERT, UPDATE, DELETE ON identity.sessions TO kiwi_system;
 
 -- +goose Down

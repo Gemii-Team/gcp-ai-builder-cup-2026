@@ -392,6 +392,13 @@ func TestSessions_NeedTheSystemPool(t *testing.T) {
 	if _, err := store.GetSession(t.Context(), newID()); err == nil || errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("GetSession without a system pool: err = %v, want a failure that is not 'not found'", err)
 	}
+	// A cookie that cannot be one of our ids never reaches the pool: with none, it is
+	// still just "not found", which is how the cheap kind of junk costs no transaction.
+	for _, junk := range []string{"", "x", strings.Repeat("a", 42), strings.Repeat("a", 44), strings.Repeat("a", 42) + "=", strings.Repeat("a", 42) + "+", strings.Repeat("a", 42) + "\x00"} {
+		if _, err := store.GetSession(t.Context(), junk); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("GetSession(%q) = %v, want not found without a transaction", junk, err)
+		}
+	}
 }
 
 // The point of keeping sessions in Postgres: a process that starts later, with nothing

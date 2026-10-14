@@ -213,8 +213,11 @@ func TestLoad_RejectsBadPoolsAndIdleTimes(t *testing.T) {
 		{"system pool below the relay's need", "KIWI_DB_SYSTEM_MAX_CONNS", "5", "KIWI_DB_SYSTEM_MAX_CONNS must be at least 6"},
 		{"system pool of the relay's size", "KIWI_DB_SYSTEM_MAX_CONNS", "4", "KIWI_DB_SYSTEM_MAX_CONNS must be at least 6"},
 		{"idle time that is not a duration", "KIWI_DB_MAX_CONN_IDLE", "soon", "KIWI_DB_MAX_CONN_IDLE must be a duration"},
-		{"idle time of zero", "KIWI_DB_MAX_CONN_IDLE", "0s", "KIWI_DB_MAX_CONN_IDLE must be longer than zero"},
-		{"negative idle time", "KIWI_DB_MAX_CONN_IDLE", "-1m", "KIWI_DB_MAX_CONN_IDLE must be longer than zero"},
+		{"idle time of zero", "KIWI_DB_MAX_CONN_IDLE", "0s", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"negative idle time", "KIWI_DB_MAX_CONN_IDLE", "-1m", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"idle time of a nanosecond", "KIWI_DB_MAX_CONN_IDLE", "1ns", "KIWI_DB_MAX_CONN_IDLE must be at least 1s"},
+		{"app pool of a hundred thousand", "KIWI_DB_APP_MAX_CONNS", "100000", "KIWI_DB_APP_MAX_CONNS must be at most 1000"},
+		{"system pool of a hundred thousand", "KIWI_DB_SYSTEM_MAX_CONNS", "100000", "KIWI_DB_SYSTEM_MAX_CONNS must be at most 1000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Load(nil, getenv(with(validEnv(), tc.variable, tc.value)))

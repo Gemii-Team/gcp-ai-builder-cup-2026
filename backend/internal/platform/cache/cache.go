@@ -91,8 +91,10 @@ type Frame struct {
 	Data  []byte
 }
 
-// Sessions stores browser sessions. A session id is a bearer credential: adapters
-// must never store or log it in the clear where they can avoid it.
+// Sessions stores browser sessions. A session id is a bearer credential: no adapter
+// logs it. The Postgres store (identity.NewSessions) keeps only its SHA-256; the Valkey
+// adapter keeps the legacy key sess:{id}, which hashing would change and so sign
+// everyone out on the rollout that does it.
 type Sessions interface {
 	// PutSession stores the session under id for the sliding lifetime, shortened to
 	// what is left of the absolute one. A zero CreatedAt means now; an empty id, or a

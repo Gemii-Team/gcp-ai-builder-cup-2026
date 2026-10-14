@@ -44,8 +44,8 @@ const (
 	// container must listen on. It is not a KIWI_ variable, so Load reads it directly
 	// and it is not a tagged field.
 	portVar = "PORT"
-	// defaultListenAddr is where kiwi listens when neither KIWI_LISTEN_ADDR nor PORT is set.
-	defaultListenAddr = ":8080"
+	// DefaultListenAddr is where kiwi listens when neither KIWI_LISTEN_ADDR nor PORT is set.
+	DefaultListenAddr = ":8080"
 )
 
 // The cache providers (KIWI_CACHE_PROVIDER).
@@ -74,6 +74,10 @@ const (
 	// RelayConcurrency connections, and two more for the sign-in callback, the session
 	// lookups of the Postgres session store and the Meet poll.
 	MinDBSystemMaxConns = RelayConcurrency + 2
+
+	// minDBMaxConnIdle is the shortest idle time accepted; pgx only looks for idle
+	// connections once a minute, so less is no more precise, just a way to churn.
+	minDBMaxConnIdle = time.Second
 )
 
 // servingRoles are the roles `kiwi serve` can run; their order is the default of KIWI_ROLES.
@@ -121,8 +125,8 @@ type Config struct {
 	// DBAppMaxConns and DBSystemMaxConns size the two connection pools of a process.
 	// The system pool must hold the outbox relay's connections and more: validate
 	// enforces MinDBSystemMaxConns.
-	DBAppMaxConns    int `env:"KIWI_DB_APP_MAX_CONNS" min:"1"`
-	DBSystemMaxConns int `env:"KIWI_DB_SYSTEM_MAX_CONNS" min:"1"`
+	DBAppMaxConns    int `env:"KIWI_DB_APP_MAX_CONNS" min:"1" max:"1000"`
+	DBSystemMaxConns int `env:"KIWI_DB_SYSTEM_MAX_CONNS" min:"1" max:"1000"`
 	// DBMaxConnIdle is how long an idle pooled connection is kept before it is closed.
 	DBMaxConnIdle time.Duration `env:"KIWI_DB_MAX_CONN_IDLE"`
 
@@ -332,6 +336,11 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 				problems = append(problems, fmt.Errorf("%s must be at least %d", name, minimum))
 				continue
 			}
+			// A pool this large only exhausts Postgres's max_connections: a typo, not a setting.
+			if maximum, err := strconv.Atoi(f.Tag.Get("max")); err == nil && n > maximum {
+				problems = append(problems, fmt.Errorf("%s must be at most %d", name, maximum))
+				continue
+			}
 			*dst = n
 		case *time.Duration:
 			d, err := time.ParseDuration(value)
@@ -339,8 +348,8 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 				problems = append(problems, fmt.Errorf("%s must be a duration such as 5m or 90s", name))
 				continue
 			}
-			if d <= 0 {
-				problems = append(problems, fmt.Errorf("%s must be longer than zero", name))
+			if d < minDBMaxConnIdle {
+				problems = append(problems, fmt.Errorf("%s must be at least %s: a shorter time makes the pool reconnect constantly", name, minDBMaxConnIdle))
 				continue
 			}
 			*dst = d
@@ -371,7 +380,7 @@ func defaultFor(name string, getenv func(string) string) string {
 		if port := strings.TrimSpace(getenv(portVar)); port != "" {
 			return ":" + port
 		}
-		return defaultListenAddr
+		return DefaultListenAddr
 	}
 	return defaults[name]
 }

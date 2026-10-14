@@ -41,8 +41,10 @@ const (
 // restart, so a memory deployment keeps them in Postgres (identity.NewSessions).
 //
 // It caches no members either. Members always misses, so chat.NewMembership reads
-// Postgres on every check and a revocation is effective at once, in this process and
-// in a second one that overlaps it during a rollout. That costs one short transaction
+// Postgres on every check, so a removal is seen by the next check at once, in this
+// process and in a second one that overlaps it during a rollout (a socket that is already
+// subscribed loses the channel when the REMOVED frame reaches the gateway, as with
+// Valkey). That costs one short transaction
 // per check, which is cheap for the ten people this profile serves; a cache would add
 // a staleness window to bound and nothing else.
 type Memory struct {

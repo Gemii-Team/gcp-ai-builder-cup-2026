@@ -231,9 +231,21 @@ func (a *App) wire(ctx context.Context) error {
 	// A cache that keeps sessions itself (Valkey) does. One that is the process's own
 	// does not, and loses them with it: they live in Postgres, so that a redeploy does
 	// not sign everyone out.
-	sessions, ok := a.cache.(cache.Sessions)
-	if !ok {
+	// The choice follows the provider, and the type is checked against it, so a cache
+	// that stops being a Sessions cannot silently move a Valkey deployment's sessions
+	// to Postgres, nor a memory one's into a store that a restart empties.
+	var sessions cache.Sessions
+	switch cfg.CacheProvider {
+	case config.CacheMemory:
 		sessions = identity.NewSessions(a.db, cache.Options{})
+		slog.Info("app: sessions are kept in Postgres")
+	default:
+		v, ok := a.cache.(cache.Sessions)
+		if !ok {
+			return fmt.Errorf("app: the %s cache keeps no sessions", cmp.Or(cfg.CacheProvider, config.CacheValkey))
+		}
+		sessions = v
+		slog.Info("app: sessions are kept in Valkey")
 	}
 	ident, err := identity.New(ctx, identity.Deps{Config: cfg, DB: a.db, Cache: a.cache, Sessions: sessions})
 	if err != nil {
@@ -443,7 +455,7 @@ func (a *App) Run(ctx context.Context) error {
 
 // listenAddr is where Run listens when it was not handed a listener: KIWI_LISTEN_ADDR,
 // else :$PORT, else :8080 (config.Load works that out; a Config built by hand has none).
-func (a *App) listenAddr() string { return cmp.Or(a.cfg.ListenAddr, ":8080") }
+func (a *App) listenAddr() string { return cmp.Or(a.cfg.ListenAddr, config.DefaultListenAddr) }
 
 // mux routes the one port: the api role's handler under /api/, the gateway at /ws and,
 // with KIWI_WEB_DIR, the web app on everything else. The probes are the listener's. The
