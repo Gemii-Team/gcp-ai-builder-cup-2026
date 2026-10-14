@@ -89,7 +89,7 @@ type fixture struct {
 	t     *testing.T
 	env   *dbtest.Env
 	db    *db.DB
-	cache *cache.Cache
+	cache *cache.Valkey
 	svc   Service
 
 	ws                uuid.UUID
@@ -108,7 +108,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(d.Close)
-	c, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
+	c, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}
@@ -945,6 +945,42 @@ func TestPrivateChannel_NonMemberCannotListOrSync(t *testing.T) {
 	}
 }
 
+// With the in-process cache a removal is effective at once, in the process that made it
+// and in a second one that shares only Postgres, which is what a rollout runs for a
+// while: nothing is cached, so no process can answer from a set that predates it.
+func TestRemoveMember_WithTheMemoryCache_IsEffectiveInEveryProcessAtOnce(t *testing.T) {
+	f := newFixture(t)
+	ch := f.channel("private", f.alice, f.bob)
+	ctx := f.wsCtx()
+
+	// Two processes: each has a memory cache of its own and they share the database.
+	process := func() Service {
+		mem := cache.NewMemory(cache.Options{})
+		t.Cleanup(func() { _ = mem.Close() })
+		return New(Deps{
+			DB: f.db, Authz: authz.New(NewMembership(f.db, mem)), Cache: mem,
+			KnownAgent: func(name string) bool { return name == "assistant" },
+		})
+	}
+	old, next := process(), process()
+
+	for name, svc := range map[string]Service{"first": old, "second": next} {
+		if ok, err := svc.IsMember(ctx, ch, f.bob); err != nil || !ok {
+			t.Fatalf("%s process: IsMember(bob) = %v, %v, want true", name, ok, err)
+		}
+	}
+	if err := old.RemoveMember(ctx, f.user(f.alice), ch, f.bob); err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+	for name, svc := range map[string]Service{"first": old, "second": next} {
+		if ok, err := svc.IsMember(ctx, ch, f.bob); err != nil || ok {
+			t.Errorf("%s process: IsMember(bob) after the removal = %v, %v, want false at once", name, ok, err)
+		}
+		_, err := svc.PostMessage(ctx, f.user(f.bob), &chatv1.SendMessageRequest{ChannelId: ch.String(), ClientMsgId: "late-" + name, Body: "still here?"})
+		wantErr(t, err, errs.ErrForbidden, name+" process: removed member posts")
+	}
+}
+
 func TestRemoveMember_InvalidatesCacheAndNotifies(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("private", f.alice, f.bob)
@@ -1201,7 +1237,7 @@ func TestMembership_CacheOutageFallsBackToPostgres(t *testing.T) {
 	f := newFixture(t)
 	ch := f.channel("private", f.alice)
 	// A cache whose connection is closed fails every call, like an unreachable Valkey.
-	dead, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
+	dead, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

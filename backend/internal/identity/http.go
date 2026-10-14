@@ -25,7 +25,7 @@ const (
 	// leaked callback URL could be completed by anyone who holds it.
 	stateCookie = "__Host-kiwi_oauth"
 	// stateCookieMaxAge is how long a person may take at the provider; the state
-	// in Valkey lives as long.
+	// in the cache lives as long.
 	stateCookieMaxAge = 10 * time.Minute
 )
 
@@ -119,7 +119,7 @@ func (m *Module) handleCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	// Only the browser that started the flow holds the cookie. A mismatch leaves
-	// the state in Valkey alone, so a stranger replaying a leaked URL cannot burn
+	// the state in the cache alone, so a stranger replaying a leaked URL cannot burn
 	// the real person's sign-in.
 	if !boundTo(r, state) {
 		signinError(w, r, CodeStateMismatch, "")
@@ -154,9 +154,9 @@ func (m *Module) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A browser that signs in again gives up its previous session: the new id
-	// replaces the cookie, so the old one would only linger in Valkey.
+	// replaces the cookie, so the old one would only linger in the session store.
 	if old, err := r.Cookie(SessionCookie); err == nil && old.Value != sess.ID {
-		if err := m.cache.DeleteSession(ctx, old.Value); err != nil {
+		if err := m.sessions.DeleteSession(ctx, old.Value); err != nil {
 			m.log.WarnContext(ctx, "previous session was not removed", "err", err)
 		}
 	}

@@ -101,7 +101,7 @@ type harness struct {
 	t     *testing.T
 	env   *dbtest.Env
 	db    *db.DB
-	cache *cache.Cache
+	cache *cache.Valkey
 	blob  blob.Store
 	llm   *fakellm.Client
 	deps  Deps
@@ -122,7 +122,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(d.Close)
-	c, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
+	c, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}

@@ -104,8 +104,9 @@ func bootValkey() (string, error) {
 }
 
 type settings struct {
-	idp []fakeoidctest.Option
-	cfg func(*config.Config)
+	idp    []fakeoidctest.Option
+	cfg    func(*config.Config)
+	memory bool // the minimal profile: the in-process cache and the sessions in Postgres
 }
 
 type setting func(*settings)
@@ -113,6 +114,19 @@ type setting func(*settings)
 func withIDP(o ...fakeoidctest.Option) setting { return func(s *settings) { s.idp = o } }
 
 func withConfig(fn func(*config.Config)) setting { return func(s *settings) { s.cfg = fn } }
+
+// withMemoryProfile runs the module as the minimal profile does (KIWI_CACHE_PROVIDER=memory):
+// login state and tickets in the process, the sessions in Postgres.
+func withMemoryProfile() setting { return func(s *settings) { s.memory = true } }
+
+// eachProfile runs fn once per cache profile, as subtests: Valkey holding everything, and
+// the in-process cache with the sessions in Postgres. What the sign-in flow does must not
+// depend on which one it runs on.
+func eachProfile(t *testing.T, fn func(t *testing.T, opts ...setting)) {
+	t.Helper()
+	t.Run("valkey", func(t *testing.T) { fn(t) })
+	t.Run("memory", func(t *testing.T) { fn(t, withMemoryProfile()) })
+}
 
 // realSubs gives Alice, Bob and Carol the long numeric subjects Google issues;
 // Carol's token carries no hd.
@@ -128,7 +142,8 @@ type fixture struct {
 	t       *testing.T
 	env     *dbtest.Env
 	db      *db.DB
-	cache   *cache.Cache
+	cache   cache.Cache
+	session cache.Sessions
 	rdb     *redis.Client
 	idp     *fakeoidctest.Server
 	mod     *Module
@@ -189,17 +204,24 @@ func newFixture(t *testing.T, opts ...setting) *fixture {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(d.Close)
-	c, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
-	if err != nil {
-		t.Fatalf("cache.Open: %v", err)
+	var c cache.Cache
+	var sessions cache.Sessions
+	if s.memory {
+		c, sessions = cache.NewMemory(cache.Options{}), NewSessions(d, cache.Options{})
+	} else {
+		v, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
+		if err != nil {
+			t.Fatalf("cache.Open: %v", err)
+		}
+		c, sessions = v, v
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
-	mod, err := New(t.Context(), Deps{Config: cfg, DB: d, Cache: c, Logger: slog.New(slog.DiscardHandler)})
+	mod, err := New(t.Context(), Deps{Config: cfg, DB: d, Cache: c, Sessions: sessions, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return &fixture{t: t, env: env, db: d, cache: c, rdb: rdb, idp: idp, mod: mod, cfg: cfg, handler: mod.AuthHandler(), tokKey: tokKey}
+	return &fixture{t: t, env: env, db: d, cache: c, session: sessions, rdb: rdb, idp: idp, mod: mod, cfg: cfg, handler: mod.AuthHandler(), tokKey: tokKey}
 }
 
 // asOwner runs fn as kiwi_owner in a transaction bound to ws, which is how the
@@ -594,7 +616,11 @@ func TestCallback_HD_MatchingSeededWorkspace_CreatesUserAndSession(t *testing.T)
 }
 
 func TestSessionID_HasAtLeast128BitsOfEntropy(t *testing.T) {
-	f := newFixture(t)
+	eachProfile(t, testSessionID_HasAtLeast128BitsOfEntropy)
+}
+
+func testSessionID_HasAtLeast128BitsOfEntropy(t *testing.T, opts ...setting) {
+	f := newFixture(t, opts...)
 	f.seedWorkspace(fakeoidc.DefaultDomain)
 
 	seen := map[string]bool{}
@@ -657,8 +683,10 @@ func TestCallback_RejectsStateMismatch(t *testing.T) {
 	})
 }
 
-func TestCallback_StateIsSingleUse(t *testing.T) {
-	f := newFixture(t)
+func TestCallback_StateIsSingleUse(t *testing.T) { eachProfile(t, testCallback_StateIsSingleUse) }
+
+func testCallback_StateIsSingleUse(t *testing.T, opts ...setting) {
+	f := newFixture(t, opts...)
 	f.seedWorkspace(fakeoidc.DefaultDomain)
 
 	authURL, bind := f.login("/")
@@ -1696,8 +1724,10 @@ func TestCallback_NewRefreshTokenReplacesTheRevokedOne(t *testing.T) {
 	}
 }
 
-func TestLogout_DeletesSession(t *testing.T) {
-	f := newFixture(t)
+func TestLogout_DeletesSession(t *testing.T) { eachProfile(t, testLogout_DeletesSession) }
+
+func testLogout_DeletesSession(t *testing.T, opts ...setting) {
+	f := newFixture(t, opts...)
 	f.seedWorkspace(fakeoidc.DefaultDomain)
 	sid := f.mustSignIn(fakeoidc.AliceEmail)
 	other := f.mustSignIn(fakeoidc.AliceEmail) // a second browser
@@ -1774,7 +1804,11 @@ func TestLogout_RefusesCrossOriginRequests(t *testing.T) {
 }
 
 func TestIssueRealtimeTicket_BoundToUser(t *testing.T) {
-	f := newFixture(t)
+	eachProfile(t, testIssueRealtimeTicket_BoundToUser)
+}
+
+func testIssueRealtimeTicket_BoundToUser(t *testing.T, opts ...setting) {
+	f := newFixture(t, opts...)
 	ws := f.seedWorkspace(fakeoidc.DefaultDomain)
 	alice := f.seedUser(ws, aliceSub, fakeoidc.AliceEmail, fakeoidc.AliceName)
 	bob := f.seedUser(ws, bobSub, fakeoidc.BobEmail, fakeoidc.BobName)
@@ -2008,7 +2042,11 @@ func TestCallback_RejectsAWrongOrMissingNonce(t *testing.T) {
 }
 
 func TestCallback_ReplacesThePreviousSessionOfTheBrowser(t *testing.T) {
-	f := newFixture(t)
+	eachProfile(t, testCallback_ReplacesThePreviousSessionOfTheBrowser)
+}
+
+func testCallback_ReplacesThePreviousSessionOfTheBrowser(t *testing.T, opts ...setting) {
+	f := newFixture(t, opts...)
 	f.seedWorkspace(fakeoidc.DefaultDomain)
 	first := f.mustSignIn(fakeoidc.AliceEmail)
 

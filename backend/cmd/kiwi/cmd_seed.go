@@ -98,7 +98,7 @@ func runSeed(ctx context.Context, args []string) error {
 		return err
 	}
 	defer d.Close()
-	c, err := cache.Open(ctx, cfg.ValkeyURL, cache.Options{})
+	c, err := cache.Open(ctx, cfg)
 	if err != nil {
 		return err
 	}
