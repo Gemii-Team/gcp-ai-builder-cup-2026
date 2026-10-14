@@ -122,9 +122,10 @@ else
   report "no sk- key" ok
 fi
 
-# A KIWI_ variable is named, never given a value, except the opt-in switch that is not a secret.
+# A KIWI_ variable is named, never given a value, except the two opt-in switches that are not secrets:
+# KIWI_LIVE_E2E=1 and KIWI_SMOKE_PROFILE=minimal (which stack `task smoke` runs on).
 hits=$(grep -noE 'KIWI_[A-Z0-9_]+[[:space:]]*=[[:space:]]*[^[:space:]]+' "$README" |
-  grep -vE '^[0-9]+:KIWI_LIVE_E2E=1[^0-9A-Za-z_]*$' | lines_of)
+  grep -vE '^[0-9]+:KIWI_(LIVE_E2E=1|SMOKE_PROFILE=minimal)[^0-9A-Za-z_]*$' | lines_of)
 if [ -n "$hits" ]; then
   report "no KIWI_ variable assigned a value" no "an assignment on line(s) $hits"
 else

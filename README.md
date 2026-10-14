@@ -41,13 +41,13 @@ task seed                       # in a second terminal: the demo workspace, with
 # open http://localhost:8080 and press "Continue with Google": a mock chooser appears
 ```
 
-Details, real Google sign-in and tests: [Run it locally](#run-it-locally). `task local:down` stops it and deletes the cluster and all local data.
+Details, real Google sign-in and tests: [Run it locally](#run-it-locally). `task local:down` stops it and deletes the cluster and all local data. `OVERLAY=minimal task local:up` starts the same app as one process instead (no Valkey, no separate web server: the shape of the Google Cloud minimal profile, which is prepared, not built).
 
 ## How it works
 
 ### Local development
 
-Everything runs in a k3d cluster on your machine, published on `127.0.0.1:8080` only. By default (the `mockauth` overlay) people sign in through a mock provider; with `OVERLAY=local` they sign in through real Google, and Meet comes with it.
+Everything runs in a k3d cluster on your machine, published on `127.0.0.1:8080` only. By default (the `mockauth` overlay) people sign in through a mock provider; with `OVERLAY=local` they sign in through real Google, and Meet comes with it. With `OVERLAY=minimal` the same app runs as one process: a single `kiwi` pod serves the built web app, the API and the WebSocket, keeps its cache in memory and its sessions in Postgres, and there is no `web` pod and no Valkey (the two boxes marked in the diagram).
 
 ```mermaid
 flowchart LR
@@ -55,11 +55,11 @@ flowchart LR
     tilt["Your editor + Tilt"]
     subgraph k3d["k3d cluster on your machine"]
         traefik["Traefik<br/>ingress"]
-        web["web<br/>Caddy + built app"]
+        web["web<br/>Caddy + built app<br/>not with OVERLAY=minimal"]
         kiwi["kiwi, one binary<br/>api, realtime, worker, agents<br/>in-process bus"]
         mock["mockoidc<br/>mock sign-in"]
         pg[("Postgres<br/>+ pgvector")]
-        vk[("Valkey")]
+        vk[("Valkey<br/>not with OVERLAY=minimal")]
         vol[("Uploads<br/>volume")]
         ollama["Ollama<br/>embeddings"]
     end
@@ -164,6 +164,8 @@ sequenceDiagram
 | Secrets | Git-ignored `.env`, loaded into a Secret of the cluster | Secret Manager, one secret per variable |
 | Deploy | `task local:up`; Tilt rebuilds on save | Terragrunt apply by the owner; images by GitHub Actions (workflow not written) |
 | Scale | One `kiwi` pod | Exactly one instance (min = max = 1), CPU always on |
+| Minimal profile (one process, no Valkey) | `OVERLAY=minimal task local:up`: one `kiwi` pod serves the app, the API and the WebSocket; cache, realtime tickets and pub/sub live in the process; sessions are in Postgres; database pools of 6 + 6. Pinned by `task check:scripts` (**automated**); run on the k3d cluster (**real-condition**, see [What was checked](#what-was-checked-and-how)) | **Prepared, not built:** the same shape on Google Cloud (one process, no Valkey, sessions in Postgres, pools of 6 + 6). Not applied, and not built end to end |
+| Sessions | Valkey; with `OVERLAY=minimal`, rows of the `identity` schema in Postgres | Memorystore for Valkey; in the minimal profile, Postgres (prepared, not built) |
 
 ## Run it locally
 
@@ -174,6 +176,8 @@ Steps 1 to 5 run the product with the mock sign-in. Run the commands in a shell 
 3. **Start the cluster.** `task local:up` creates (or starts) the k3d cluster `kiwi`, loads `.env` into it and runs Tilt with the `mockauth` overlay. Tilt builds the images and deploys Postgres, the migration job, Valkey, Ollama (the first start downloads the embedding model), then `kiwi` and `web`. It stays in the foreground: use a second terminal, and wait until Tilt shows every resource ready.
 4. **Seed the demo workspace.** `task seed` seeds the workspace `demo.example` with its channels, messages, documents and AI drafts, and invites alice and bob. `task seed -- --help` lists the flags.
 5. **Open the app.** Go to `http://localhost:8080` and press **Continue with Google**. The default stack (`OVERLAY=mockauth task local:up` says it explicitly) needs no Google client: the button goes through a mock sign-in provider on the same origin, with a chooser of three accounts: `alice@demo.example` (has a hosted domain, `demo.example`: signs in), `bob@demo.example` (no hosted domain, invited by the seed: signs in) and `carol@elsewhere.example` (no hosted domain, not invited: refused with K.I.W.I.'s "has not been invited" page). Use this stack if you are not a test user of the team's Google OAuth app, or not seeded.
+
+**The minimal stack.** In place of step 3, `OVERLAY=minimal task local:up` starts one `kiwi` pod that serves the web app, the API and the WebSocket on port 8080, with no `web` pod and no Valkey. Steps 4 and 5 are the same (`task seed`, then `http://localhost:8080`). Its cache, realtime tickets and OAuth state live in the `kiwi` process, its sessions are rows of the `identity` schema in Postgres (in the default stack they are in Valkey), and its database pools are 6 + 6 connections. `KIWI_SMOKE_PROFILE=minimal task smoke` runs the smoke suite on it: overlay `minimal-smoke` for the replay run, then back to `minimal`. `task smoke` alone is the default profile, unchanged, and any other value of the variable is refused before anything is touched. **Status:** the overlays, the Dockerfile of the all-in-one image, the Tiltfile and the smoke scripts are pinned by `task check:scripts` (**automated**). On a fresh k3d cluster the stack came up in about two minutes (a warm Docker cache), the replay smoke suite passed all 9 tests on it, the three `@live` tests passed against the real LLM, and a session survived a restart of the `kiwi` pod (**real-condition**, once each, on one host; the browser, the sign-in and the replayed model stay **simulated**). The Google Cloud minimal profile it models is prepared, not built.
 
 `task local:down` deletes the cluster, its registry and its volumes (so all local data).
 
@@ -248,9 +252,9 @@ Pull requests run `.github/workflows/ci.yml` and the hygiene workflow (no privat
 
 - **`task test`.** On rootless Docker, if starting containers fails with `bind: address already in use`, run `cd backend && go test -race -p 1 ./...` instead.
 - **What `task check:scripts` needs.** Network access: kubeconform downloads the Kubernetes schemas from `raw.githubusercontent.com` (observed: with no network it reports an error for every resource). It needs kustomize, kubeconform, gitleaks and task on `PATH`, and caddy to validate the Caddyfile (`mise install` provides all of them; without caddy that check is skipped, loudly). `task gen:check` runs `task gen`, then a diff: stage generated files first.
-- **`task smoke` and friends.** `task smoke` needs no model session. Flags after `--` go to Playwright. The suite never touches live Meet: flow 2 goes through the WAV recording upload, with a recorded transcript. `KIWI_LIVE_E2E=1 task smoke` is never part of the default run, and wipes and seeds the same way. `task reset` stops kiwi while the tables are truncated, flushes Valkey and starts kiwi again.
+- **`task smoke` and friends.** `task smoke` needs no model session. Flags after `--` go to Playwright. The suite never touches live Meet: flow 2 goes through the WAV recording upload, with a recorded transcript. `KIWI_LIVE_E2E=1 task smoke` is never part of the default run, and wipes and seeds the same way. `task reset` stops kiwi while the tables are truncated, flushes Valkey when the cluster has one (the minimal stack has none) and starts kiwi again.
 - **`task check:scripts` suites.** `scripts/local/render.test.sh` (the rendered overlays through kustomize and kubeconform, the Caddyfile through `caddy validate`, the Tiltfile, the cluster scripts); `scripts/hygiene/{check-paths,gitleaks,readme}.test.sh` (the private-path and secret guards, and this README: its commands exist and it holds no secret, private address or dead link); `scripts/smoke/run.test.sh` (the end of `task smoke` and `task reset`: the order of their steps, what they refuse, their exit status and last line, with every program they call replaced by a stub). The checks of the README suite that read your `.env` are skipped, loudly, where there is none.
-- **`task smoke` in full.** It wipes every table of the application schemas and Valkey. It installs the JavaScript dependencies as the lockfile has them, builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set (elsewhere, point that variable at a Playwright browsers directory with the chromium headless shell that the pinned `@playwright/test` runs), and at the end removes the older Tilt-built images from the host (the newest of each repository, and every image a container uses, are kept; nothing else is pruned). A machine with the five LLM values (`KIWI_LLM_BASE_URL`, `KIWI_LLM_API_KEY`, `KIWI_LLM_MODEL_FLASH`, `KIWI_LLM_MODEL_PRO`, `KIWI_ASR_MODEL`) in `.env` ends on the `mockauth` overlay, wiped again and freshly seeded with the default seed (`demo.example`: alice and bob). A machine without them cannot start `mockauth`: it ends on the `smoke` overlay, still holding the replay's seed, and says so on its last line. `KIWI_LIVE_E2E=1 task smoke` ends on `mockauth`, freshly seeded.
+- **`task smoke` in full.** It wipes every table of the application schemas, and Valkey where the cluster has one. It installs the JavaScript dependencies as the lockfile has them, builds the Playwright browsers with Nix when `PLAYWRIGHT_BROWSERS_PATH` is not set (elsewhere, point that variable at a Playwright browsers directory with the chromium headless shell that the pinned `@playwright/test` runs), and at the end removes the older Tilt-built images from the host (the newest of each repository, and every image a container uses, are kept; nothing else is pruned). A machine with the five LLM values (`KIWI_LLM_BASE_URL`, `KIWI_LLM_API_KEY`, `KIWI_LLM_MODEL_FLASH`, `KIWI_LLM_MODEL_PRO`, `KIWI_ASR_MODEL`) in `.env` ends on the `mockauth` overlay, wiped again and freshly seeded with the default seed (`demo.example`: alice and bob). A machine without them cannot start `mockauth`: it ends on the `smoke` overlay, still holding the replay's seed, and says so on its last line. `KIWI_LIVE_E2E=1 task smoke` ends on `mockauth`, freshly seeded. With `KIWI_SMOKE_PROFILE=minimal` the same happens on the minimal stack, with `minimal-smoke` and `minimal` in place of `smoke` and `mockauth`.
 - **Time limits.** `task smoke` and `task reset` put a limit on the steps that can wait on kiwi, the database or a model: the scripts' own steps use GNU coreutils `timeout --foreground`, so Ctrl-C reaches the command being waited for (the cost: when a limit expires, `timeout` signals only the command it started, not what that command started in turn), while Tilt and the `kubectl` waits carry their own `--timeout`.
 - **CI jobs.** Go formatting, build and race tests (`go`); lint, typecheck and tests of the web workspaces (`web`); the `scripts` job, which runs `render.test.sh` and `run.test.sh` with kustomize, kubeconform and task built by `go install` at pinned versions; the `gen-drift` job, which runs `scripts/check-gen-drift.sh` with buf, sqlc and task built the same way; and the `iac` job, which runs `task iac:check` with Terraform, Terragrunt, TFLint and Trivy from actions pinned to a commit.
 
@@ -380,6 +384,7 @@ The infrastructure sets variables that the current binary does not honour, or ca
 | A first start on an empty cluster | The steps of `task local:up`: the first run did not finish (fixed, pinned by a test); a second fresh cluster came up healthy in about five minutes | **real-condition**, **automated** (the pin) |
 | CI on GitHub | PR #1 and PR #2 ran `go`, `web`, `scripts`, `gen-drift`, `iac` and hygiene; all passed after fixes | **automated** |
 | Terraform modules and Terragrunt stack | `task iac:check`: 39 checks, no Google credential | **automated** only: never planned or applied |
+| The minimal stack (`OVERLAY=minimal`): one `kiwi` pod, in-process cache, sessions in Postgres | From a fresh cluster: `task local:up` to every pod Ready in about two minutes; `KIWI_SMOKE_PROFILE=minimal task smoke` 9 of 9; with `KIWI_LIVE_E2E=1` the 3 live tests; a sign-in cookie still valid after a `kiwi` restart. The Go tests run the gateway, the ticket, login-state and pub/sub behaviour on both cache adapters | **real-condition** once each on one host; **automated** for the adapters; sign-in, model replay and browser **simulated** |
 
 <details>
 <summary>Evidence in full</summary>
