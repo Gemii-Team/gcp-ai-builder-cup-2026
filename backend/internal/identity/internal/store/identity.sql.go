@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const adoptSeedUser = `-- name: AdoptSeedUser :one
@@ -49,6 +50,25 @@ func (q *Queries) AdoptSeedUser(ctx context.Context, arg AdoptSeedUserParams) (I
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
+DELETE FROM identity.sessions WHERE expires_at <= $1::timestamptz
+`
+
+// expires_at never passes created_at + the absolute lifetime, so it covers the cap too.
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, now pgtype.Timestamptz) error {
+	_, err := q.db.Exec(ctx, deleteExpiredSessions, now)
+	return err
+}
+
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM identity.sessions WHERE id_hash = $1
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, idHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteSession, idHash)
+	return err
 }
 
 const findUsersByEmail = `-- name: FindUsersByEmail :many
@@ -435,6 +455,46 @@ func (q *Queries) ReplaceOAuthToken(ctx context.Context, arg ReplaceOAuthTokenPa
 	return err
 }
 
+const touchSession = `-- name: TouchSession :one
+UPDATE identity.sessions
+SET expires_at = LEAST(
+    $1::timestamptz + make_interval(secs => $2::float8),
+    created_at + make_interval(secs => $3::float8))
+WHERE id_hash = $4
+  AND expires_at > $1::timestamptz
+  AND created_at + make_interval(secs => $3::float8) > $1::timestamptz
+RETURNING user_id, workspace_id, created_at
+`
+
+type TouchSessionParams struct {
+	Now          pgtype.Timestamptz
+	SlidingSecs  float64
+	AbsoluteSecs float64
+	IDHash       []byte
+}
+
+type TouchSessionRow struct {
+	UserID      uuid.UUID
+	WorkspaceID uuid.UUID
+	CreatedAt   pgtype.Timestamptz
+}
+
+// The read of a live session, which also slides it: the new expiry is the sliding
+// lifetime from now, never past the absolute lifetime from creation. A missing, expired
+// or capped session matches no row. The cap is checked as well as the expiry, so a row
+// written under a longer absolute lifetime than the current one is not resurrected.
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) (TouchSessionRow, error) {
+	row := q.db.QueryRow(ctx, touchSession,
+		arg.Now,
+		arg.SlidingSecs,
+		arg.AbsoluteSecs,
+		arg.IDHash,
+	)
+	var i TouchSessionRow
+	err := row.Scan(&i.UserID, &i.WorkspaceID, &i.CreatedAt)
+	return i, err
+}
+
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE identity.users
 SET email = $2, name = $3, avatar_url = $4
@@ -467,4 +527,36 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const upsertSession = `-- name: UpsertSession :exec
+
+INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id_hash) DO UPDATE
+SET user_id = excluded.user_id, workspace_id = excluded.workspace_id,
+    created_at = excluded.created_at, expires_at = excluded.expires_at
+`
+
+type UpsertSessionParams struct {
+	IDHash      []byte
+	UserID      uuid.UUID
+	WorkspaceID uuid.UUID
+	CreatedAt   pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+}
+
+// Sessions of a deployment whose cache is in the process (migration 0012). Every query
+// below is a System query run by callback.go: a session is looked up by its id alone,
+// before any workspace is known, and kiwi_system is the only role with grants on
+// identity.sessions. The key is the SHA-256 of the session id, never the id.
+func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
+	_, err := q.db.Exec(ctx, upsertSession,
+		arg.IDHash,
+		arg.UserID,
+		arg.WorkspaceID,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	return err
 }

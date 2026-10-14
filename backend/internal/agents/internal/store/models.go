@@ -107,6 +107,14 @@ type IdentityOauthToken struct {
 	UpdatedAt       pgtype.Timestamptz
 }
 
+type IdentitySession struct {
+	IDHash      []byte
+	UserID      uuid.UUID
+	WorkspaceID uuid.UUID
+	CreatedAt   pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+}
+
 type IdentityUser struct {
 	ID          uuid.UUID
 	WorkspaceID uuid.UUID
