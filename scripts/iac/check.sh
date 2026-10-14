@@ -142,10 +142,17 @@ profile_inputs() {
     want "$run" '"db_app_max_conns"' "cloudrun: db_app_max_conns"
     want "$run" '"db_system_max_conns"' "cloudrun: db_system_max_conns"
     want "$run" '"db_max_conn_idle"' "cloudrun: db_max_conn_idle"
-    want "$sql" '"tier":"db-(f1-micro|g1-small)"' "cloudsql: a shared-core tier"
+    want "$sql" '"tier":"db-f1-micro"' "cloudsql: db-f1-micro (the owner's decision of 2026-10-14; the way back is db-g1-small in root.hcl)"
     reject "$sql" '"edition"' "cloudsql: an edition (the module default, ENTERPRISE, is what shared-core tiers need)"
     want "$sql" '"max_connections"' "cloudsql: max_connections pinned"
     want "$net" '"valkey_enabled":"?false"?' "network: valkey_enabled = false"
+    # Vertex AI: generation on the global endpoint, embeddings stay in Singapore (gemini-embedding-001
+    # is not served by the global endpoint, and the module refuses a global embedding location).
+    want "$run" '"vertex_location":"global"' "cloudrun: vertex_location = global"
+    want "$run" '"vertex_model_flash":"gemini-3.8-flash"' "cloudrun: vertex_model_flash = gemini-3.8-flash"
+    want "$run" '"vertex_model_pro":"gemini-3.1-pro-preview"' "cloudrun: vertex_model_pro = gemini-3.1-pro-preview"
+    want "$run" '"vertex_embedding_location":"asia-southeast1"' "cloudrun: vertex_embedding_location = asia-southeast1"
+    want "$run" '"vertex_embedding_model":"gemini-embedding-001"' "cloudrun: vertex_embedding_model = gemini-embedding-001"
 
     # The connection budget (modules/cloudsql/main.tf): two overlapping revisions of the service,
     # the seed Job's own pools, the migrate Job's connections and the reserved ones, against
@@ -170,6 +177,9 @@ profile_inputs() {
     reject "$run" '"db_app_max_conns"|"db_system_max_conns"|"db_max_conn_idle"' "cloudrun: pool inputs (the full profile keeps the app's own pools)"
     reject "$sql" '"tier"|"max_connections"|"edition"' "cloudsql: tier, max_connections or edition (the full profile takes the module's defaults)"
     want "$net" '"valkey_enabled":"?true"?' "network: valkey_enabled = true"
+    want "$run" '"vertex_location":"asia-southeast1"' "cloudrun: vertex_location = asia-southeast1 (the full profile keeps the Singapore endpoint)"
+    want "$run" '"vertex_model_flash":"gemini-3.5-flash"' "cloudrun: vertex_model_flash = gemini-3.5-flash"
+    want "$run" '"vertex_model_pro":null' "cloudrun: vertex_model_pro null (the module then uses Flash)"
   fi
   return "$failed"
 }

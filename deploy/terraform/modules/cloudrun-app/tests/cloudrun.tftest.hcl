@@ -586,3 +586,50 @@ run "an_idle_time_that_is_not_a_go_duration_is_refused" {
 
   expect_failures = [var.db_max_conn_idle]
 }
+
+# What the minimal profile's live unit passes for Vertex AI (live/root.hcl, the project owner's
+# decision of 2026-10-14): generation on the global endpoint, embeddings in Singapore. The app has
+# no Vertex adapter yet, so this proves configuration only.
+run "minimal_profile_generates_on_the_global_endpoint_and_embeds_in_singapore" {
+  command = plan
+
+  variables {
+    single_container          = true
+    valkey_url                = null
+    vertex_location           = "global"
+    vertex_model_flash        = "gemini-3.8-flash"
+    vertex_model_pro          = "gemini-3.1-pro-preview"
+    vertex_embedding_location = "asia-southeast1"
+  }
+
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_VERTEX_LOCATION"] == "global" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_VERTEX_ALLOW_GLOBAL"] == "true"
+    error_message = "generation on the global endpoint must opt in explicitly, so residency is never lost silently"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_VERTEX_EMBED_LOCATION"] == "asia-southeast1" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_EMBED_MODEL"] == "gemini-embedding-001"
+    error_message = "embeddings stay in asia-southeast1: gemini-embedding-001 is not served by the global endpoint"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_LLM_MODEL_FLASH"] == "gemini-3.8-flash" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_LLM_MODEL_PRO"] == "gemini-3.1-pro-preview"
+    error_message = "the models must be the ones the global endpoint serves"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name => e.value
+    }["KIWI_VERTEX_LOCATION"] == "global"
+    error_message = "the seed Job loads the serving configuration and must see the same Vertex location"
+  }
+}

@@ -23,7 +23,7 @@ data:
   #   app 6: with ten people one process rarely has more than a handful of concurrent
   #     transactions.
   #   12 per process keeps two overlapping processes (a rollout) at 24, inside the 50
-  #     connections of Cloud SQL db-g1-small and with margin on any tier.
+  #     connections the Cloud Run profile gives its Cloud SQL instance (max_connections 50).
   KIWI_DB_APP_MAX_CONNS: "6"
   KIWI_DB_SYSTEM_MAX_CONNS: "6"
   # An idle connection is closed after 5 minutes, which returns the connections a burst

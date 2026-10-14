@@ -112,9 +112,10 @@ resource "google_sql_database_instance" "this" {
     # here; this is the first thing to check under the k6 run.] If memory pressure shows, raise
     # the tier (db-custom-1-3840) instead of lowering this number below 72 + Jobs.
     #
-    # === The "minimal" profile: db-g1-small, max_connections 50, pools of 6 + 6 ================
-    # The live unit passes tier = db-g1-small and max_connections = 50 (the default of that tier,
-    # pinned so a change of Cloud SQL's defaults cannot shrink it silently) and the app gets
+    # === The "minimal" profile: db-f1-micro, max_connections 50, pools of 6 + 6 ================
+    # DECISION of 2026-10-14, the project owner's: db-f1-micro, accepting the memory risk written
+    # below. The live unit passes tier = db-f1-micro and max_connections = 50 (above the 25 that
+    # tier starts with: the flag is not capped per tier) and the app gets
     # KIWI_DB_APP_MAX_CONNS = 6, KIWI_DB_SYSTEM_MAX_CONNS = 6 and KIWI_DB_MAX_CONN_IDLE = 2m
     # (architecture review F10). 6 is the lowest system pool the app accepts: the outbox relay
     # holds 4 system connections while jobs run, plus 2 of headroom.
@@ -153,19 +154,28 @@ resource "google_sql_database_instance" "this" {
     # flag (and checking memory) fails the check; the other way round (flag up, pools unchanged)
     # passes.
     #
-    # Why db-g1-small and not db-f1-micro. The flag could be raised to 50 on db-f1-micro, so the
-    # connection count is not what decides it: memory is. 0.614 GB with shared_buffers at a third
-    # (about 205 MB) leaves about 410 MB for the operating system, Cloud SQL's agents and every
-    # backend, and a backend that runs the row-security policies, a sort or an HNSW scan holds
-    # several MB of its own [INFERENCE: typical PostgreSQL behaviour, not measured here]. An
-    # out-of-memory kill restarts the instance and drops every connection in the middle of a demo,
-    # to save about $39.51 over 18 Oct - 4 Dec (Singapore list price, 1,152 h x ($0.0490 - $0.0147)).
-    # db-g1-small (1.7 GB, shared_buffers about 580 MB) leaves about 1.1 GB.
+    # The decision, and its risk. db-f1-micro costs about $39.51 less than db-g1-small over
+    # 18 Oct - 4 Dec (Singapore list price, 1,152 h x ($0.0490 - $0.0147)). The flag CAN be raised
+    # to 50 on it, so the connection count is not the problem; memory is. 0.614 GB with
+    # shared_buffers at a third (about 205 MB) leaves about 410 MB for the operating system, Cloud
+    # SQL's agents and every backend, and a backend that runs the row-security policies, a sort or
+    # an HNSW scan holds several MB of its own [INFERENCE: typical PostgreSQL behaviour, not
+    # measured here]. An out-of-memory kill restarts the instance and drops every connection, in
+    # the middle of a demo if it happens then. The risk is reasoned, not measured, and it was
+    # accepted knowingly. Also unproven: that Cloud SQL accepts max_connections 50 on this tier
+    # (the documentation states no per-tier cap; nobody has tried), and that the CPU copes: shared
+    # core, burstable, and neither tier has an SLA.
     #
-    # Memory risk that remains on db-g1-small, and what to watch. Nothing here was measured. If the
-    # instance's memory metric stays above about 80% or it restarts, move to db-custom-1-3840
-    # (3.75 GB, default max_connections 100) before touching the pools. Shared-core CPU is
-    # burstable, and neither tier has an SLA.
+    # The signal to watch, from the first day: the instance's memory utilisation in Cloud
+    # Monitoring (the Cloud SQL database memory metrics) and any restart of the instance (the
+    # instance's operations list, or a gap in its log). If memory stays above about 80% or the
+    # instance restarts, go back.
+    #
+    # The way back is one line: minimal_sql_tier = "db-g1-small" in deploy/terraform/live/root.hcl
+    # (1.7 GB, shared_buffers about 580 MB, about $39.51 more over the window), applied through
+    # the cloudsql unit with a reviewed plan. Keep max_connections 50, which is that tier's own
+    # default. A tier change restarts the instance, so do it outside demo hours. The step after
+    # that is db-custom-1-3840 (3.75 GB, default max_connections 100).
     #
     # The flag restarts the instance when it changes. Pool sizes live in
     # deploy/terraform/live/root.hcl.

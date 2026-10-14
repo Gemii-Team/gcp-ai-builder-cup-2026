@@ -41,6 +41,17 @@
 #   The Jobs: KIWI_MIGRATE_DATABASE_URL (migrate only, read), and the app, system and read-only
 #     strings for the migrate Job's role bootstrap (NOT built: F02).
 #
+# Vertex AI in the minimal profile (the project owner's decision of 2026-10-14; live/root.hcl has
+# the sources). Generation is on the GLOBAL endpoint: KIWI_VERTEX_LOCATION=global with
+# KIWI_LLM_MODEL_FLASH=gemini-3.8-flash and KIWI_LLM_MODEL_PRO=gemini-3.1-pro-preview, and this
+# module then also sets KIWI_VERTEX_ALLOW_GLOBAL=true. Google chooses where a global request is
+# processed, so GENERATION LEAVES SINGAPORE. Embeddings do not: KIWI_VERTEX_EMBED_LOCATION stays
+# asia-southeast1 with gemini-embedding-001, which the global endpoint does not serve (and the
+# module refuses a global embedding location); Google commits to no in-region processing for
+# them either. All of it is configuration only: none of these variables is read until the Vertex
+# adapter exists (F01, F05, F45). Every agent runs on the Flash tier today, so the Pro id is set
+# but not called.
+#
 # The image. The service and both Jobs run ONE image in the minimal profile, built from
 # deploy/minimal/Dockerfile with the repository root as the build context
 # (`docker build -f deploy/minimal/Dockerfile .`): the binary at /app/kiwi, the web app at

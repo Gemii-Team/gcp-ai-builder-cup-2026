@@ -1,7 +1,8 @@
 # Unit 5: PostgreSQL on Cloud SQL (private IP only), the application database, the table owner as
 # the one Cloud SQL user, and the generated connection strings as Secret Manager secrets. The
 # full profile takes the module's defaults (db-g1-small, max_connections 100); the minimal one
-# pins the same tier with max_connections 50 for its smaller pools (see modules/cloudsql/main.tf).
+# passes db-f1-micro with max_connections 50 for its smaller pools, the project owner's decision
+# of 2026-10-14 (see root.hcl and modules/cloudsql/main.tf for the risk and the way back).
 include "root" {
   path   = find_in_parent_folders("root.hcl")
   expose = true

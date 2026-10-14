@@ -299,9 +299,13 @@ variable "vertex_project_id" {
 
 variable "vertex_location" {
   description = <<-EOT
-    The Vertex AI location for generation (and the ADK agents). Not decided yet. asia-southeast1
-    serves gemini-3.5-flash and keeps processing in Singapore; "global" serves newer models but
-    Google chooses where it is processed. Switching is a change of this one value.
+    The Vertex AI location for generation (and the ADK agents). The module's default, which the
+    full profile keeps, is asia-southeast1: it serves gemini-3.5-flash and keeps generation
+    processed in Singapore. The minimal profile passes "global" (live/root.hcl, the project
+    owner's decision of 2026-10-14): it serves gemini-3.8-flash and gemini-3.1-pro-preview, which
+    Singapore does not, but Google chooses where a global request is processed, so GENERATION
+    LEAVES SINGAPORE (embeddings do not: vertex_embedding_location). Switching is a change of
+    this one value (and the model ids). The app has no Vertex adapter yet (F01, F05, F45).
   EOT
   type        = string
   default     = "asia-southeast1"
@@ -319,13 +323,13 @@ variable "vertex_embedding_location" {
 }
 
 variable "vertex_model_flash" {
-  description = "Model id for extraction, answers and the agents (KIWI_LLM_MODEL_FLASH)."
+  description = "Model id for extraction, answers and the agents (KIWI_LLM_MODEL_FLASH). The module's default is the Singapore model; the minimal profile passes gemini-3.8-flash, which only the global endpoint serves."
   type        = string
   default     = "gemini-3.5-flash"
 }
 
 variable "vertex_model_pro" {
-  description = "Model id of the stronger tier (KIWI_LLM_MODEL_PRO), or null to use the Flash model: no Pro model is served at asia-southeast1."
+  description = "Model id of the stronger tier (KIWI_LLM_MODEL_PRO), or null to use the Flash model (no Pro model is served at asia-southeast1). The minimal profile passes gemini-3.1-pro-preview, a preview model the global endpoint serves; every agent runs on the Flash tier today, so it is not called."
   type        = string
   default     = null
 }
