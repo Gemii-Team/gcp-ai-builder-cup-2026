@@ -15,7 +15,7 @@ variable "region" {
 }
 
 variable "repository_id" {
-  description = "Name of the Docker repository. The images are <region>-docker.pkg.dev/<project>/<repository_id>/web and .../kiwi."
+  description = "Name of the Docker repository. The image is <region>-docker.pkg.dev/<project>/<repository_id>/kiwi (minimal profile); the full profile adds .../web. The repository itself does not depend on the profile: it holds whatever CI pushes."
   type        = string
   default     = "kiwi"
 }

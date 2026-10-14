@@ -70,26 +70,43 @@ variable "subnet_name" {
   type        = string
 }
 
-# --- images ----------------------------------------------------------------------------------
+# --- shape and images ------------------------------------------------------------------------
+
+variable "single_container" {
+  description = <<-EOT
+    The "minimal" profile's shape: one container, the all-in-one kiwi image, which serves the web
+    app itself (KIWI_WEB_DIR) and listens on the port Cloud Run passes ($PORT). There is no Caddy
+    ingress container and no sidecar: web_image, web_cpu, web_memory and kiwi_port are not used.
+    False builds the "full" profile: a Caddy ingress container plus the kiwi sidecar.
+  EOT
+  type        = bool
+  default     = false
+}
 
 variable "web_image" {
   description = <<-EOT
-    The ingress (Caddy) image, or null for Google's public hello image. The first apply must
-    succeed before CI has built anything, so a placeholder is the default. After that CI owns
-    the image: the service ignores later changes of it (see lifecycle), so applying never rolls
-    a deployed image back.
+    Full profile only: the ingress (Caddy) image, or null for Google's public hello image. The
+    first apply must succeed before CI has built anything, so a placeholder is the default. After
+    that CI owns the image: the service ignores later changes of it (see lifecycle), so applying
+    never rolls a deployed image back. Must be null when single_container is true: there is no
+    web image in that profile, and an ignored value would be a dangling reference.
   EOT
   type        = string
   default     = null
+
+  validation {
+    condition     = var.web_image == null || !var.single_container
+    error_message = "web_image must be null when single_container is true: the minimal profile has one image, kiwi, which contains the web app."
+  }
 }
 
 variable "kiwi_image" {
   description = <<-EOT
-    The kiwi image, used by the sidecar and by both Jobs, or null for placeholders. A placeholder
-    service container is Google's public hello image; a placeholder Job is an image with no
-    program in it, so executing a Job before CI has deployed the real image fails at once instead
-    of "succeeding" without having migrated anything. As for web_image, CI owns the image after
-    the first apply.
+    The kiwi image, used by the service (the sidecar in the full profile, the only container in
+    the minimal one) and by both Jobs, or null for placeholders. A placeholder service container
+    is Google's public hello image; a placeholder Job is an image with no program in it, so
+    executing a Job before CI has deployed the real image fails at once instead of "succeeding"
+    without having migrated anything. As for web_image, CI owns the image after the first apply.
   EOT
   type        = string
   default     = null
@@ -149,13 +166,13 @@ variable "request_timeout_seconds" {
 }
 
 variable "web_port" {
-  description = "The port the ingress container listens on (Cloud Run passes it as PORT). The current Caddyfile hard-codes 8080."
+  description = "The port the ingress container listens on (Cloud Run passes it as PORT): Caddy in the full profile, whose Caddyfile hard-codes 8080, and kiwi itself in the minimal one, which listens on :$PORT when KIWI_LISTEN_ADDR is empty."
   type        = number
   default     = 8080
 }
 
 variable "kiwi_port" {
-  description = "The port the kiwi sidecar listens on, on the instance's loopback. The two containers share one network namespace, so it must differ from web_port."
+  description = "Full profile only: the port the kiwi sidecar listens on, on the instance's loopback. The two containers share one network namespace, so it must differ from web_port."
   type        = number
   default     = 8081
 
@@ -200,12 +217,58 @@ variable "blob_url" {
 }
 
 variable "valkey_url" {
-  description = "KIWI_VALKEY_URL: redis://<host>:<port> of the cluster-disabled Valkey instance."
+  description = <<-EOT
+    KIWI_VALKEY_URL: redis://<host>:<port> of the cluster-disabled Valkey instance, or null for
+    none. Null makes the cache the in-process one (KIWI_CACHE_PROVIDER=memory), which is why a
+    service without Valkey is exactly one instance: the cache and the live-frame fan-out are
+    per process (see the scaling block in service.tf).
+  EOT
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^redis://[^/@]+$", var.valkey_url))
+    condition     = var.valkey_url == null || can(regex("^redis://[^/@]+$", var.valkey_url))
     error_message = "valkey_url must be redis://<host>:<port>, with no credential (authentication is off) and no path."
+  }
+}
+
+# --- database pools ---------------------------------------------------------------------------
+
+variable "db_app_max_conns" {
+  description = "KIWI_DB_APP_MAX_CONNS: the size of the kiwi_app pool of each process (the service and the seed Job), or null to leave the app's own default. Count it in the Cloud SQL max_connections budget: see the cloudsql module."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.db_app_max_conns == null || (var.db_app_max_conns >= 1 && floor(var.db_app_max_conns) == var.db_app_max_conns)
+    error_message = "db_app_max_conns must be a whole number of at least 1, or null."
+  }
+}
+
+variable "db_system_max_conns" {
+  description = "KIWI_DB_SYSTEM_MAX_CONNS: the size of the kiwi_system pool of each process, or null to leave the app's own default. At least 6: the outbox relay holds 4 system connections while jobs run, and 2 more are headroom. Set both pools or neither."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.db_system_max_conns == null || (var.db_system_max_conns >= 6 && floor(var.db_system_max_conns) == var.db_system_max_conns)
+    error_message = "db_system_max_conns must be a whole number of at least 6 (the relay holds 4 system connections during jobs, plus 2 of headroom), or null."
+  }
+
+  validation {
+    condition     = (var.db_app_max_conns == null) == (var.db_system_max_conns == null)
+    error_message = "Set both db_app_max_conns and db_system_max_conns, or neither: the Cloud SQL connection budget needs both."
+  }
+}
+
+variable "db_max_conn_idle" {
+  description = "KIWI_DB_MAX_CONN_IDLE: a Go duration (for example 2m) after which an idle database connection is closed, or null to leave the app's own default. Closing idle connections is what keeps the old revision's pools small while a rollout lets it linger."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.db_max_conn_idle == null || can(regex("^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$", var.db_max_conn_idle))
+    error_message = "db_max_conn_idle must be a Go duration such as 30s, 2m or 1h30m, or null."
   }
 }
 

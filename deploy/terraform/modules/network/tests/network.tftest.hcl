@@ -45,12 +45,33 @@ run "valkey_gets_private_service_connect_in_its_own_subnet" {
   command = plan
 
   assert {
-    condition     = google_network_connectivity_service_connection_policy.valkey.service_class == "gcp-memorystore"
+    condition     = google_network_connectivity_service_connection_policy.valkey[0].service_class == "gcp-memorystore"
     error_message = "the service connection policy must be for Memorystore"
   }
   assert {
-    condition     = google_network_connectivity_service_connection_policy.valkey.location == var.region
+    condition     = google_network_connectivity_service_connection_policy.valkey[0].location == var.region
     error_message = "the policy must be in the region of the instance"
+  }
+}
+
+run "minimal_profile_has_no_valkey_subnet_or_policy_and_keeps_the_rest" {
+  command = plan
+
+  variables {
+    valkey_enabled = false
+  }
+
+  assert {
+    condition     = length(google_compute_subnetwork.valkey) == 0 && length(google_network_connectivity_service_connection_policy.valkey) == 0
+    error_message = "without Valkey there must be no Private Service Connect subnet and no service connection policy"
+  }
+  assert {
+    condition     = output.valkey_connection_policy_id == null
+    error_message = "the policy output must be null when there is no policy"
+  }
+  assert {
+    condition     = google_compute_subnetwork.run.name == "kiwi-run" && google_compute_global_address.private_services.purpose == "VPC_PEERING" && google_service_networking_connection.private_services.service == "servicenetworking.googleapis.com"
+    error_message = "the Cloud Run subnet and private services access for Cloud SQL must exist in every profile"
   }
 }
 
