@@ -5,14 +5,19 @@
 package config
 
 import (
+	"cmp"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Role is one of the processes the binary can act as. A single process runs
@@ -34,15 +39,55 @@ const (
 	envProd      = "prod"
 	googleIssuer = "https://accounts.google.com"
 	keyBytes     = 32
+
+	// portVar is the variable Cloud Run (and most platforms) set to the port the
+	// container must listen on. It is not a KIWI_ variable, so Load reads it directly
+	// and it is not a tagged field.
+	portVar = "PORT"
+	// defaultListenAddr is where kiwi listens when neither KIWI_LISTEN_ADDR nor PORT is set.
+	defaultListenAddr = ":8080"
+)
+
+// The cache providers (KIWI_CACHE_PROVIDER).
+const (
+	// CacheValkey keeps sessions, realtime tickets, OAuth state, the members cache and
+	// the realtime fan-out in Valkey, which every process of a deployment shares.
+	CacheValkey = "valkey"
+	// CacheMemory keeps the ephemeral state in the process; sessions go to Postgres.
+	// It is only valid when one process runs every serving role.
+	CacheMemory = "memory"
+)
+
+// The database pool sizes and the idle time, as they were before they became
+// configurable: the defaults keep the full stack as it was.
+const (
+	DefaultDBAppMaxConns    = 20
+	DefaultDBSystemMaxConns = 16
+	// DefaultDBMaxConnIdle is pgx's own default (pgxpool's defaultMaxConnIdleTime), which
+	// is what the pools used while the value was not configurable.
+	DefaultDBMaxConnIdle = 30 * time.Minute
+
+	// RelayConcurrency is how many outbox rows the worker holds in flight. The relay
+	// holds one system connection per row for as long as its handlers work.
+	RelayConcurrency = 4
+	// MinDBSystemMaxConns is the smallest system pool the relay cannot starve: its
+	// RelayConcurrency connections, and two more for the sign-in callback, the session
+	// lookups of the Postgres session store and the Meet poll.
+	MinDBSystemMaxConns = RelayConcurrency + 2
 )
 
 // servingRoles are the roles `kiwi serve` can run; their order is the default of KIWI_ROLES.
 var servingRoles = []Role{RoleAPI, RoleRealtime, RoleWorker, RoleAgents}
 
-// defaults apply when a variable is unset or empty.
+// defaults apply when a variable is unset or empty. KIWI_LISTEN_ADDR's default depends
+// on PORT and is worked out by defaultFor.
 var defaults = map[string]string{
-	"KIWI_ENV":         envLocal,
-	"KIWI_OIDC_ISSUER": googleIssuer,
+	"KIWI_ENV":                 envLocal,
+	"KIWI_OIDC_ISSUER":         googleIssuer,
+	"KIWI_CACHE_PROVIDER":      CacheValkey,
+	"KIWI_DB_APP_MAX_CONNS":    strconv.Itoa(DefaultDBAppMaxConns),
+	"KIWI_DB_SYSTEM_MAX_CONNS": strconv.Itoa(DefaultDBSystemMaxConns),
+	"KIWI_DB_MAX_CONN_IDLE":    DefaultDBMaxConnIdle.String(),
 }
 
 // Config is the validated process configuration. The env tag names the
@@ -66,7 +111,26 @@ type Config struct {
 	DatabaseSystemURL string `env:"KIWI_DATABASE_SYSTEM_URL" roles:"api,worker" secret:"true"`
 	// MigrateURL connects as kiwi_owner, which owns the tables.
 	MigrateURL string `env:"KIWI_MIGRATE_DATABASE_URL" roles:"migrate" secret:"true"`
-	ValkeyURL  string `env:"KIWI_VALKEY_URL" roles:"api,realtime,worker,agents" secret:"true"`
+	// ValkeyURL is required only when CacheProvider is valkey.
+	ValkeyURL string `env:"KIWI_VALKEY_URL" roles:"api,realtime,worker,agents" secret:"true"`
+	// CacheProvider is "valkey" (the default) or "memory". memory keeps the realtime
+	// fan-out, tickets and OAuth state in the process and the sessions in Postgres, so
+	// it needs one process that runs every serving role.
+	CacheProvider string `env:"KIWI_CACHE_PROVIDER"`
+
+	// DBAppMaxConns and DBSystemMaxConns size the two connection pools of a process.
+	// The system pool must hold the outbox relay's connections and more: validate
+	// enforces MinDBSystemMaxConns.
+	DBAppMaxConns    int `env:"KIWI_DB_APP_MAX_CONNS" min:"1"`
+	DBSystemMaxConns int `env:"KIWI_DB_SYSTEM_MAX_CONNS" min:"1"`
+	// DBMaxConnIdle is how long an idle pooled connection is kept before it is closed.
+	DBMaxConnIdle time.Duration `env:"KIWI_DB_MAX_CONN_IDLE"`
+
+	// ListenAddr is the address the process listens on: KIWI_LISTEN_ADDR, else
+	// ":"+PORT when PORT is set (Cloud Run), else ":8080".
+	ListenAddr string `env:"KIWI_LISTEN_ADDR"`
+	// WebDir is the absolute directory of the built web app. Empty serves none.
+	WebDir string `env:"KIWI_WEB_DIR"`
 
 	// BusProvider is "memory", the only bus built locally.
 	BusProvider string `env:"KIWI_BUS_PROVIDER" roles:"worker,agents"`
@@ -119,6 +183,10 @@ func redactedFields(c Config) []field {
 		switch val := v.Field(i).Interface().(type) {
 		case string:
 			shown = val
+		case int:
+			shown = strconv.Itoa(val)
+		case time.Duration:
+			shown = val.String()
 		case []byte:
 			if len(val) > 0 {
 				shown = "<set>"
@@ -231,16 +299,20 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 	var problems []error
 	var missing []string
 
+	// With the memory cache nothing reads Valkey, so its address is not required.
+	// An unknown provider is reported by validate; it keeps the address required.
+	valkeyUnused := cmp.Or(strings.TrimSpace(getenv("KIWI_CACHE_PROVIDER")), defaults["KIWI_CACHE_PROVIDER"]) == CacheMemory
+
 	fields := reflect.ValueOf(&cfg).Elem()
 	for i := range fields.NumField() {
 		f := fields.Type().Field(i)
 		name := f.Tag.Get("env")
 		value := strings.TrimSpace(getenv(name))
 		if value == "" {
-			value = defaults[name]
+			value = defaultFor(name, getenv)
 		}
 		if value == "" {
-			if requiredBy(f.Tag.Get("roles"), roles) {
+			if requiredBy(f.Tag.Get("roles"), roles) && (name != "KIWI_VALKEY_URL" || !valkeyUnused) {
 				missing = append(missing, name)
 			}
 			continue
@@ -250,6 +322,28 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 			// Resolved above: KIWI_ROLES decides which sets are required.
 		case *string:
 			*dst = value
+		case *int:
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				problems = append(problems, fmt.Errorf("%s must be a whole number", name))
+				continue
+			}
+			if minimum, err := strconv.Atoi(f.Tag.Get("min")); err == nil && n < minimum {
+				problems = append(problems, fmt.Errorf("%s must be at least %d", name, minimum))
+				continue
+			}
+			*dst = n
+		case *time.Duration:
+			d, err := time.ParseDuration(value)
+			if err != nil {
+				problems = append(problems, fmt.Errorf("%s must be a duration such as 5m or 90s", name))
+				continue
+			}
+			if d <= 0 {
+				problems = append(problems, fmt.Errorf("%s must be longer than zero", name))
+				continue
+			}
+			*dst = d
 		case *[]byte:
 			raw, err := base64.StdEncoding.DecodeString(value)
 			if err != nil || len(raw) != keyBytes {
@@ -269,6 +363,17 @@ func Load(roles []Role, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// defaultFor is the value a variable takes when it is unset or empty.
+func defaultFor(name string, getenv func(string) string) string {
+	if name == "KIWI_LISTEN_ADDR" {
+		if port := strings.TrimSpace(getenv(portVar)); port != "" {
+			return ":" + port
+		}
+		return defaultListenAddr
+	}
+	return defaults[name]
 }
 
 // requiredBy reports whether any of roles appears in the comma-separated tag.
@@ -301,12 +406,58 @@ func (c Config) validate() []error {
 		errs = append(errs, fmt.Errorf("KIWI_BUS_PROVIDER=memory is in-process: KIWI_ROLES must include api, worker and agents in one process (got %s)", joinRoles(c.Roles)))
 	}
 
+	if c.CacheProvider != CacheValkey && c.CacheProvider != CacheMemory {
+		errs = append(errs, fmt.Errorf("KIWI_CACHE_PROVIDER must be %q or %q, got %q", CacheValkey, CacheMemory, c.CacheProvider))
+	}
+	// The memory cache is the process's own: tickets are issued by the api role and
+	// redeemed by the realtime role, frames are published by the worker's relay and the
+	// agents and fanned out by the realtime role. Every serving role must share the
+	// process, or a ticket or a frame would never reach the role that needs it. (The
+	// bus rule above asks for less, because the gateway never touches the bus.) The
+	// migrate Job shares the ConfigMap but uses no cache.
+	if c.CacheProvider == CacheMemory && !c.hasRoles(servingRoles...) && !c.runsAlone(RoleMigrate) {
+		errs = append(errs, fmt.Errorf("KIWI_CACHE_PROVIDER=memory is in-process: KIWI_ROLES must include %s in one process (got %s)", joinRoles(servingRoles), joinRoles(c.Roles)))
+	}
+
+	// The relay holds one system connection per row in flight; a smaller pool lets it
+	// starve sign-in, the session lookups and the Meet poll. A value below 1 is
+	// reported when it is read.
+	if c.DBSystemMaxConns >= 1 && c.DBSystemMaxConns < MinDBSystemMaxConns {
+		errs = append(errs, fmt.Errorf("KIWI_DB_SYSTEM_MAX_CONNS must be at least %d: the outbox relay holds up to %d connections while its jobs run, and sign-in, session lookups and the Meet poll need two more", MinDBSystemMaxConns, RelayConcurrency))
+	}
+
+	if c.ListenAddr != "" {
+		if err := checkListenAddr(c.ListenAddr); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.WebDir != "" && !filepath.IsAbs(c.WebDir) {
+		errs = append(errs, errors.New("KIWI_WEB_DIR must be an absolute directory"))
+	}
+
 	if c.BlobURL != "" {
 		if err := checkBlobURL(c.BlobURL); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errs
+}
+
+// checkListenAddr accepts host:port, where the host may be empty and the port is
+// 1 to 65535. A listen address that came from PORT is named after PORT, since that is
+// the variable somebody has to fix.
+func checkListenAddr(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err == nil {
+		var n uint64
+		if n, err = strconv.ParseUint(port, 10, 16); err == nil && n == 0 {
+			err = errors.New("port 0")
+		}
+	}
+	if err != nil {
+		return errors.New("KIWI_LISTEN_ADDR (or PORT, when it is empty) must be host:port with a port from 1 to 65535, for example :8080")
+	}
+	return nil
 }
 
 func (c Config) runsAlone(r Role) bool {
