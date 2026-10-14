@@ -1,7 +1,14 @@
-# Unit 5: Memorystore for Valkey: one cluster-disabled node, private endpoint.
+# Unit 5: Memorystore for Valkey: one cluster-disabled node, private endpoint. Full profile only:
+# the minimal profile keeps its cache in the app's process, so Terragrunt leaves this unit out of
+# every run (the same exclude as the optional budget unit; no empty stub).
 include "root" {
   path   = find_in_parent_folders("root.hcl")
   expose = true
+}
+
+exclude {
+  if      = include.root.locals.minimal
+  actions = ["all"]
 }
 
 terraform {
