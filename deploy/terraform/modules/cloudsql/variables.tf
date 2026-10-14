@@ -50,10 +50,14 @@ variable "database_version" {
 
 variable "tier" {
   description = <<-EOT
-    The machine tier. The default, db-g1-small (shared core, 1.7 GB), is the smallest tier that
-    can hold the app: db-f1-micro allows 25 connections by default, the app opens 20 + 16 per
-    process. See max_connections for what db-g1-small holds, and the memory risk of that.
-    db-custom-1-3840 is the next step up if memory ever becomes the limit.
+    The machine tier. The default, db-g1-small (shared core, 1.7 GB), is what the full profile
+    uses: with the app's built-in pools (20 + 16 per process) it needs 36 connections per
+    instance and db-f1-micro starts at 25. The minimal profile passes db-f1-micro (0.614 GB)
+    instead, with pools of 6 + 6 and max_connections raised to 50: the project owner's decision of
+    2026-10-14, which accepts a memory risk that is reasoned, not measured. The research, the
+    connection math, the signal to watch and the one-line way back (db-g1-small) are written next
+    to the flag in main.tf. db-custom-1-3840 is the step above db-g1-small if memory ever becomes
+    the limit.
   EOT
   type        = string
   default     = "db-g1-small"

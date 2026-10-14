@@ -25,11 +25,11 @@ var errHubClosed = errors.New("realtime: gateway is shut down")
 // u:{userId} for every connected user) to the local connections that follow it,
 // and subscribes Valkey on the first of them and unsubscribes on the last.
 type hub struct {
-	open    func(context.Context) (*cache.Subscription, error)
+	open    func(context.Context) (cache.Subscription, error)
 	onFrame func(cache.Frame)
 
 	mu     sync.RWMutex
-	sub    *cache.Subscription // opened with the first connection
+	sub    cache.Subscription // opened with the first connection
 	topics map[string]map[*conn]struct{}
 	conns  map[*conn]struct{}
 	// epoch counts revocations. A Subscribe whose membership check began before one
@@ -41,7 +41,7 @@ type hub struct {
 	pumpDone chan struct{}
 }
 
-func newHub(open func(context.Context) (*cache.Subscription, error), onFrame func(cache.Frame)) *hub {
+func newHub(open func(context.Context) (cache.Subscription, error), onFrame func(cache.Frame)) *hub {
 	return &hub{
 		open:     open,
 		onFrame:  onFrame,
@@ -74,7 +74,7 @@ func (h *hub) attach(ctx context.Context, c *conn) error {
 }
 
 // pump hands every frame of the subscription to onFrame until it is closed.
-func (h *hub) pump(sub *cache.Subscription) {
+func (h *hub) pump(sub cache.Subscription) {
 	defer close(h.pumpDone)
 	for f := range sub.C() {
 		h.onFrame(f)

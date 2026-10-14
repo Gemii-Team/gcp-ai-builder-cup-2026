@@ -329,3 +329,307 @@ run "service_is_protected_from_deletion" {
     error_message = "Terraform must refuse to destroy the service and the Jobs"
   }
 }
+
+# --- the "full" profile is what it was before the minimal profile existed ---------------------
+
+run "full_profile_is_web_then_kiwi_with_valkey_and_the_sidecar_port" {
+  command = plan
+
+  assert {
+    condition     = [for c in google_cloud_run_v2_service.this.template[0].containers : c.name] == ["web", "kiwi"]
+    error_message = "the full profile has the ingress container first and the kiwi sidecar second"
+  }
+  assert {
+    condition = {
+      for e in one([for c in google_cloud_run_v2_service.this.template[0].containers : c if c.name == "kiwi"]).env : e.name => e.value
+    }["KIWI_VALKEY_URL"] == "redis://10.20.1.2:6379"
+    error_message = "the full profile reads Valkey"
+  }
+  assert {
+    condition = {
+      for e in one([for c in google_cloud_run_v2_service.this.template[0].containers : c if c.name == "kiwi"]).env : e.name => e.value
+    }["KIWI_LISTEN_ADDR"] == ":8081"
+    error_message = "the sidecar listens on its own port"
+  }
+  assert {
+    condition = length(setintersection(
+      toset([for e in one([for c in google_cloud_run_v2_service.this.template[0].containers : c if c.name == "kiwi"]).env : e.name]),
+      toset(["KIWI_CACHE_PROVIDER", "KIWI_WEB_DIR", "KIWI_DB_APP_MAX_CONNS", "KIWI_DB_SYSTEM_MAX_CONNS", "KIWI_DB_MAX_CONN_IDLE"]),
+    )) == 0
+    error_message = "the full profile sets none of the minimal profile's variables unless asked to (pools are opt-in)"
+  }
+  assert {
+    condition     = one([for c in google_cloud_run_v2_service.this.template[0].containers : c if c.name == "kiwi"]).resources[0].startup_cpu_boost != true
+    error_message = "the full profile's sidecar keeps its previous startup setting"
+  }
+}
+
+# --- the "minimal" profile: one container, in-memory cache, no Valkey ------------------------------
+
+run "minimal_is_one_container_serving_everything_on_the_ingress_port" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+  }
+
+  assert {
+    condition     = length(google_cloud_run_v2_service.this.template[0].containers) == 1 && google_cloud_run_v2_service.this.template[0].containers[0].name == "kiwi"
+    error_message = "the minimal profile has exactly one container, kiwi: no Caddy container"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].ports[0].container_port == 8080
+    error_message = "kiwi is the ingress container: it must declare the port Cloud Run routes traffic to"
+  }
+  assert {
+    condition     = !contains([for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name], "KIWI_LISTEN_ADDR") && !contains([for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name], "PORT")
+    error_message = "KIWI_LISTEN_ADDR stays empty (kiwi listens on :$PORT) and PORT is set by Cloud Run, never by Terraform"
+  }
+  assert {
+    condition     = !contains([for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name], "KIWI_UPSTREAM")
+    error_message = "there is no proxy in front of kiwi, so no upstream variable"
+  }
+  assert {
+    condition     = try(length(google_cloud_run_v2_service.this.template[0].containers[0].args), 0) == 0
+    error_message = "the service container names no subcommand: the binary runs serve by default (the Jobs name migrate and seed)"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].image == "us-docker.pkg.dev/cloudrun/container/hello"
+    error_message = "the first apply needs no image of ours in the minimal profile either"
+  }
+}
+
+run "minimal_uses_the_in_process_cache_and_serves_the_web_app" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+  }
+
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_CACHE_PROVIDER"] == "memory"
+    error_message = "without Valkey the cache must be the in-process one"
+  }
+  assert {
+    condition     = !contains([for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name], "KIWI_VALKEY_URL")
+    error_message = "the minimal profile has no Valkey: KIWI_VALKEY_URL must not be set"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_WEB_DIR"] == "/app/web"
+    error_message = "kiwi must serve the built web app from /app/web"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_ROLES"] == "api,realtime,worker,agents"
+    error_message = "the in-process cache needs all four roles in one process"
+  }
+}
+
+run "minimal_is_exactly_one_always_on_instance" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].scaling[0].min_instance_count == 1 && google_cloud_run_v2_service.this.template[0].scaling[0].max_instance_count == 1
+    error_message = "min = max = 1: the in-memory cache and the fan-out are per process, a second instance would split them"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].resources[0].cpu_idle == false
+    error_message = "CPU must be always allocated: the relay and the poll run between requests"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].timeout == "3600s" && google_cloud_run_v2_service.this.template[0].execution_environment == "EXECUTION_ENVIRONMENT_GEN2"
+    error_message = "an hour timeout and the second-generation environment"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].vpc_access[0].egress == "PRIVATE_RANGES_ONLY" && one(google_cloud_run_v2_service.this.template[0].vpc_access[0].network_interfaces).subnetwork == "kiwi-run"
+    error_message = "Direct VPC egress for private ranges only, through the Cloud Run subnet"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].resources[0].startup_cpu_boost == true
+    error_message = "startup CPU boost shortens the rollout overlap: the new revision becomes ready sooner"
+  }
+}
+
+run "minimal_probes_hit_readyz_and_healthz_on_the_ingress_port" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].http_get[0].path == "/readyz" && google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].http_get[0].port == 8080
+    error_message = "the startup probe is /readyz on the port kiwi listens on"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].liveness_probe[0].http_get[0].path == "/healthz" && google_cloud_run_v2_service.this.template[0].containers[0].liveness_probe[0].http_get[0].port == 8080
+    error_message = "the liveness probe is /healthz on the port kiwi listens on"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].period_seconds * google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].failure_threshold >= 180
+    error_message = "the startup probe must allow three minutes: Direct VPC egress can delay the start by a minute or more"
+  }
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].timeout_seconds <= google_cloud_run_v2_service.this.template[0].containers[0].startup_probe[0].period_seconds
+    error_message = "a probe timeout may not exceed its period"
+  }
+}
+
+run "minimal_pools_are_passed_to_the_service_and_the_seed_job_and_the_relay_fits" {
+  command = plan
+
+  variables {
+    single_container    = true
+    valkey_url          = null
+    db_app_max_conns    = 6
+    db_system_max_conns = 6
+    db_max_conn_idle    = "2m"
+  }
+
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_DB_APP_MAX_CONNS"] == "6" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_DB_SYSTEM_MAX_CONNS"] == "6" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_DB_MAX_CONN_IDLE"] == "2m"
+    error_message = "the service must receive both pool sizes and the idle time"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name => e.value
+      }["KIWI_DB_APP_MAX_CONNS"] == "6" && {
+      for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name => e.value
+    }["KIWI_DB_SYSTEM_MAX_CONNS"] == "6"
+    error_message = "the seed Job loads the serving configuration and opens its own pools: they are counted in the connection budget, so it must receive the sizes"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name => e.value
+    }["KIWI_CACHE_PROVIDER"] == "memory" && !contains([for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name], "KIWI_VALKEY_URL")
+    error_message = "the seed Job runs every role in one process: the in-process cache, no Valkey"
+  }
+}
+
+run "minimal_service_and_both_jobs_run_the_one_kiwi_image" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+    kiwi_image       = "asia-southeast1-docker.pkg.dev/kiwi-test-123/kiwi/kiwi:abc"
+  }
+
+  assert {
+    condition     = google_cloud_run_v2_service.this.template[0].containers[0].image == var.kiwi_image && google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].image == var.kiwi_image && google_cloud_run_v2_job.seed.template[0].template[0].containers[0].image == var.kiwi_image
+    error_message = "the service and both Jobs run the one kiwi image"
+  }
+  assert {
+    condition     = join(" ", google_cloud_run_v2_job.migrate.template[0].template[0].containers[0].args) == "migrate" && join(" ", google_cloud_run_v2_job.seed.template[0].template[0].containers[0].args) == "seed"
+    error_message = "the Jobs name their subcommand: migrate and seed"
+  }
+}
+
+run "minimal_refuses_a_web_image" {
+  command = plan
+
+  variables {
+    single_container = true
+    valkey_url       = null
+    web_image        = "asia-southeast1-docker.pkg.dev/kiwi-test-123/kiwi/web:abc"
+  }
+
+  expect_failures = [var.web_image]
+}
+
+run "a_system_pool_below_six_is_refused" {
+  command = plan
+
+  variables {
+    db_app_max_conns    = 6
+    db_system_max_conns = 5
+  }
+
+  expect_failures = [var.db_system_max_conns]
+}
+
+run "one_pool_without_the_other_is_refused" {
+  command = plan
+
+  variables {
+    db_app_max_conns = 6
+  }
+
+  expect_failures = [var.db_system_max_conns]
+}
+
+run "an_idle_time_that_is_not_a_go_duration_is_refused" {
+  command = plan
+
+  variables {
+    db_max_conn_idle = "2 minutes"
+  }
+
+  expect_failures = [var.db_max_conn_idle]
+}
+
+# What the minimal profile's live unit passes for Vertex AI (live/root.hcl, the project owner's
+# decision of 2026-10-14): generation on the global endpoint, embeddings in Singapore. The app has
+# no Vertex adapter yet, so this proves configuration only.
+run "minimal_profile_generates_on_the_global_endpoint_and_embeds_in_singapore" {
+  command = plan
+
+  variables {
+    single_container          = true
+    valkey_url                = null
+    vertex_location           = "global"
+    vertex_model_flash        = "gemini-3.8-flash"
+    vertex_model_pro          = "gemini-3.1-pro-preview"
+    vertex_embedding_location = "asia-southeast1"
+  }
+
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_VERTEX_LOCATION"] == "global" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_VERTEX_ALLOW_GLOBAL"] == "true"
+    error_message = "generation on the global endpoint must opt in explicitly, so residency is never lost silently"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_VERTEX_EMBED_LOCATION"] == "asia-southeast1" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_EMBED_MODEL"] == "gemini-embedding-001"
+    error_message = "embeddings stay in asia-southeast1: gemini-embedding-001 is not served by the global endpoint"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+      }["KIWI_LLM_MODEL_FLASH"] == "gemini-3.8-flash" && {
+      for e in google_cloud_run_v2_service.this.template[0].containers[0].env : e.name => e.value
+    }["KIWI_LLM_MODEL_PRO"] == "gemini-3.1-pro-preview"
+    error_message = "the models must be the ones the global endpoint serves"
+  }
+  assert {
+    condition = {
+      for e in google_cloud_run_v2_job.seed.template[0].template[0].containers[0].env : e.name => e.value
+    }["KIWI_VERTEX_LOCATION"] == "global"
+    error_message = "the seed Job loads the serving configuration and must see the same Vertex location"
+  }
+}

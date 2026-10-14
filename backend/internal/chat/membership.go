@@ -28,7 +28,7 @@ import (
 // so any read that began after the commit sees the change, and any read that began
 // before it is refused its fill.
 type membership struct {
-	cache *cache.Cache
+	cache cache.Members
 	// load reads a channel's member ids from Postgres in workspace ws. It is a field
 	// so a test can stretch the window between that read and the cache fill.
 	load func(ctx context.Context, ws, channelID uuid.UUID) ([]uuid.UUID, error)
@@ -38,9 +38,9 @@ type membership struct {
 // use: a cache-aside over db.InWorkspace on members:{channel}. The context of every
 // lookup must carry the workspace (authz.WithWorkspace); authz.Authz does that for
 // the actor it checks.
-func NewMembership(d *db.DB, c *cache.Cache) authz.Membership { return newMembership(d, c) }
+func NewMembership(d *db.DB, c cache.Members) authz.Membership { return newMembership(d, c) }
 
-func newMembership(d *db.DB, c *cache.Cache) *membership {
+func newMembership(d *db.DB, c cache.Members) *membership {
 	return &membership{
 		cache: c,
 		load: func(ctx context.Context, ws, channelID uuid.UUID) (ids []uuid.UUID, err error) {

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Usage: load-env-secret.sh [overlay]     overlay: local (default) | mockauth | smoke
+# Usage: load-env-secret.sh [overlay]
+#   overlay: local (default) | mockauth | smoke | minimal | minimal-smoke
 #
 # Builds the Secret kiwi-env in namespace kiwi from .env and applies it to the
 # local k3d cluster. It prints no value: the Secret is built from a private
 # temporary env file, never put on a command line, and kubectl's output is not
 # shown. Every missing required variable is named in one error. Overlays that do not
 # reach the real LLM or the real Google client get dummies for them (see below), so
-# the real values of .env never leave it for those overlays.
+# the real values of .env never leave it for those overlays. minimal gets what mockauth
+# gets and minimal-smoke what smoke gets: the minimal stack differs from them in the pods it
+# runs, not in what its Secret holds.
 set -euo pipefail
 
 # Only .env may supply a value. A KIWI_* exported in the calling shell would
@@ -29,8 +32,8 @@ die() {
 }
 
 case "$overlay" in
-  local | mockauth | smoke) ;;
-  *) die "unknown overlay '$overlay' (want local, mockauth or smoke)" 2 ;;
+  local | mockauth | smoke | minimal | minimal-smoke) ;;
+  *) die "unknown overlay '$overlay' (want local, mockauth, smoke, minimal or minimal-smoke)" 2 ;;
 esac
 [ -f "$ENV_FILE" ] || die "$ENV_FILE not found; run scripts/local/gen-env.sh and fill in the LLM values"
 
@@ -53,28 +56,28 @@ while IFS= read -r line || [ -n "$line" ]; do
   printf -v "$name" '%s' "$value"
 done <"$ENV_FILE"
 
-# Overlays that never reach a real service need no real value. smoke replays the
-# LLM too; mockauth signs in through the mock provider, which takes whatever
-# client id and secret it is presented. The developer's .env holds the real Google
+# Overlays that never reach a real service need no real value. smoke and minimal-smoke
+# replay the LLM too; mockauth and minimal sign in through the mock provider, which takes
+# whatever client id and secret it is presented. The developer's .env holds the real Google
 # client and the real LLM key, so for these overlays the values of the services they
-# do not reach are not read from it at all: smoke gets the dummies for the LLM, ASR
-# and OAuth variables, mockauth the dummies for the OAuth pair (its LLM values stay
-# real: the live smoke run uses them), local keeps every real value. printf -v keeps
-# the placeholder from looking like an assignment of a secret.
+# do not reach are not read from it at all: smoke and minimal-smoke get the dummies for the
+# LLM, ASR and OAuth variables, mockauth and minimal the dummies for the OAuth pair (their
+# LLM values stay real: the live smoke run uses them), local keeps every real value.
+# printf -v keeps the placeholder from looking like an assignment of a secret.
 # The two model ids must differ: the adapter treats a request whose model equals
 # KIWI_LLM_MODEL_PRO as a pro-tier one and sends json_object with no schema name
 # (so the replay could not tell a file summary from an answer); with both set to
 # `mock` every call would take that path.
 dummy=mock
 case "$overlay" in
-  smoke)
+  smoke | minimal-smoke)
     for name in KIWI_LLM_BASE_URL KIWI_LLM_API_KEY KIWI_ASR_MODEL KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
       printf -v "$name" '%s' "$dummy"
     done
     printf -v KIWI_LLM_MODEL_FLASH '%s' "$dummy-flash"
     printf -v KIWI_LLM_MODEL_PRO '%s' "$dummy-pro"
     ;;
-  mockauth)
+  mockauth | minimal)
     for name in KIWI_OAUTH_CLIENT_ID KIWI_OAUTH_CLIENT_SECRET; do
       printf -v "$name" '%s' "$dummy"
     done

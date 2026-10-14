@@ -120,6 +120,47 @@ run "shared_core_tier_needs_enterprise_edition" {
   expect_failures = [google_sql_database_instance.this]
 }
 
+# What the minimal profile's live unit passes (live/root.hcl): db-f1-micro, the project owner's
+# decision of 2026-10-14, and max_connections 50, above the 25 that tier starts with (the flag is
+# not capped per tier; nobody has tried it on a real instance). The connection budget itself
+# (pools against this flag) is recomputed from the rendered units by scripts/iac/check.sh.
+run "minimal_profile_is_db_f1_micro_in_the_enterprise_edition_with_50_connections" {
+  command = plan
+
+  variables {
+    tier            = "db-f1-micro"
+    max_connections = 50
+  }
+
+  assert {
+    condition     = google_sql_database_instance.this.settings[0].tier == "db-f1-micro"
+    error_message = "the minimal profile is db-f1-micro (decision of 2026-10-14; the way back is db-g1-small)"
+  }
+  assert {
+    condition     = google_sql_database_instance.this.settings[0].edition == "ENTERPRISE"
+    error_message = "a shared-core tier exists only in the ENTERPRISE edition"
+  }
+  assert {
+    condition     = one([for f in google_sql_database_instance.this.settings[0].database_flags : f.value if f.name == "max_connections"]) == "50"
+    error_message = "max_connections must be pinned at 50, the budget the minimal profile's pools were sized for (db-f1-micro starts at 25)"
+  }
+  assert {
+    condition     = google_sql_database_instance.this.settings[0].availability_type == "ZONAL" && google_sql_database_instance.this.settings[0].ip_configuration[0].ipv4_enabled == false
+    error_message = "zonal and private IP only in every profile"
+  }
+}
+
+run "db_f1_micro_is_accepted_only_in_the_enterprise_edition" {
+  command = plan
+
+  variables {
+    tier    = "db-f1-micro"
+    edition = "ENTERPRISE_PLUS"
+  }
+
+  expect_failures = [google_sql_database_instance.this]
+}
+
 run "only_the_owner_is_a_cloud_sql_user_and_its_password_stays_out_of_state" {
   command = plan
 

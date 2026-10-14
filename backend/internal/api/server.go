@@ -48,7 +48,7 @@ type Handler struct {
 }
 
 // SessionStore resolves a session id to the user and workspace it was issued to; a
-// missing, expired or ended session is errs.ErrNotFound. *cache.Cache implements it.
+// missing, expired or ended session is errs.ErrNotFound. *cache.Valkey and the Postgres store of identity.NewSessions implement it.
 type SessionStore interface {
 	GetSession(ctx context.Context, id string) (cache.SessionRecord, error)
 }

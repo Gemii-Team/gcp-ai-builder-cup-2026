@@ -1,49 +1,79 @@
 #!/usr/bin/env bash
 # Usage: scripts/smoke/run.sh [playwright arguments]      (task smoke -- --list)
+#        KIWI_SMOKE_PROFILE=minimal scripts/smoke/run.sh   (KIWI_SMOKE_PROFILE=minimal task smoke)
 #
 # The five flows in headless Chromium against the k3d stack, from a clean state.
 #
+# Two profiles, chosen by KIWI_SMOKE_PROFILE. Unset or `default` is the full stack: overlay
+# smoke for the replay run, mockauth to return to, a web pod and Valkey beside kiwi.
+# `minimal` is the one-process stack (kiwi serves the web app, no Valkey, sessions in
+# Postgres): overlay minimal-smoke for the replay run, minimal to return to. Everything below
+# says "the replay overlay" and "the base overlay" for the two of the profile in use. Any other
+# value is refused before anything is touched (exit 2). `task smoke` passes the variable on.
+#
 # WARNING: this WIPES the workspace data of the cluster (every table of the application
-# schemas and Valkey: see reset.sh), twice: before the run, so that it starts from what the
-# seed makes, and after it, so that the overlay the cluster is left on is usable at once. A
-# developer's real-Google "Team" workspace and its Meet grant are gone after it.
+# schemas, and Valkey where the stack has one: see reset.sh), twice: before the run, so that
+# it starts from what the seed makes, and after it, so that the overlay the cluster is left on
+# is usable at once. A developer's real-Google "Team" workspace and its Meet grant are gone
+# after it.
 #
 #   1. installs the JavaScript dependencies as the lockfile has them (pnpm install
 #      --frozen-lockfile) and checks the Playwright browsers (nix, unless
 #      PLAYWRIGHT_BROWSERS_PATH is set: they must have the chromium revision of the
 #      @playwright/test of e2e/package.json);
-#   2. creates the k3d cluster if absent, loads .env into Secret kiwi-env for the overlay
-#      (smoke forces dummies for the LLM and the Google client; mockauth keeps the real LLM
+#   2. creates the k3d cluster if absent, loads .env into Secret kiwi-env for the replay overlay
+#      (it forces dummies for the LLM and the Google client; the base overlay keeps the real LLM
 #      values and forces a dummy Google client) and brings the overlay up with `tilt ci`
 #      (it leaves every resource deployed);
 #   3. wipes the data and seeds demo.example with alice and bob (through the replay);
 #   4. runs `pnpm --filter e2e smoke` against http://localhost:8080;
-#   5. returns the cluster to overlay mockauth, deletes what the smoke overlay added (Tilt
-#      does not prune), wipes the data again and runs the default `task seed` under
-#      mockauth (real LLM and Ollama: the replay's vectors must not stay under the real
+#   5. returns the cluster to the base overlay, deletes what the replay overlay added (Tilt
+#      does not prune), wipes the data again and runs the default `task seed` under the base
+#      overlay (real LLM and Ollama: the replay's vectors must not stay under the real
 #      embedding model's name), then removes the older Tilt-built images the runs leave on
 #      the host (the newest of each, and every image a container uses, are kept). The last
 #      line says which overlay the cluster is on and what its data is.
 #
 # `-- --list` only lists the suite: it touches neither the cluster nor the browsers.
 #
-# KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM and Ollama (overlay
-# mockauth throughout) instead of the recorded LLM (overlay smoke); it needs the real LLM
-# values in .env. A machine whose .env has none (the keyless machine the smoke overlay is
-# for) cannot start mockauth: the replay run then leaves the cluster ON SMOKE (replay-seeded),
-# says so on its last line, and fails only if the suite failed.
+# KIWI_LIVE_E2E=1 runs the @live tests against the real LiteLLM and Ollama (the base overlay
+# throughout) instead of the recorded LLM (the replay overlay); it needs the real LLM
+# values in .env. A machine whose .env has none (the keyless machine the replay overlay is
+# for) cannot start the base overlay: the replay run then leaves the cluster ON THE REPLAY
+# OVERLAY (replay-seeded), says so on its last line, and fails only if the suite failed.
 #
 # Every step that can wait on kiwi, the database or a model is bounded: the timeouts below,
 # tilt's own, reset.sh's. The timeouts are GNU coreutils `timeout` (gtimeout on macOS: see
 # bounded.sh), a prerequisite, run with --foreground so that Ctrl-C reaches the command.
 # The exit status is that of the suite (or of the first step that failed); a restore that
-# failed (back to mockauth, removing the replay server, wipe or seed) makes it non-zero too,
-# and the last line says what state the cluster is really in.
+# failed (back to the base overlay, removing the replay server, wipe or seed) makes it
+# non-zero too, and the last line says what state the cluster is really in.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 ENV_FILE="${ENV_FILE:-$PWD/.env}"
 [ "${1:-}" != -- ] || shift
+
+# The profile decides which overlays the run uses. It is read before anything else, so that a
+# value this script does not know touches nothing. local_up is how the base overlay is started
+# by hand, for the messages that tell a person what to run.
+profile="${KIWI_SMOKE_PROFILE:-default}"
+case "$profile" in
+  default)
+    base_overlay=mockauth
+    replay_overlay=smoke
+    local_up="task local:up"
+    ;;
+  minimal)
+    base_overlay=minimal
+    replay_overlay=minimal-smoke
+    local_up="OVERLAY=minimal task local:up"
+    ;;
+  *)
+    echo "smoke: unknown KIWI_SMOKE_PROFILE '$profile' (want default or minimal); nothing was touched" >&2
+    exit 2
+    ;;
+esac
 
 for arg in "$@"; do
   if [ "$arg" = --list ]; then
@@ -55,8 +85,8 @@ done
 
 live=0
 [ "${KIWI_LIVE_E2E:-}" != 1 ] || live=1
-overlay=smoke
-[ "$live" = 0 ] || overlay=mockauth
+overlay=$replay_overlay
+[ "$live" = 0 ] || overlay=$base_overlay
 
 kc=(kubectl --context k3d-kiwi -n kiwi)
 say() { printf 'smoke: %s\n' "$*"; }
@@ -146,7 +176,7 @@ drop_images() {
 }
 
 # 5, armed before the first change to the cluster: whatever happens, the cluster is put back
-# on mockauth when it can be, and the last line says what state it is really in.
+# on the base overlay when it can be, and the last line says what state it is really in.
 cluster_on=unknown # the overlay the cluster is known to be on
 restore_failed=0
 wiped=0 # set before the first wipe, so that a wipe that fails half way is still repaired
@@ -156,25 +186,25 @@ finish() {
   trap - EXIT
   set +e
   if [ "$touched" = 1 ]; then
-    if [ "$overlay" = smoke ]; then
-      if [ "$cluster_on" != smoke ]; then
-        say "overlay smoke did not come up (tilt ci failed): what the cluster runs is unknown; fix the cause, then run task smoke again"
+    if [ "$overlay" = "$replay_overlay" ]; then
+      if [ "$cluster_on" != "$replay_overlay" ]; then
+        say "overlay $replay_overlay did not come up (tilt ci failed): what the cluster runs is unknown; fix the cause, then run task smoke again"
       elif keyed; then
-        say "returning the cluster to overlay mockauth"
-        if up mockauth; then
-          cluster_on=mockauth
+        say "returning the cluster to overlay $base_overlay"
+        if up "$base_overlay"; then
+          cluster_on=$base_overlay
           drop_replay || restore_failed=1
         else
           cluster_on=unknown
           restore_failed=1
-          say "could not return the cluster to mockauth (secret or tilt ci failed): it may be half way between smoke and mockauth; the replay server is left in place; fix the cause, then run task local:up"
+          say "could not return the cluster to $base_overlay (secret or tilt ci failed): it may be half way between $replay_overlay and $base_overlay; the replay server is left in place; fix the cause, then run $local_up"
         fi
       else
-        say "the cluster STAYS on overlay smoke: .env has no real LLM values, so mockauth cannot start on this machine"
+        say "the cluster STAYS on overlay $replay_overlay: .env has no real LLM values, so $base_overlay cannot start on this machine"
       fi
     fi
-    if [ "$cluster_on" = mockauth ] && [ "$wiped" = 1 ]; then
-      say "wiping the workspace data and seeding the default workspace (task seed), so that mockauth is usable at once"
+    if [ "$cluster_on" = "$base_overlay" ] && [ "$wiped" = 1 ]; then
+      say "wiping the workspace data and seeding the default workspace (task seed), so that $base_overlay is usable at once"
       if bounded 700 bash scripts/smoke/reset.sh && bounded 300 task seed; then
         reseeded=1
       else
@@ -196,8 +226,8 @@ finish() {
   [ "$wiped" = 0 ] || note="$note; its workspace data was WIPED by this run (a real-Google Team workspace and its grant included)"
   if [ "$reseeded" = 1 ]; then
     note="$note, and it is freshly seeded with the default seed (demo.example: alice, bob); to wipe and seed again: task reset && task seed"
-  elif [ "$wiped" = 1 ] && [ "$cluster_on" = smoke ]; then
-    note="$note; the data is the replay's seed (hashed vectors): run task reset && task local:up and task seed on a machine with the real LLM values"
+  elif [ "$wiped" = 1 ] && [ "$cluster_on" = "$replay_overlay" ]; then
+    note="$note; the data is the replay's seed (hashed vectors): run task reset && $local_up and task seed on a machine with the real LLM values"
   fi
   say "done (exit $code); $note"
   exit "$code"
@@ -209,7 +239,7 @@ say "bringing up overlay $overlay"
 up "$overlay"
 cluster_on=$overlay
 
-# 3. The wipe, then the seed (the real services; under smoke every model call is answered by the replay).
+# 3. The wipe, then the seed (the real services; under the replay overlay every model call is answered by the replay).
 say "wiping the workspace data"
 wiped=1
 bounded 700 bash scripts/smoke/reset.sh

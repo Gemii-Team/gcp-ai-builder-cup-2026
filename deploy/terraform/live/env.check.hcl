@@ -1,5 +1,7 @@
 # Fake values for the offline checks (task iac:check, the iac CI job): they let every unit render
 # and validate with no real project. Nothing here exists in Google Cloud; do not apply with it.
+# The checks run this file once as the minimal profile (the default, so no `profile` line) and once
+# as the full one (scripts/iac/check.sh writes a copy with profile = "full").
 locals {
   project_id        = "kiwi-offline-check"
   state_bucket      = "kiwi-offline-check-tfstate"

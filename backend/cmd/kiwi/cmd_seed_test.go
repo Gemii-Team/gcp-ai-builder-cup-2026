@@ -402,7 +402,7 @@ func searcher(t *testing.T) func(ws, who uuid.UUID, text string) []knowledge.Hit
 		t.Fatal(err)
 	}
 	d := openDB(t)
-	c, err := cache.Open(t.Context(), cfg.ValkeyURL, cache.Options{})
+	c, err := cache.OpenValkey(t.Context(), cfg.ValkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,6 @@ output "private_services_range_name" {
 }
 
 output "valkey_connection_policy_id" {
-  description = "The service connection policy that lets Valkey create its endpoint; the instance must be created after it."
-  value       = google_network_connectivity_service_connection_policy.valkey.id
+  description = "The service connection policy that lets Valkey create its endpoint; the instance must be created after it. Null when valkey_enabled is false (the \"minimal\" profile has no Valkey, and no unit reads this)."
+  value       = one(google_network_connectivity_service_connection_policy.valkey[*].id)
 }

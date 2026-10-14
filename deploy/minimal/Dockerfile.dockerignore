@@ -1,0 +1,27 @@
+# BuildKit reads this file (not a root .dockerignore) for
+# `docker build -f deploy/minimal/Dockerfile .`.
+# Send only what the build copies: the Go module, the web workspace and its packages. No host
+# node_modules or dist, no secrets, no docs, no git history, no infrastructure code.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/web
+!packages
+!backend
+
+# The excludes come after the includes: a later line wins, so these hold even where an
+# include above reaches into them.
+**/node_modules
+**/dist
+.git
+.superpowers
+docs
+deploy/terraform
+**/.env
+**/.env.*
+
+# The binary does not need tests, and a save in one must not rebuild the image (the Tiltfile
+# ignores the same files).
+**/*_test.go
+backend/**/testdata

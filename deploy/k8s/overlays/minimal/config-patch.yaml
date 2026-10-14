@@ -1,0 +1,31 @@
+# What changes in kiwi's configuration against mockauth. Everything else of the
+# ConfigMap kiwi-config (the mock sign-in addresses, the workspace heading, the LLM and
+# embedding settings) is as it is there. KIWI_LISTEN_ADDR is not set: 8080 is the default.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kiwi-config
+data:
+  # No Valkey: setting the key to null removes the address mockauth inherits from local.
+  KIWI_VALKEY_URL: null
+  # The cache, the realtime tickets, the OAuth state and the pub/sub live in the process
+  # (it is refused unless one process runs all four roles). The sessions are rows of the
+  # identity schema in Postgres, so a restart does not sign anyone out.
+  KIWI_CACHE_PROVIDER: memory
+  # The built web app, which the image carries (deploy/minimal/Dockerfile). kiwi serves it
+  # on / next to /api, /ws, /healthz and /readyz, so no web server is needed.
+  KIWI_WEB_DIR: /app/web
+  # Pool sizes: 12 connections per process, where the default is 20 + 16.
+  #   system 6: the outbox relay runs 4 jobs at once and each holds a system connection
+  #     while it works; the other 2 are for sign-in, the session lookups (in memory mode
+  #     the session table is read through the system pool on every authenticated request)
+  #     and the Meet poll. It must stay at 6 or more: fewer starves one of those.
+  #   app 6: with ten people one process rarely has more than a handful of concurrent
+  #     transactions.
+  #   12 per process keeps two overlapping processes (a rollout) at 24, inside the 50
+  #     connections the Cloud Run profile gives its Cloud SQL instance (max_connections 50).
+  KIWI_DB_APP_MAX_CONNS: "6"
+  KIWI_DB_SYSTEM_MAX_CONNS: "6"
+  # An idle connection is closed after 5 minutes, which returns the connections a burst
+  # opened.
+  KIWI_DB_MAX_CONN_IDLE: 5m
