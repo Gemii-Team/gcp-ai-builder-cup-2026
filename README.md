@@ -155,9 +155,9 @@ sequenceDiagram
 
 | | Local (built and checked) | Production (prepared, not applied) |
 |---|---|---|
-| Runtime | k3d cluster, Tilt; `web` and `kiwi` are separate pods behind Traefik | One Cloud Run service with one container: `kiwi` serves the web app too (`full` profile: a Caddy ingress container plus the `kiwi` sidecar) |
-| Database | Postgres + pgvector in the cluster | Cloud SQL, PostgreSQL 17, private IP, TLS, backups |
-| Cache | Valkey in the cluster | In the `kiwi` process, sessions in Postgres (`full` profile: Memorystore for Valkey, one cluster-disabled node) |
+| Runtime | k3d cluster, Tilt; `web` and `kiwi` are separate pods behind Traefik; with `OVERLAY=minimal`, one `kiwi` pod serves everything | One Cloud Run service with one container: `kiwi` serves the web app too (`full` profile: a Caddy ingress container plus the `kiwi` sidecar) |
+| Database | Postgres + pgvector in the cluster; pools of 6 + 6 with `OVERLAY=minimal` (idle: 5 min locally, 2 min on Cloud Run) | Cloud SQL, PostgreSQL 17, private IP, TLS, backups |
+| Cache | Valkey in the cluster; with `OVERLAY=minimal`, in the `kiwi` process | In the `kiwi` process, sessions in Postgres (`full` profile: Memorystore for Valkey, one cluster-disabled node) |
 | Uploads | A volume on the `kiwi` pod, signed URLs served by `kiwi` | A private Cloud Storage bucket (app adapter not built) |
 | Models and embeddings | Your LiteLLM for chat and speech; Ollama `embeddinggemma` on the CPU | Vertex AI Gemini (`gemini-3.5-flash`, `gemini-embedding-001` by default; app provider not built) |
 | Sign-in | Mock provider; real Google with `OVERLAY=local` | Google, with an OAuth web client you create; same invite-only rule |
@@ -165,7 +165,6 @@ sequenceDiagram
 | Secrets | Git-ignored `.env`, loaded into a Secret of the cluster | Secret Manager, one secret per variable |
 | Deploy | `task local:up`; Tilt rebuilds on save | Terragrunt apply by the owner; one image by GitHub Actions (workflow not written) |
 | Scale | One `kiwi` pod | Exactly one instance (min = max = 1), CPU always on |
-| Minimal profile (one process, no Valkey) | `OVERLAY=minimal task local:up`: one `kiwi` pod serves the app, the API and the WebSocket; cache, realtime tickets and pub/sub live in the process; sessions are in Postgres; database pools of 6 + 6, idle connections closed after five minutes. Pinned by `task check:scripts` (**automated**); run on the k3d cluster (**real-condition**, see [What was checked](#what-was-checked-and-how)) | **The default production profile, prepared, not applied:** the rows above, in one process with no Valkey and sessions in Postgres; pools of 6 + 6, idle connections closed after two minutes (the Cloud SQL connection budget is set for it). Not applied, and the app still lacks what [this list](#what-the-app-still-needs-before-real-images-can-serve) names |
 | Sessions | Valkey; with `OVERLAY=minimal`, rows of the `identity` schema in Postgres | Postgres, in the minimal profile (the default; on Cloud SQL they need the `kiwi_system` policies of F02, see the list below); Memorystore for Valkey in the `full` profile |
 
 ## Run it locally
