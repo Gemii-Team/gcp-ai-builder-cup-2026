@@ -35,6 +35,15 @@ are the real app; Ask is answered live by Gemini through `llm/`.
 The soundtrack (`public/audio`, made by `python3 -I scripts/make-audio.py`) is a quiet music bed with clicks, whooshes and
 chimes, kept low under the voice. Render without it with `--props='{"sound":false}'`.
 
+## Adding the HeyGen voice
+
+Make one clip per scene from NARRATION.md and drop it in `public/voice/` named after the scene (`title.mp4`,
+`signin.mp4`, … `close.mp4`; NARRATION.md lists each name). A video clip puts the avatar in the bottom-right corner
+(rounded, 300×300, cropped to fill); an `.mp3`, `.wav` or `.m4a` is voice only. Then `npm run render`. Each clip starts
+with its scene, the music dips under it, and a scene whose clip runs longer than it grows to fit, with the other scenes
+giving back spare time so the video stays 4:00 (`TARGET_SECONDS` in `src/script.ts`). Any scene may have no clip. The
+clips are git-ignored.
+
 Flags for `npm run record -- <flags>`:
 
 | Flag | Effect |

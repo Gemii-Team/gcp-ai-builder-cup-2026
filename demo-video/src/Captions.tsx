@@ -18,7 +18,7 @@ function windows(segment: Segment, fps: number): { text: string; from: number; t
 }
 
 /** The narration of the scene, one line at a time, in a band under the screen. Turn it off for the cut that carries the avatar's voice. */
-export function Captions({ segments }: { segments: readonly Segment[] }) {
+export function Captions({ segments, narrow = false }: { segments: readonly Segment[]; narrow?: boolean }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const segment = segments.find((candidate) => frame >= candidate.from && frame < candidate.from + candidate.duration);
@@ -32,10 +32,10 @@ export function Captions({ segments }: { segments: readonly Segment[] }) {
   const opacity = interpolate(frame, [current.from, current.from + 6, current.to - 6, current.to], [0, 1, 1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
   const rise = interpolate(frame, [current.from, current.from + 8], [8, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
   return (
-    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 28, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+    <div style={{ position: 'absolute', left: 0, right: narrow ? 300 : 0, bottom: 28, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
       <div
         style={{
-          maxWidth: 1340,
+          maxWidth: narrow ? 1180 : 1340,
           padding: '12px 26px',
           borderRadius: 14,
           background: 'rgba(10,45,43,.82)',

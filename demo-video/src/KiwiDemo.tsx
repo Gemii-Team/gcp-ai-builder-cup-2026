@@ -4,10 +4,11 @@ import { Captions } from './Captions';
 import { Fonts } from './Fonts';
 import { MeetCall } from './MeetCall';
 import { Soundtrack } from './Soundtrack';
+import { Avatar } from './Avatar';
 import { Placeholder, Screen } from './Screen';
 import { CloseCard, TitleCard } from './cards';
 import type { Manifest, SceneRec } from './manifest';
-import { buildTimeline, recordingTime, type Segment } from './timeline';
+import { buildTimeline, recordingTime, type Segment, type VoiceClips } from './timeline';
 import { color, font } from './theme';
 
 export type KiwiDemoProps = {
@@ -17,6 +18,8 @@ export type KiwiDemoProps = {
   captions: boolean;
   /** The music bed and sound effects (low, under the HeyGen voice). */
   sound?: boolean;
+  /** The HeyGen clips found in public/voice, by scene id (read by the composition's metadata). */
+  voice?: VoiceClips;
 };
 
 let cached: Promise<Manifest | null> | null = null;
@@ -31,7 +34,7 @@ function loadManifest(): Promise<Manifest | null> {
   return cached;
 }
 
-export function KiwiDemo({ scenes, captions, sound = true }: KiwiDemoProps) {
+export function KiwiDemo({ scenes, captions, sound = true, voice = {} }: KiwiDemoProps) {
   const { fps } = useVideoConfig();
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [handle] = useState(() => (scenes === null ? null : delayRender('Loading scenes.json')));
@@ -44,7 +47,7 @@ export function KiwiDemo({ scenes, captions, sound = true }: KiwiDemoProps) {
       continueRender(handle);
     });
   }, [handle]);
-  const { segments, total } = useMemo(() => buildTimeline(scenes, fps), [scenes, fps]);
+  const { segments, total } = useMemo(() => buildTimeline(scenes, fps, voice), [scenes, fps, voice]);
 
   return (
     <AbsoluteFill style={{ background: color.primary, fontFamily: font.sans }}>
@@ -65,8 +68,15 @@ export function KiwiDemo({ scenes, captions, sound = true }: KiwiDemoProps) {
           )}
         </Sequence>
       ))}
-      {captions && <Captions segments={segments} />}
-      {sound && (scenes === null || manifest !== null) && <Soundtrack segments={segments} manifest={manifest} total={total} />}
+      {segments.map((segment) =>
+        voice[segment.id] === undefined ? null : (
+          <Sequence key={`voice-${segment.id}`} from={segment.from} durationInFrames={segment.duration} name={`voice ${segment.id}`}>
+            <Avatar clip={voice[segment.id]!} />
+          </Sequence>
+        ),
+      )}
+      {captions && <Captions segments={segments} narrow={Object.values(voice).some((clip) => clip.video)} />}
+      {sound && (scenes === null || manifest !== null) && <Soundtrack segments={segments} manifest={manifest} total={total} voice={voice} />}
     </AbsoluteFill>
   );
 }

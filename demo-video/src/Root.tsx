@@ -2,6 +2,7 @@ import { Composition, staticFile } from 'remotion';
 import { KiwiDemo } from './KiwiDemo';
 import type { Manifest } from './manifest';
 import { buildTimeline } from './timeline';
+import { loadVoice } from './voice';
 import { VIDEO } from './theme';
 
 /** The scene marks of the recording, or null when nothing has been recorded yet. */
@@ -27,11 +28,11 @@ export function RemotionRoot() {
       width={VIDEO.width}
       height={VIDEO.height}
       durationInFrames={VIDEO.fps * 210}
-      defaultProps={{ scenes: null, captions: true }}
+      defaultProps={{ scenes: null, captions: true, voice: {} }}
       calculateMetadata={async ({ props }) => {
-        const scenes = await loadScenes();
-        const { total } = buildTimeline(scenes, VIDEO.fps);
-        return { durationInFrames: total, props: { ...props, scenes } };
+        const [scenes, voice] = await Promise.all([loadScenes(), loadVoice()]);
+        const { total } = buildTimeline(scenes, VIDEO.fps, voice);
+        return { durationInFrames: total, props: { ...props, scenes, voice } };
       }}
     />
   );
