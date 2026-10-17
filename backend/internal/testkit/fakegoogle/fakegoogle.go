@@ -38,13 +38,21 @@ type EntriesReply struct {
 	Err     error
 }
 
-// Call records one call. Name is the space name (ListConferences) or the transcript
-// name (ListTranscriptEntries); EnableTranscription is set for CreateMeetSpace.
+// EventReply is one scripted outcome of ScheduleCalendarEvent.
+type EventReply struct {
+	Event google.CalendarEvent
+	Err   error
+}
+
+// Call records one call. Name is the space name (ListConferences), the transcript
+// name (ListTranscriptEntries) or the event id (CancelCalendarEvent);
+// EnableTranscription is set for CreateMeetSpace and Event for ScheduleCalendarEvent.
 type Call struct {
 	Method              string
 	UserID              uuid.UUID
 	Name                string
 	EnableTranscription bool
+	Event               google.CalendarEventInput
 }
 
 // Client implements google.Client.
@@ -54,10 +62,13 @@ type Client struct {
 	spaceQueue       []SpaceReply
 	conferencesQueue []ConferencesReply
 	entriesQueue     []EntriesReply
+	eventQueue       []EventReply
 
 	onCreateMeetSpace       func(ctx context.Context, userID uuid.UUID, enableTranscription bool) (google.Space, error)
 	onListConferences       func(ctx context.Context, userID uuid.UUID, spaceName string) ([]google.Conference, error)
 	onListTranscriptEntries func(ctx context.Context, userID uuid.UUID, transcriptName string) ([]google.Entry, error)
+	onScheduleCalendarEvent func(ctx context.Context, userID uuid.UUID, in google.CalendarEventInput) (google.CalendarEvent, error)
+	onCancelCalendarEvent   func(ctx context.Context, userID uuid.UUID, eventID string) error
 
 	calls []Call
 }
@@ -107,6 +118,28 @@ func (c *Client) HandleListTranscriptEntries(f func(ctx context.Context, userID 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onListTranscriptEntries = f
+}
+
+// QueueScheduleCalendarEvent appends replies for the next ScheduleCalendarEvent calls, consumed in order.
+func (c *Client) QueueScheduleCalendarEvent(replies ...EventReply) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.eventQueue = append(c.eventQueue, replies...)
+}
+
+// HandleScheduleCalendarEvent sets the function that answers ScheduleCalendarEvent once the queue is empty.
+func (c *Client) HandleScheduleCalendarEvent(f func(ctx context.Context, userID uuid.UUID, in google.CalendarEventInput) (google.CalendarEvent, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onScheduleCalendarEvent = f
+}
+
+// HandleCancelCalendarEvent sets the function that answers CancelCalendarEvent; the
+// zero value treats a cancel as a no-op success, which is what most tests want.
+func (c *Client) HandleCancelCalendarEvent(f func(ctx context.Context, userID uuid.UUID, eventID string) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onCancelCalendarEvent = f
 }
 
 // Calls returns every call so far, in order.
@@ -177,6 +210,45 @@ func (c *Client) ListTranscriptEntries(ctx context.Context, userID uuid.UUID, tr
 		return handler(ctx, userID, transcriptName)
 	}
 	return nil, ErrUnscripted
+}
+
+// ScheduleCalendarEvent implements google.Client.
+func (c *Client) ScheduleCalendarEvent(ctx context.Context, userID uuid.UUID, in google.CalendarEventInput) (google.CalendarEvent, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, Call{Method: "ScheduleCalendarEvent", UserID: userID, Event: in})
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return google.CalendarEvent{}, err
+	}
+	reply, queued := pop(&c.eventQueue)
+	handler := c.onScheduleCalendarEvent
+	c.mu.Unlock()
+
+	switch {
+	case queued:
+		return reply.Event, reply.Err
+	case handler != nil:
+		return handler(ctx, userID, in)
+	}
+	return google.CalendarEvent{}, ErrUnscripted
+}
+
+// CancelCalendarEvent implements google.Client. With no handler a cancel is a no-op
+// success, matching the real client's treatment of an event Google no longer has.
+func (c *Client) CancelCalendarEvent(ctx context.Context, userID uuid.UUID, eventID string) error {
+	c.mu.Lock()
+	c.calls = append(c.calls, Call{Method: "CancelCalendarEvent", UserID: userID, Name: eventID})
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	handler := c.onCancelCalendarEvent
+	c.mu.Unlock()
+
+	if handler != nil {
+		return handler(ctx, userID, eventID)
+	}
+	return nil
 }
 
 func pop[T any](queue *[]T) (T, bool) {

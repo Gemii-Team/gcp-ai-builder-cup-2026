@@ -6,6 +6,7 @@ import {
   AuthorKind,
   ChannelKind,
   CreatedByKind,
+  EventStatus,
   FileStatus,
   MeetingStatus,
   MemberRole,
@@ -17,6 +18,7 @@ import {
   TrackKind,
   type AgentRunProgress,
   type Artifact,
+  type CalendarEvent,
   type Channel,
   type File,
   type GetMeResponse,
@@ -36,11 +38,13 @@ import type {
   ChannelView,
   ChatMessage,
   FileView,
+  CalendarEventView,
   MeetingView,
   MemberView,
   RunProgressView,
   RunView,
   SessionView,
+  SummaryItemView,
   TaskView,
   UserView,
 } from './types';
@@ -307,6 +311,10 @@ export function mapMeetingStatus(status: MeetingStatus): MeetingView['status'] {
   return MEETING_STATUSES[status] ?? 'pending';
 }
 
+function mapSummaryItems(items: readonly { text: string; entryRefs: readonly number[] }[]): SummaryItemView[] {
+  return items.map((item) => ({ text: item.text, entryRefs: [...item.entryRefs] }));
+}
+
 export function mapMeeting(meeting: Meeting): MeetingView {
   return {
     id: meeting.id,
@@ -318,5 +326,23 @@ export function mapMeeting(meeting: Meeting): MeetingView {
     meetUri: meeting.meetUri,
     startedAt: iso(meeting.startedAt),
     endedAt: iso(meeting.endedAt),
+    summary: meeting.summary,
+    decisions: mapSummaryItems(meeting.decisions),
+    openQuestions: mapSummaryItems(meeting.openQuestions),
+  };
+}
+
+export function mapCalendarEvent(event: CalendarEvent): CalendarEventView {
+  return {
+    id: event.id,
+    channelId: event.channelId,
+    ref: event.ref,
+    title: event.title,
+    startAt: isoOrEpoch(event.startAt),
+    endAt: iso(event.endAt),
+    meetUri: event.meetUri,
+    htmlLink: event.htmlLink,
+    status: event.status === EventStatus.CANCELED ? 'canceled' : 'scheduled',
+    orgWide: event.orgWide,
   };
 }

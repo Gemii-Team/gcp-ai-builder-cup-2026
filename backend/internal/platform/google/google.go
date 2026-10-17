@@ -1,5 +1,5 @@
-// Package google is the port to the Google Meet REST API. Every call runs with the
-// Google grant of the user it names, never with a service account.
+// Package google is the port to the Google Meet and Calendar REST APIs. Every call
+// runs with the Google grant of the user it names, never with a service account.
 package google
 
 import (
@@ -9,10 +9,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// Client reads and creates Meet resources as one user. Every method returns a
-// *ConsentRequiredError when that user has not granted Meet access (or revoked it),
-// and a *MeetError (found with errors.As) for any other failure of Meet that a person
-// can be told about: see MeetError.
+// Client reads and creates Meet and Calendar resources as one user. Every method
+// returns a *ConsentRequiredError when that user has not granted the access it needs
+// (or revoked it), and a *MeetError (found with errors.As) for any other failure of
+// Google that a person can be told about: see MeetError.
 type Client interface {
 	// CreateMeetSpace creates a meeting space for userID, with transcript
 	// auto-generation switched on when enableTranscription is true. When Meet refuses
@@ -26,6 +26,29 @@ type Client interface {
 	// ListTranscriptEntries returns all entries of a transcript in order, following
 	// pagination to the end.
 	ListTranscriptEntries(ctx context.Context, userID uuid.UUID, transcriptName string) ([]Entry, error)
+	// ScheduleCalendarEvent creates a timed event with a Meet link on userID's primary
+	// calendar and returns it. It needs the calendar.events grant.
+	ScheduleCalendarEvent(ctx context.Context, userID uuid.UUID, in CalendarEventInput) (CalendarEvent, error)
+	// CancelCalendarEvent deletes the event from userID's primary calendar. An event
+	// Google no longer has is not an error: the end state is the same.
+	CancelCalendarEvent(ctx context.Context, userID uuid.UUID, eventID string) error
+}
+
+// CalendarEventInput is the event ScheduleCalendarEvent creates: a title and a span
+// [StartAt, EndAt). Times are sent to Google in UTC.
+type CalendarEventInput struct {
+	Title   string
+	StartAt time.Time
+	EndAt   time.Time
+}
+
+// CalendarEvent is a created Calendar event. ID is the event's id on the calendar
+// (what CancelCalendarEvent names), HTMLLink opens it in Google Calendar, and MeetURI
+// is the link people join through.
+type CalendarEvent struct {
+	ID       string
+	HTMLLink string
+	MeetURI  string
 }
 
 // Space is a Meet meeting space: Name is its resource name ("spaces/..."), MeetingURI

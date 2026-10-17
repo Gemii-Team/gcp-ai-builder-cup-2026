@@ -218,6 +218,52 @@ func (q *Queries) InsertTranscriptEntries(ctx context.Context, arg InsertTranscr
 	return err
 }
 
+const listMeetingsInChannels = `-- name: ListMeetingsInChannels :many
+SELECT id, workspace_id, channel_id, owner_user_id, ref, title, meet_space, recording_file_id, meet_uri, conference_record, status, failure_reason, last_entry_count, started_at, ended_at, created_at FROM meetings.meetings
+WHERE channel_id = ANY($1::text[]::uuid[])
+ORDER BY created_at DESC, id DESC
+`
+
+// The meetings of the given channels, newest first, for the Meetings screen. The id
+// list travels as text[] and is cast on the server, so it encodes under the pools'
+// QueryExecModeExec (no prepared statements to infer a uuid[] element type).
+func (q *Queries) ListMeetingsInChannels(ctx context.Context, channelIds []string) ([]MeetingsMeeting, error) {
+	rows, err := q.db.Query(ctx, listMeetingsInChannels, channelIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MeetingsMeeting
+	for rows.Next() {
+		var i MeetingsMeeting
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.OwnerUserID,
+			&i.Ref,
+			&i.Title,
+			&i.MeetSpace,
+			&i.RecordingFileID,
+			&i.MeetUri,
+			&i.ConferenceRecord,
+			&i.Status,
+			&i.FailureReason,
+			&i.LastEntryCount,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPollableMeetings = `-- name: ListPollableMeetings :many
 SELECT id, workspace_id, owner_user_id, meet_space, status, conference_record, started_at, ended_at
 FROM meetings.meetings

@@ -17,4 +17,7 @@ export const SPA_NAVIGATION_ALLOWLIST: RegExp[] = [
   /^\/c\/[^/?#]+(?:\?.*)?$/,
   /^\/board(?:\?.*)?$/,
   /^\/ask(?:\?.*)?$/,
+  /^\/calendar(?:\?.*)?$/,
+  /^\/meetings(?:\?.*)?$/,
+  /^\/meeting\/[^/?#]+(?:\?.*)?$/,
 ];

@@ -74,7 +74,7 @@ func (m *Module) handleMeetConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	var authURL, state string
 	if err == nil {
-		authURL, state, err = m.begin(ctx, r.URL.Query().Get("return_to"), append(slices.Clone(loginScopes), meetScope), true,
+		authURL, state, err = m.begin(ctx, r.URL.Query().Get("return_to"), append(slices.Clone(loginScopes), meetConsentScopes...), true,
 			oauth2.SetAuthURLParam("include_granted_scopes", "true"),
 			oauth2.SetAuthURLParam("login_hint", email),
 			oauth2.SetAuthURLParam("prompt", "consent"),

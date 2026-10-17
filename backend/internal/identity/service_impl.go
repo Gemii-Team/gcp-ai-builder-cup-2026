@@ -31,8 +31,17 @@ import (
 	"kiwi/internal/platform/oidc"
 )
 
-// meetScope is requested on its own, when a user first starts a meeting.
-const meetScope = "https://www.googleapis.com/auth/meetings.space.created"
+// meetScope creates Meet spaces; calendarScope creates and cancels the events this
+// application owns. Both are the "meetings" grant, asked for together when a user first
+// starts or schedules a meeting (handleMeetConsent), and meetScope is the sentinel the
+// callback checks for a usable grant.
+const (
+	meetScope     = "https://www.googleapis.com/auth/meetings.space.created"
+	calendarScope = "https://www.googleapis.com/auth/calendar.events"
+)
+
+// meetConsentScopes are what the meetings consent asks for beyond the sign-in scopes.
+var meetConsentScopes = []string{meetScope, calendarScope}
 
 // loginScopes are all that sign-in asks for; everything else is incremental.
 var loginScopes = []string{"openid", "email", "profile"}

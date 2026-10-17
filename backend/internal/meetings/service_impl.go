@@ -99,22 +99,27 @@ type Deps struct {
 	// FileChecker verifies the file a recording meeting is made from; CreateFromRecording
 	// refuses a recording without it.
 	FileChecker FileChecker
+	// MemberChannels lists the channels a user belongs to; New wires it to
+	// chat.Service.MemberChannelIDs so meetings never imports chat for it. It bounds the
+	// workspace-wide ListMeetings. The jobs build Deps without it (they never list).
+	MemberChannels func(ctx context.Context, workspaceID, userID uuid.UUID) ([]uuid.UUID, error)
 	// Clock tells the time; nil means time.Now.
 	Clock func() time.Time
 }
 
 type service struct {
-	db    *db.DB
-	authz *authz.Authz
-	g     google.Client
-	chat  chat.Service
-	files FileChecker
-	clock func() time.Time
+	db             *db.DB
+	authz          *authz.Authz
+	g              google.Client
+	chat           chat.Service
+	files          FileChecker
+	memberChannels func(ctx context.Context, workspaceID, userID uuid.UUID) ([]uuid.UUID, error)
+	clock          func() time.Time
 }
 
 // New returns the meetings domain.
 func New(d Deps) Service {
-	return &service{db: d.DB, authz: d.Authz, g: d.Google, chat: d.Chat, files: d.FileChecker, clock: clockOf(d)}
+	return &service{db: d.DB, authz: d.Authz, g: d.Google, chat: d.Chat, files: d.FileChecker, memberChannels: d.MemberChannels, clock: clockOf(d)}
 }
 
 var _ Service = (*service)(nil)
@@ -335,6 +340,51 @@ func (s *service) GetMeeting(ctx context.Context, a authz.Actor, id uuid.UUID) (
 		return nil, fmt.Errorf("meetings: read summary: %w", err)
 	}
 	return meetingProto(row, sum), nil
+}
+
+// ListMeetings implements Service. The listed meetings carry no summary body (the
+// detail reads it with GetMeeting); the list is for the Meetings screen, newest first.
+func (s *service) ListMeetings(ctx context.Context, a authz.Actor, channelID *uuid.UUID) ([]*meetingsv1.Meeting, error) {
+	if err := requireActor(a); err != nil {
+		return nil, err
+	}
+	var channels []uuid.UUID
+	if channelID != nil {
+		if err := s.can(ctx, a, authz.ActMeetingRead, *channelID); err != nil {
+			return nil, err
+		}
+		channels = []uuid.UUID{*channelID}
+	} else {
+		if s.memberChannels == nil {
+			return nil, fmt.Errorf("meetings: workspace-wide ListMeetings has no channel source: %w", errs.ErrInvalid)
+		}
+		got, err := s.memberChannels(ctx, a.WorkspaceID, a.EffectiveUserID())
+		if err != nil {
+			return nil, fmt.Errorf("meetings: list the actor's channels: %w", err)
+		}
+		channels = got
+	}
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(channels))
+	for i, id := range channels {
+		ids[i] = id.String()
+	}
+
+	var rows []store.MeetingsMeeting
+	err := s.db.InWorkspace(ctx, a.WorkspaceID, func(ctx context.Context, tx pgx.Tx) (err error) {
+		rows, err = store.New(tx).ListMeetingsInChannels(ctx, ids)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("meetings: list meetings: %w", err)
+	}
+	out := make([]*meetingsv1.Meeting, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, meetingProto(row, nil))
+	}
+	return out, nil
 }
 
 // GetTranscriptExcerpt implements Service. radius is capped at maxExcerptRadius; an

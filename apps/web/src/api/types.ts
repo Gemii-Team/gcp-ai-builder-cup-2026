@@ -132,6 +132,9 @@ export type FileView = {
   settledAt?: string;
 };
 
+/** A decision or open question the AI drew from a meeting, with the transcript lines it came from. */
+export type SummaryItemView = { text: string; entryRefs: number[] };
+
 export type MeetingView = {
   id: string;
   channelId: string;
@@ -142,6 +145,29 @@ export type MeetingView = {
   meetUri: string;
   startedAt: string | null;
   endedAt: string | null;
+  /** The AI summary. Empty until the meeting is ready; the list (ListMeetings) carries none, GetMeeting does. */
+  summary: string;
+  decisions: SummaryItemView[];
+  openQuestions: SummaryItemView[];
   /** When this client learned the status changed: set by a realtime event, never by a fetch. */
   settledAt?: string;
+};
+
+/**
+ * A scheduled meeting (a Google Calendar event with a Meet link) the Calendar screen shows. `orgWide` events belong to
+ * the whole workspace; the rest to their channel (team). `ref` is the `EVT-...` code without its label.
+ */
+export type CalendarEventView = {
+  id: string;
+  channelId: string;
+  ref: string;
+  title: string;
+  /** ISO 8601. */
+  startAt: string;
+  /** ISO 8601, or null when the event carries no end. */
+  endAt: string | null;
+  meetUri: string;
+  htmlLink: string;
+  status: 'scheduled' | 'canceled';
+  orgWide: boolean;
 };

@@ -11,6 +11,10 @@ service MeetingService {
   // CreateFromRecording makes a meeting from an uploaded RECORDING file.
   rpc CreateFromRecording(CreateFromRecordingRequest) returns (CreateFromRecordingResponse);
   rpc GetMeeting(GetMeetingRequest) returns (GetMeetingResponse);
+  // ListMeetings returns the meetings of one channel, or — with no channel — of every
+  // channel the actor is a member of, newest first. The list carries each meeting's
+  // metadata and status; the full summary is read with GetMeeting.
+  rpc ListMeetings(ListMeetingsRequest) returns (ListMeetingsResponse);
   // GetTranscriptExcerpt returns the entries within radius of entry_idx.
   rpc GetTranscriptExcerpt(GetTranscriptExcerptRequest) returns (GetTranscriptExcerptResponse);
   // RetrySummary re-enqueues the right job for a FAILED meeting.
@@ -94,6 +98,16 @@ message GetMeetingRequest {
 
 message GetMeetingResponse {
   Meeting meeting = 1;
+}
+
+message ListMeetingsRequest {
+  // Empty means every channel the actor is a member of.
+  string channel_id = 1;
+}
+
+message ListMeetingsResponse {
+  // Newest first. Each carries metadata and status, no summary body.
+  repeated Meeting meetings = 1;
 }
 
 message GetTranscriptExcerptRequest {

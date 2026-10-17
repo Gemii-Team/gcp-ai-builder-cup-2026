@@ -1,0 +1,431 @@
+/*
+ * The Meetings screens: the list (mtg-row), and the detail with the AI summary (mtg-card) and the draft-tasks panel
+ * (mtg-drafts), laid out like Asana's AI Meetings. The header and main column are the shell's (`../shell/screen.css`).
+ * Unlayered plain CSS; every class starts with `mtg-`, and every colour, radius and size is a theme token.
+ */
+
+.mtg {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.mtg-scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px var(--pad) 24px;
+}
+
+.mtg-sub {
+  font-family: var(--font-mono);
+  font-size: var(--text-reference);
+  letter-spacing: var(--text-reference--letter-spacing);
+  color: var(--color-citation-teal);
+}
+
+/* ===== Status badge ===== */
+.mtg-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-meta);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mtg-badge[data-tone='ready'] {
+  background: var(--color-seal-wash);
+  color: var(--color-seal-ink);
+}
+
+.mtg-badge[data-tone='processing'] {
+  background: var(--color-draft-wash);
+  color: var(--color-draft-ink);
+}
+
+.mtg-badge[data-tone='failed'] {
+  background: var(--color-returned-wash);
+  color: var(--color-returned-ink);
+}
+
+.mtg-badge[data-tone='none'] {
+  background: var(--color-chip-fill);
+  color: var(--color-carbon-copy);
+}
+
+/* ===== The list ===== */
+.mtg-empty {
+  max-width: 760px;
+  margin: 24px auto;
+  text-align: center;
+  color: var(--color-carbon-copy);
+}
+
+.mtg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.mtg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-lg);
+  background: var(--color-slip-paper);
+  transition: border-color .15s, background-color .15s;
+}
+
+.mtg-row:hover {
+  border-color: var(--color-control-line);
+  background: var(--color-counter-hover);
+}
+
+.mtg-row-ic {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--color-citation-wash);
+  color: var(--color-citation-teal);
+}
+
+.mtg-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mtg-row-ttl {
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+  color: var(--color-ledger-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mtg-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+}
+
+.mtg-ref {
+  font-family: var(--font-mono);
+  font-size: var(--text-reference);
+  color: var(--color-citation-teal);
+}
+
+.mtg-when {
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+}
+
+/* ===== The detail ===== */
+.mtg-detail {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.mtg-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.mtg-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.mtg-card {
+  padding: 16px;
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-xl);
+  background: var(--color-slip-paper);
+}
+
+.mtg-card-h {
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  color: var(--color-ledger-ink);
+  margin-bottom: 12px;
+}
+
+.mtg-facts {
+  display: flex;
+  flex-direction: column;
+}
+
+.mtg-fact {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--color-track-rule);
+}
+
+.mtg-fact:first-child {
+  border-top: 0;
+}
+
+.mtg-fact dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-label);
+}
+
+.mtg-fact dd {
+  color: var(--color-ledger-ink);
+}
+
+.mtg-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mtg-person,
+.mtg-team-chip {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-chip-fill);
+  border: 1px solid var(--color-chip-edge);
+  font-size: var(--text-meta);
+}
+
+.mtg-team-chip {
+  background: var(--color-citation-wash);
+  border-color: var(--color-citation-teal);
+  color: var(--color-citation-teal);
+}
+
+.mtg-join {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: var(--text-button);
+  font-weight: var(--text-button--font-weight);
+  transition: background-color .15s;
+}
+
+.mtg-join:hover {
+  background: var(--color-primary-hover);
+}
+
+/* ===== Summary body ===== */
+.mtg-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mtg-sec-h {
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-carbon-copy);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 6px;
+}
+
+.mtg-overview-body {
+  line-height: var(--text-body--line-height);
+  color: var(--color-ledger-ink);
+  overflow-wrap: anywhere;
+}
+
+.mtg-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+
+.mtg-items li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--color-ledger-ink);
+}
+
+.mtg-items li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-citation-teal);
+}
+
+.mtg-note {
+  color: var(--color-carbon-copy);
+}
+
+.mtg-processing {
+  color: var(--color-draft-ink);
+}
+
+.mtg-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mtg-state[data-tone='failed'] {
+  color: var(--color-returned-ink);
+}
+
+/* ===== Draft tasks panel ===== */
+.mtg-drafts {
+  position: sticky;
+  top: 0;
+  padding: 16px;
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-xl);
+  background: var(--color-slip-paper);
+}
+
+.mtg-drafts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mtg-drafts-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  color: var(--color-ledger-ink);
+}
+
+.mtg-drafts-count {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-draft-tag);
+  color: var(--color-draft-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+}
+
+.mtg-drafts-empty {
+  color: var(--color-carbon-copy);
+  font-size: var(--text-meta);
+}
+
+.mtg-drafts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mtg-draft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-track-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+}
+
+.mtg-draft[data-busy] {
+  opacity: .6;
+}
+
+.mtg-draft-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mtg-draft-ttl {
+  font-size: var(--text-meta);
+  color: var(--color-ledger-ink);
+  overflow-wrap: anywhere;
+}
+
+.mtg-draft-owner {
+  font-size: var(--text-numeral);
+  color: var(--color-carbon-copy);
+}
+
+.mtg-draft-acts {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.mtg-draft-no,
+.mtg-draft-yes {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-chip-edge);
+}
+
+.mtg-draft-no {
+  color: var(--color-returned-red);
+}
+
+.mtg-draft-yes {
+  color: var(--color-seal-green);
+}
+
+.mtg-draft-yes:disabled {
+  color: var(--color-disabled-ink);
+}
+
+/* ===== Phones: the panel drops below the summary ===== */
+@media (max-width: 1023px) {
+  .mtg-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mtg-drafts {
+    position: static;
+  }
+
+  .mtg-fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

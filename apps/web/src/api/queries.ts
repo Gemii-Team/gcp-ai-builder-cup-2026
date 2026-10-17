@@ -1,8 +1,8 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import type { CursorStore } from '@kiwi/core';
 import type { Api } from './client';
-import { mapChannel, mapFile, mapMeeting, mapMember, mapMessage, mapSession, mapTask, mapUser } from './mappers';
-import type { ChannelView, ChatMessage, Delivery, TaskView } from './types';
+import { mapCalendarEvent, mapChannel, mapFile, mapMeeting, mapMember, mapMessage, mapSession, mapTask, mapUser } from './mappers';
+import type { CalendarEventView, ChannelView, ChatMessage, Delivery, TaskView } from './types';
 
 /**
  * The query-key factory: the shapes the whole app shares. Realtime events and the screens read and write the cache
@@ -20,6 +20,12 @@ export const keys = {
   tasks: () => ['tasks'] as const,
   channelTasks: (channelId: string) => ['tasks', { channelId }] as const,
   meeting: (id: string) => ['meeting', id] as const,
+  /** `['meetings']` is the workspace-wide list the Meetings screen reads; `['meetings', { channelId }]` is one channel's. */
+  meetings: () => ['meetings'] as const,
+  channelMeetings: (channelId: string) => ['meetings', { channelId }] as const,
+  /** `['events']` is the workspace-wide upcoming list the Calendar reads; `['events', { channelId }]` is one team's. */
+  events: () => ['events'] as const,
+  channelEvents: (channelId: string) => ['events', { channelId }] as const,
   file: (id: string) => ['file', id] as const,
   /** The recordings this session uploaded into a channel (`RecordingUpload[]`): what their pending and failed rows follow. */
   recordings: (channelId: string) => ['recordings', channelId] as const,
@@ -69,6 +75,13 @@ export const channelTasksQuery = (api: Api, channelId: string) =>
     queryFn: async ({ signal }) => (await api.tasks.listTasks({ channelId }, { signal })).tasks.map(mapTask),
   });
 
+/** Every upcoming event the caller may see: their teams' events plus the workspace's org-wide ones, soonest first. */
+export const upcomingEventsQuery = (api: Api) =>
+  queryOptions({
+    queryKey: keys.events(),
+    queryFn: async ({ signal }): Promise<CalendarEventView[]> => (await api.calendar.listUpcoming({}, { signal })).events.map(mapCalendarEvent),
+  });
+
 export const fileQuery = (api: Api, id: string) =>
   queryOptions({
     queryKey: keys.file(id),
@@ -91,6 +104,13 @@ export const meetingQuery = (api: Api, id: string) =>
       }
       return mapMeeting(meeting);
     },
+  });
+
+/** Every meeting of the channels the caller belongs to, newest first. The list carries no summary body. */
+export const meetingsQuery = (api: Api) =>
+  queryOptions({
+    queryKey: keys.meetings(),
+    queryFn: async ({ signal }) => (await api.meetings.listMeetings({}, { signal })).meetings.map(mapMeeting),
   });
 
 /** One page of `ListMessages` (it pages newest first), oldest first. A full page means older messages may exist. */

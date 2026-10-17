@@ -26,6 +26,14 @@ RETURNING *;
 -- name: GetMeeting :one
 SELECT * FROM meetings.meetings WHERE id = sqlc.arg(id);
 
+-- name: ListMeetingsInChannels :many
+-- The meetings of the given channels, newest first, for the Meetings screen. The id
+-- list travels as text[] and is cast on the server, so it encodes under the pools'
+-- QueryExecModeExec (no prepared statements to infer a uuid[] element type).
+SELECT * FROM meetings.meetings
+WHERE channel_id = ANY(sqlc.arg(channel_ids)::text[]::uuid[])
+ORDER BY created_at DESC, id DESC;
+
 -- name: LockMeeting :one
 -- Serialises the writers of one meeting until the transaction ends.
 SELECT * FROM meetings.meetings WHERE id = sqlc.arg(id) FOR UPDATE;

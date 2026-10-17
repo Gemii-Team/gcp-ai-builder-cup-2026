@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package kiwi.calendar.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// CalendarService is served under /api (Connect, POST, protobuf or JSON).
+//
+// A scheduled meeting is a Google Calendar event on the organizer's own calendar,
+// created with their own grant (never a service account), with a Meet link attached.
+// The channel sees it as a slip the assistant posts; ListUpcoming is what a panel of
+// coming meetings reads. Scheduling needs the calendar.events grant, which is asked
+// for incrementally like the Meet grant.
+service CalendarService {
+  // ScheduleMeeting creates the Google Calendar event with a Meet link and posts
+  // the invitation slip into the channel.
+  rpc ScheduleMeeting(ScheduleMeetingRequest) returns (ScheduleMeetingResponse);
+  // ListUpcoming returns events that have not ended yet, soonest first: of one
+  // channel, or — with no channel — of every channel the actor is a member of plus
+  // every org-wide event of the workspace.
+  rpc ListUpcoming(ListUpcomingRequest) returns (ListUpcomingResponse);
+  // CancelEvent cancels a scheduled event in Google Calendar and marks it canceled.
+  // Only the organizer cancels their own event.
+  rpc CancelEvent(CancelEventRequest) returns (CancelEventResponse);
+}
+
+enum EventStatus {
+  EVENT_STATUS_UNSPECIFIED = 0;
+  EVENT_STATUS_SCHEDULED = 1;
+  EVENT_STATUS_CANCELED = 2;
+}
+
+// CalendarEvent is a scheduled meeting. ref is the EVT-... REF code.
+message CalendarEvent {
+  string id = 1;
+  string channel_id = 2;
+  string ref = 3;
+  string title = 4;
+  google.protobuf.Timestamp start_at = 5;
+  google.protobuf.Timestamp end_at = 6;
+  // The Meet link people join through.
+  string meet_uri = 7;
+  // The event in the organizer's Google Calendar.
+  string html_link = 8;
+  EventStatus status = 9;
+  // org_wide is true for an event the whole workspace sees, false for one only the
+  // channel's (team's) members see. A channel still hosts the invitation slip either way.
+  bool org_wide = 10;
+}
+
+message ScheduleMeetingRequest {
+  string channel_id = 1;
+  string title = 2;
+  // start_at must be in the future.
+  google.protobuf.Timestamp start_at = 3;
+  // 1 to 480; the event ends duration_minutes after start_at.
+  int32 duration_minutes = 4;
+  // org_wide makes the event visible to the whole workspace, not just the channel.
+  bool org_wide = 5;
+}
+
+message ScheduleMeetingResponse {
+  CalendarEvent event = 1;
+}
+
+message ListUpcomingRequest {
+  // Empty means every channel the actor is a member of.
+  string channel_id = 1;
+}
+
+message ListUpcomingResponse {
+  repeated CalendarEvent events = 1;
+}
+
+message CancelEventRequest {
+  string event_id = 1;
+}
+
+message CancelEventResponse {}

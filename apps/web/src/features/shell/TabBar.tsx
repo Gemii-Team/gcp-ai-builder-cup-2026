@@ -15,7 +15,7 @@ function Pill({ icon }: { icon: IconName }) {
 }
 
 /**
- * The phone's four-item tab bar: Chat, Board and Ask are links, Me is a button that opens the account sheet. Chat leads to
+ * The phone's tab bar: Chat, Board, Ask and Calendar are links, Me is a button that opens the account sheet. Chat leads to
  * the channel last open (the first one on a fresh start) and counts as current on any channel.
  */
 export function TabBar() {
@@ -41,6 +41,10 @@ export function TabBar() {
       <AppLink to="/ask">
         <Pill icon="ask" />
         <T k="navAsk" />
+      </AppLink>
+      <AppLink to="/calendar">
+        <Pill icon="clock" />
+        <T k="navCalendar" />
       </AppLink>
       <button
         ref={meTab}

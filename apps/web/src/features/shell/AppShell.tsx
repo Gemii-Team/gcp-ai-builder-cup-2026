@@ -6,7 +6,8 @@ import { useChannels } from '../../api/hooks';
 import { RealtimeProvider } from '../../realtime/provider';
 import { useUiStore } from '../../state/ui';
 import { useSession } from '../auth/useSession';
-import { Rail } from './Rail';
+import { AreaRail } from './AreaRail';
+import { InnerSidebar } from './InnerSidebar';
 import { TabBar } from './TabBar';
 
 /**
@@ -40,7 +41,8 @@ export function AppShell({ client }: { /** The live connection; tests pass a fak
           <span lang="en">Demo data</span> · <span lang="th">ข้อมูลตัวอย่าง</span>
         </p>
         <div className="app">
-          <Rail />
+          <AreaRail />
+          <InnerSidebar />
           <Outlet />
         </div>
         <TabBar />

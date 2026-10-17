@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 
 	meetingsv1 "kiwi/gen/kiwi/meetings/v1"
 	"kiwi/gen/kiwi/meetings/v1/meetingsv1connect"
@@ -69,6 +70,22 @@ func (s *connectServer) GetMeeting(ctx context.Context, req *connect.Request[mee
 		return nil, err
 	}
 	return connect.NewResponse(&meetingsv1.GetMeetingResponse{Meeting: m}), nil
+}
+
+func (s *connectServer) ListMeetings(ctx context.Context, req *connect.Request[meetingsv1.ListMeetingsRequest]) (*connect.Response[meetingsv1.ListMeetingsResponse], error) {
+	var channelID *uuid.UUID
+	if raw := req.Msg.GetChannelId(); raw != "" {
+		id, err := parseID(raw, "channel id")
+		if err != nil {
+			return nil, err
+		}
+		channelID = &id
+	}
+	meetings, err := s.svc.ListMeetings(ctx, s.actor(ctx), channelID)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&meetingsv1.ListMeetingsResponse{Meetings: meetings}), nil
 }
 
 func (s *connectServer) GetTranscriptExcerpt(ctx context.Context, req *connect.Request[meetingsv1.GetTranscriptExcerptRequest]) (*connect.Response[meetingsv1.GetTranscriptExcerptResponse], error) {

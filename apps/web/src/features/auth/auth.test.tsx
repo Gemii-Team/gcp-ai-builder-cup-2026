@@ -78,7 +78,7 @@ describe('Guard', () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/c/ch-q4');
     });
-    expect(await within(screen.getByRole('navigation', RAIL)).findByRole('button', { name: /Pimchanok S\./ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Pimchanok S\./ })).toBeInTheDocument();
     expect(api.identity.getMe).toHaveBeenCalledTimes(1);
   });
 

@@ -1,0 +1,396 @@
+/*
+ * The Calendar screen: the period bar and view switcher, the Month grid, the Week/Day time-grid, and the schedule form.
+ * The header and main column are the shell's (`../shell/screen.css`). Unlayered plain CSS like the other features'
+ * stylesheets; every class starts with `cal-`, `mv-` (month view) or `tg-` (time grid), and every colour, radius and
+ * size is a theme token.
+ */
+
+.cal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* ===== The period bar: Today, the arrows, the period label, and the Month/Week/Day switch ===== */
+.cal-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 10px var(--pad);
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cal-step {
+  width: 32px;
+  height: 32px;
+  color: var(--color-ledger-ink);
+}
+
+.cal-flip {
+  transform: scaleX(-1);
+}
+
+.cal-period {
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  color: var(--color-ledger-ink);
+  white-space: nowrap;
+}
+
+.cal-views {
+  display: inline-flex;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.cal-view-btn {
+  min-height: 32px;
+  padding: 0 14px;
+  border-left: 1px solid var(--color-slip-edge);
+  background: var(--color-slip-paper);
+  color: var(--color-ledger-ink);
+  font-size: var(--text-button);
+  font-weight: var(--text-button--font-weight);
+  cursor: pointer;
+  transition: background-color .15s;
+}
+
+.cal-view-btn:first-child {
+  border-left: 0;
+}
+
+.cal-view-btn:hover {
+  background: var(--color-counter-hover);
+}
+
+.cal-view-btn[aria-pressed='true'] {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+/* ===== The stage the chosen view fills ===== */
+.cal-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ===== Month view ===== */
+.mv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.mv-week-head,
+.mv-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.mv-week-head {
+  flex: none;
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.mv-wd {
+  padding: 6px 8px;
+  font-size: var(--text-meta);
+  font-weight: 600;
+  color: var(--color-carbon-copy);
+  text-align: right;
+}
+
+.mv-grid {
+  flex: 1;
+  min-height: 0;
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.mv-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 4px;
+  border-right: 1px solid var(--color-track-rule);
+  border-bottom: 1px solid var(--color-track-rule);
+  overflow: hidden;
+}
+
+.mv-cell[data-outside] {
+  background: var(--color-counter-mint);
+}
+
+.mv-cell[data-outside] .mv-date {
+  color: var(--color-disabled-ink);
+}
+
+.mv-date {
+  align-self: flex-end;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+  color: var(--color-ledger-ink);
+}
+
+.mv-cell[data-today] .mv-date {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+}
+
+.mv-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.mv-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--color-citation-wash);
+  border-left: 3px solid var(--color-citation-teal);
+  font-size: var(--text-meta);
+  color: var(--color-ledger-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mv-chip[data-org] {
+  background: var(--color-tally-mint);
+  border-left-color: var(--color-primary);
+}
+
+.mv-chip-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+  color: var(--color-carbon-copy);
+}
+
+.mv-chip-ttl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mv-more {
+  font-size: var(--text-meta);
+  color: var(--color-carbon-copy);
+  padding: 0 6px;
+}
+
+/* ===== Week / Day time grid ===== */
+.tg {
+  --tg-gutter: 56px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.tg-head {
+  display: grid;
+  flex: none;
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.tg-corner {
+  border-right: 1px solid var(--color-track-rule);
+}
+
+.tg-day-head {
+  padding: 6px 8px;
+  text-align: center;
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--color-ledger-ink);
+  border-left: 1px solid var(--color-track-rule);
+}
+
+.tg-day-head[data-today] {
+  color: var(--color-primary);
+}
+
+.tg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tg-body {
+  display: grid;
+  position: relative;
+}
+
+.tg-axis {
+  border-right: 1px solid var(--color-track-rule);
+}
+
+.tg-hour {
+  position: relative;
+}
+
+.tg-hour-lbl {
+  position: absolute;
+  top: -8px;
+  right: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+  color: var(--color-carbon-copy);
+}
+
+.tg-col {
+  position: relative;
+  border-left: 1px solid var(--color-track-rule);
+}
+
+.tg-col[data-today] {
+  background: var(--color-counter-hover);
+}
+
+.tg-slot {
+  border-bottom: 1px solid var(--color-track-rule);
+}
+
+.tg-nowline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-returned-red);
+  z-index: 2;
+}
+
+.tg-event {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-citation-wash);
+  border-left: 3px solid var(--color-citation-teal);
+  color: var(--color-ledger-ink);
+  overflow: hidden;
+  z-index: 1;
+}
+
+.tg-event[data-org] {
+  background: var(--color-tally-mint);
+  border-left-color: var(--color-primary);
+}
+
+.tg-event-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-numeral);
+  color: var(--color-carbon-copy);
+}
+
+.tg-event-ttl {
+  font-size: var(--text-meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== The schedule form ===== */
+.cal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: none;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px var(--pad);
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+
+.cal-fld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cal-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cal-row > * {
+  flex: 1;
+  min-width: 140px;
+}
+
+.cal-input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--color-control-line);
+  border-radius: var(--radius-md);
+  background: var(--color-field-white);
+  color: var(--color-ledger-ink);
+}
+
+.cal-input:focus-visible {
+  outline: 2px solid var(--color-focus-teal);
+  outline-offset: 1px;
+}
+
+.cal-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ledger-ink);
+}
+
+.cal-err {
+  color: var(--color-returned-ink);
+  font-size: var(--text-meta);
+}
+
+.cal-form-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ===== Phones: the week view would be too narrow, so it falls back to a single scrollable day ===== */
+@media (max-width: 1023px) {
+  .cal-period {
+    font-size: var(--text-item-title);
+  }
+
+  .cal-input {
+    height: 44px;
+  }
+
+  .mv-chip-time {
+    display: none;
+  }
+}

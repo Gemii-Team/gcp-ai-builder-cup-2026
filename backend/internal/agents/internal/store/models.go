@@ -49,6 +49,23 @@ type AgentsSessionEvent struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type CalendarEvent struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	ChannelID   uuid.UUID
+	OwnerUserID uuid.UUID
+	Ref         *string
+	Title       string
+	GcalEventID string
+	HtmlLink    string
+	MeetUri     string
+	Status      string
+	StartAt     pgtype.Timestamptz
+	EndAt       pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	OrgWide     bool
+}
+
 type ChatChannel struct {
 	ID          uuid.UUID
 	WorkspaceID uuid.UUID

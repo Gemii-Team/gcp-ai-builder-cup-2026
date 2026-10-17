@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file kiwi/meetings/v1/meetings.proto.
  */
 export const file_kiwi_meetings_v1_meetings: GenFile = /*@__PURE__*/
-  fileDesc("Ch9raXdpL21lZXRpbmdzL3YxL21lZXRpbmdzLnByb3RvEhBraXdpLm1lZXRpbmdzLnYxIvgCCgdNZWV0aW5nEgoKAmlkGAEgASgJEhIKCmNoYW5uZWxfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSCwoDcmVmGAQgASgJEi8KBnN0YXR1cxgFIAEoDjIfLmtpd2kubWVldGluZ3MudjEuTWVldGluZ1N0YXR1cxIWCg5mYWlsdXJlX3JlYXNvbhgGIAEoCRIQCghtZWV0X3VyaRgHIAEoCRIuCgpzdGFydGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIsCghlbmRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHc3VtbWFyeRgKIAEoCRIwCglkZWNpc2lvbnMYCyADKAsyHS5raXdpLm1lZXRpbmdzLnYxLlN1bW1hcnlJdGVtEjUKDm9wZW5fcXVlc3Rpb25zGAwgAygLMh0ua2l3aS5tZWV0aW5ncy52MS5TdW1tYXJ5SXRlbSIvCgtTdW1tYXJ5SXRlbRIMCgR0ZXh0GAEgASgJEhIKCmVudHJ5X3JlZnMYAiADKAUiiAEKBUVudHJ5EgsKA2lkeBgBIAEoBRIUCgdzcGVha2VyGAIgASgJSACIAQESFQoIc3RhcnRfbXMYAyABKANIAYgBARITCgZlbmRfbXMYBCABKANIAogBARIMCgR0ZXh0GAUgASgJQgoKCF9zcGVha2VyQgsKCV9zdGFydF9tc0IJCgdfZW5kX21zImkKB0V4Y2VycHQSEgoKbWVldGluZ19pZBgBIAEoCRINCgV0aXRsZRgCIAEoCRIRCglmb2N1c19pZHgYAyABKAUSKAoHZW50cmllcxgEIAMoCzIXLmtpd2kubWVldGluZ3MudjEuRW50cnkiKQoTU3RhcnRNZWV0aW5nUmVxdWVzdBISCgpjaGFubmVsX2lkGAEgASgJImMKFFN0YXJ0TWVldGluZ1Jlc3BvbnNlEioKB21lZXRpbmcYASABKAsyGS5raXdpLm1lZXRpbmdzLnYxLk1lZXRpbmcSHwoXdHJhbnNjcmlwdGlvbl9hdXRvbWF0aWMYAiABKAgiUAoaQ3JlYXRlRnJvbVJlY29yZGluZ1JlcXVlc3QSEgoKY2hhbm5lbF9pZBgBIAEoCRIPCgdmaWxlX2lkGAIgASgJEg0KBXRpdGxlGAMgASgJIkkKG0NyZWF0ZUZyb21SZWNvcmRpbmdSZXNwb25zZRIqCgdtZWV0aW5nGAEgASgLMhkua2l3aS5tZWV0aW5ncy52MS5NZWV0aW5nIicKEUdldE1lZXRpbmdSZXF1ZXN0EhIKCm1lZXRpbmdfaWQYASABKAkiQAoSR2V0TWVldGluZ1Jlc3BvbnNlEioKB21lZXRpbmcYASABKAsyGS5raXdpLm1lZXRpbmdzLnYxLk1lZXRpbmciVAobR2V0VHJhbnNjcmlwdEV4Y2VycHRSZXF1ZXN0EhIKCm1lZXRpbmdfaWQYASABKAkSEQoJZW50cnlfaWR4GAIgASgFEg4KBnJhZGl1cxgDIAEoBSJKChxHZXRUcmFuc2NyaXB0RXhjZXJwdFJlc3BvbnNlEioKB2V4Y2VycHQYASABKAsyGS5raXdpLm1lZXRpbmdzLnYxLkV4Y2VycHQiKQoTUmV0cnlTdW1tYXJ5UmVxdWVzdBISCgptZWV0aW5nX2lkGAEgASgJIhYKFFJldHJ5U3VtbWFyeVJlc3BvbnNlKsABCg1NZWV0aW5nU3RhdHVzEh4KGk1FRVRJTkdfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGgoWTUVFVElOR19TVEFUVVNfUEVORElORxABEhwKGE1FRVRJTkdfU1RBVFVTX0lOR0VTVElORxACEhgKFE1FRVRJTkdfU1RBVFVTX1JFQURZEAMSGQoVTUVFVElOR19TVEFUVVNfRkFJTEVEEAQSIAocTUVFVElOR19TVEFUVVNfTk9fVFJBTlNDUklQVBAFMpIECg5NZWV0aW5nU2VydmljZRJdCgxTdGFydE1lZXRpbmcSJS5raXdpLm1lZXRpbmdzLnYxLlN0YXJ0TWVldGluZ1JlcXVlc3QaJi5raXdpLm1lZXRpbmdzLnYxLlN0YXJ0TWVldGluZ1Jlc3BvbnNlEnIKE0NyZWF0ZUZyb21SZWNvcmRpbmcSLC5raXdpLm1lZXRpbmdzLnYxLkNyZWF0ZUZyb21SZWNvcmRpbmdSZXF1ZXN0Gi0ua2l3aS5tZWV0aW5ncy52MS5DcmVhdGVGcm9tUmVjb3JkaW5nUmVzcG9uc2USVwoKR2V0TWVldGluZxIjLmtpd2kubWVldGluZ3MudjEuR2V0TWVldGluZ1JlcXVlc3QaJC5raXdpLm1lZXRpbmdzLnYxLkdldE1lZXRpbmdSZXNwb25zZRJ1ChRHZXRUcmFuc2NyaXB0RXhjZXJwdBItLmtpd2kubWVldGluZ3MudjEuR2V0VHJhbnNjcmlwdEV4Y2VycHRSZXF1ZXN0Gi4ua2l3aS5tZWV0aW5ncy52MS5HZXRUcmFuc2NyaXB0RXhjZXJwdFJlc3BvbnNlEl0KDFJldHJ5U3VtbWFyeRIlLmtpd2kubWVldGluZ3MudjEuUmV0cnlTdW1tYXJ5UmVxdWVzdBomLmtpd2kubWVldGluZ3MudjEuUmV0cnlTdW1tYXJ5UmVzcG9uc2VCrQEKFGNvbS5raXdpLm1lZXRpbmdzLnYxQg1NZWV0aW5nc1Byb3RvUAFaJGtpd2kvZ2VuL2tpd2kvbWVldGluZ3MvdjE7bWVldGluZ3N2MaICA0tNWKoCEEtpd2kuTWVldGluZ3MuVjHKAhBLaXdpXE1lZXRpbmdzXFYx4gIcS2l3aVxNZWV0aW5nc1xWMVxHUEJNZXRhZGF0YeoCEktpd2k6Ok1lZXRpbmdzOjpWMWIGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("Ch9raXdpL21lZXRpbmdzL3YxL21lZXRpbmdzLnByb3RvEhBraXdpLm1lZXRpbmdzLnYxIvgCCgdNZWV0aW5nEgoKAmlkGAEgASgJEhIKCmNoYW5uZWxfaWQYAiABKAkSDQoFdGl0bGUYAyABKAkSCwoDcmVmGAQgASgJEi8KBnN0YXR1cxgFIAEoDjIfLmtpd2kubWVldGluZ3MudjEuTWVldGluZ1N0YXR1cxIWCg5mYWlsdXJlX3JlYXNvbhgGIAEoCRIQCghtZWV0X3VyaRgHIAEoCRIuCgpzdGFydGVkX2F0GAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIsCghlbmRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHc3VtbWFyeRgKIAEoCRIwCglkZWNpc2lvbnMYCyADKAsyHS5raXdpLm1lZXRpbmdzLnYxLlN1bW1hcnlJdGVtEjUKDm9wZW5fcXVlc3Rpb25zGAwgAygLMh0ua2l3aS5tZWV0aW5ncy52MS5TdW1tYXJ5SXRlbSIvCgtTdW1tYXJ5SXRlbRIMCgR0ZXh0GAEgASgJEhIKCmVudHJ5X3JlZnMYAiADKAUiiAEKBUVudHJ5EgsKA2lkeBgBIAEoBRIUCgdzcGVha2VyGAIgASgJSACIAQESFQoIc3RhcnRfbXMYAyABKANIAYgBARITCgZlbmRfbXMYBCABKANIAogBARIMCgR0ZXh0GAUgASgJQgoKCF9zcGVha2VyQgsKCV9zdGFydF9tc0IJCgdfZW5kX21zImkKB0V4Y2VycHQSEgoKbWVldGluZ19pZBgBIAEoCRINCgV0aXRsZRgCIAEoCRIRCglmb2N1c19pZHgYAyABKAUSKAoHZW50cmllcxgEIAMoCzIXLmtpd2kubWVldGluZ3MudjEuRW50cnkiKQoTU3RhcnRNZWV0aW5nUmVxdWVzdBISCgpjaGFubmVsX2lkGAEgASgJImMKFFN0YXJ0TWVldGluZ1Jlc3BvbnNlEioKB21lZXRpbmcYASABKAsyGS5raXdpLm1lZXRpbmdzLnYxLk1lZXRpbmcSHwoXdHJhbnNjcmlwdGlvbl9hdXRvbWF0aWMYAiABKAgiUAoaQ3JlYXRlRnJvbVJlY29yZGluZ1JlcXVlc3QSEgoKY2hhbm5lbF9pZBgBIAEoCRIPCgdmaWxlX2lkGAIgASgJEg0KBXRpdGxlGAMgASgJIkkKG0NyZWF0ZUZyb21SZWNvcmRpbmdSZXNwb25zZRIqCgdtZWV0aW5nGAEgASgLMhkua2l3aS5tZWV0aW5ncy52MS5NZWV0aW5nIicKEUdldE1lZXRpbmdSZXF1ZXN0EhIKCm1lZXRpbmdfaWQYASABKAkiQAoSR2V0TWVldGluZ1Jlc3BvbnNlEioKB21lZXRpbmcYASABKAsyGS5raXdpLm1lZXRpbmdzLnYxLk1lZXRpbmciKQoTTGlzdE1lZXRpbmdzUmVxdWVzdBISCgpjaGFubmVsX2lkGAEgASgJIkMKFExpc3RNZWV0aW5nc1Jlc3BvbnNlEisKCG1lZXRpbmdzGAEgAygLMhkua2l3aS5tZWV0aW5ncy52MS5NZWV0aW5nIlQKG0dldFRyYW5zY3JpcHRFeGNlcnB0UmVxdWVzdBISCgptZWV0aW5nX2lkGAEgASgJEhEKCWVudHJ5X2lkeBgCIAEoBRIOCgZyYWRpdXMYAyABKAUiSgocR2V0VHJhbnNjcmlwdEV4Y2VycHRSZXNwb25zZRIqCgdleGNlcnB0GAEgASgLMhkua2l3aS5tZWV0aW5ncy52MS5FeGNlcnB0IikKE1JldHJ5U3VtbWFyeVJlcXVlc3QSEgoKbWVldGluZ19pZBgBIAEoCSIWChRSZXRyeVN1bW1hcnlSZXNwb25zZSrAAQoNTWVldGluZ1N0YXR1cxIeChpNRUVUSU5HX1NUQVRVU19VTlNQRUNJRklFRBAAEhoKFk1FRVRJTkdfU1RBVFVTX1BFTkRJTkcQARIcChhNRUVUSU5HX1NUQVRVU19JTkdFU1RJTkcQAhIYChRNRUVUSU5HX1NUQVRVU19SRUFEWRADEhkKFU1FRVRJTkdfU1RBVFVTX0ZBSUxFRBAEEiAKHE1FRVRJTkdfU1RBVFVTX05PX1RSQU5TQ1JJUFQQBTLxBAoOTWVldGluZ1NlcnZpY2USXQoMU3RhcnRNZWV0aW5nEiUua2l3aS5tZWV0aW5ncy52MS5TdGFydE1lZXRpbmdSZXF1ZXN0GiYua2l3aS5tZWV0aW5ncy52MS5TdGFydE1lZXRpbmdSZXNwb25zZRJyChNDcmVhdGVGcm9tUmVjb3JkaW5nEiwua2l3aS5tZWV0aW5ncy52MS5DcmVhdGVGcm9tUmVjb3JkaW5nUmVxdWVzdBotLmtpd2kubWVldGluZ3MudjEuQ3JlYXRlRnJvbVJlY29yZGluZ1Jlc3BvbnNlElcKCkdldE1lZXRpbmcSIy5raXdpLm1lZXRpbmdzLnYxLkdldE1lZXRpbmdSZXF1ZXN0GiQua2l3aS5tZWV0aW5ncy52MS5HZXRNZWV0aW5nUmVzcG9uc2USXQoMTGlzdE1lZXRpbmdzEiUua2l3aS5tZWV0aW5ncy52MS5MaXN0TWVldGluZ3NSZXF1ZXN0GiYua2l3aS5tZWV0aW5ncy52MS5MaXN0TWVldGluZ3NSZXNwb25zZRJ1ChRHZXRUcmFuc2NyaXB0RXhjZXJwdBItLmtpd2kubWVldGluZ3MudjEuR2V0VHJhbnNjcmlwdEV4Y2VycHRSZXF1ZXN0Gi4ua2l3aS5tZWV0aW5ncy52MS5HZXRUcmFuc2NyaXB0RXhjZXJwdFJlc3BvbnNlEl0KDFJldHJ5U3VtbWFyeRIlLmtpd2kubWVldGluZ3MudjEuUmV0cnlTdW1tYXJ5UmVxdWVzdBomLmtpd2kubWVldGluZ3MudjEuUmV0cnlTdW1tYXJ5UmVzcG9uc2VCrQEKFGNvbS5raXdpLm1lZXRpbmdzLnYxQg1NZWV0aW5nc1Byb3RvUAFaJGtpd2kvZ2VuL2tpd2kvbWVldGluZ3MvdjE7bWVldGluZ3N2MaICA0tNWKoCEEtpd2kuTWVldGluZ3MuVjHKAhBLaXdpXE1lZXRpbmdzXFYx4gIcS2l3aVxNZWV0aW5nc1xWMVxHUEJNZXRhZGF0YeoCEktpd2k6Ok1lZXRpbmdzOjpWMWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * Meeting is a Meet meeting or a recording turned into one. ref is the MTG-... REF code.
@@ -309,6 +309,44 @@ export const GetMeetingResponseSchema: GenMessage<GetMeetingResponse> = /*@__PUR
   messageDesc(file_kiwi_meetings_v1_meetings, 9);
 
 /**
+ * @generated from message kiwi.meetings.v1.ListMeetingsRequest
+ */
+export type ListMeetingsRequest = Message<"kiwi.meetings.v1.ListMeetingsRequest"> & {
+  /**
+   * Empty means every channel the actor is a member of.
+   *
+   * @generated from field: string channel_id = 1;
+   */
+  channelId: string;
+};
+
+/**
+ * Describes the message kiwi.meetings.v1.ListMeetingsRequest.
+ * Use `create(ListMeetingsRequestSchema)` to create a new message.
+ */
+export const ListMeetingsRequestSchema: GenMessage<ListMeetingsRequest> = /*@__PURE__*/
+  messageDesc(file_kiwi_meetings_v1_meetings, 10);
+
+/**
+ * @generated from message kiwi.meetings.v1.ListMeetingsResponse
+ */
+export type ListMeetingsResponse = Message<"kiwi.meetings.v1.ListMeetingsResponse"> & {
+  /**
+   * Newest first. Each carries metadata and status, no summary body.
+   *
+   * @generated from field: repeated kiwi.meetings.v1.Meeting meetings = 1;
+   */
+  meetings: Meeting[];
+};
+
+/**
+ * Describes the message kiwi.meetings.v1.ListMeetingsResponse.
+ * Use `create(ListMeetingsResponseSchema)` to create a new message.
+ */
+export const ListMeetingsResponseSchema: GenMessage<ListMeetingsResponse> = /*@__PURE__*/
+  messageDesc(file_kiwi_meetings_v1_meetings, 11);
+
+/**
  * @generated from message kiwi.meetings.v1.GetTranscriptExcerptRequest
  */
 export type GetTranscriptExcerptRequest = Message<"kiwi.meetings.v1.GetTranscriptExcerptRequest"> & {
@@ -333,7 +371,7 @@ export type GetTranscriptExcerptRequest = Message<"kiwi.meetings.v1.GetTranscrip
  * Use `create(GetTranscriptExcerptRequestSchema)` to create a new message.
  */
 export const GetTranscriptExcerptRequestSchema: GenMessage<GetTranscriptExcerptRequest> = /*@__PURE__*/
-  messageDesc(file_kiwi_meetings_v1_meetings, 10);
+  messageDesc(file_kiwi_meetings_v1_meetings, 12);
 
 /**
  * @generated from message kiwi.meetings.v1.GetTranscriptExcerptResponse
@@ -350,7 +388,7 @@ export type GetTranscriptExcerptResponse = Message<"kiwi.meetings.v1.GetTranscri
  * Use `create(GetTranscriptExcerptResponseSchema)` to create a new message.
  */
 export const GetTranscriptExcerptResponseSchema: GenMessage<GetTranscriptExcerptResponse> = /*@__PURE__*/
-  messageDesc(file_kiwi_meetings_v1_meetings, 11);
+  messageDesc(file_kiwi_meetings_v1_meetings, 13);
 
 /**
  * @generated from message kiwi.meetings.v1.RetrySummaryRequest
@@ -367,7 +405,7 @@ export type RetrySummaryRequest = Message<"kiwi.meetings.v1.RetrySummaryRequest"
  * Use `create(RetrySummaryRequestSchema)` to create a new message.
  */
 export const RetrySummaryRequestSchema: GenMessage<RetrySummaryRequest> = /*@__PURE__*/
-  messageDesc(file_kiwi_meetings_v1_meetings, 12);
+  messageDesc(file_kiwi_meetings_v1_meetings, 14);
 
 /**
  * @generated from message kiwi.meetings.v1.RetrySummaryResponse
@@ -380,7 +418,7 @@ export type RetrySummaryResponse = Message<"kiwi.meetings.v1.RetrySummaryRespons
  * Use `create(RetrySummaryResponseSchema)` to create a new message.
  */
 export const RetrySummaryResponseSchema: GenMessage<RetrySummaryResponse> = /*@__PURE__*/
-  messageDesc(file_kiwi_meetings_v1_meetings, 13);
+  messageDesc(file_kiwi_meetings_v1_meetings, 15);
 
 /**
  * @generated from enum kiwi.meetings.v1.MeetingStatus
@@ -456,6 +494,18 @@ export const MeetingService: GenService<{
     methodKind: "unary";
     input: typeof GetMeetingRequestSchema;
     output: typeof GetMeetingResponseSchema;
+  },
+  /**
+   * ListMeetings returns the meetings of one channel, or — with no channel — of every
+   * channel the actor is a member of, newest first. The list carries each meeting's
+   * metadata and status; the full summary is read with GetMeeting.
+   *
+   * @generated from rpc kiwi.meetings.v1.MeetingService.ListMeetings
+   */
+  listMeetings: {
+    methodKind: "unary";
+    input: typeof ListMeetingsRequestSchema;
+    output: typeof ListMeetingsResponseSchema;
   },
   /**
    * GetTranscriptExcerpt returns the entries within radius of entry_idx.

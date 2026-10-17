@@ -1286,9 +1286,9 @@ func TestMeetConsent_MergesGrantedScope(t *testing.T) {
 	rec := f.serve(http.MethodGet, "/api/auth/meet-consent?return_to=%2Fchannels%2Fq4", sid)
 	u := f.providerRedirect(rec)
 	q := u.Query()
-	// The Meet scope is the new one; the sign-in scopes ride along so the ID token
-	// still carries the identity of whoever consents.
-	if want := "openid email profile " + meetScope; q.Get("scope") != want {
+	// The Meet and Calendar scopes are the new ones; the sign-in scopes ride along so
+	// the ID token still carries the identity of whoever consents.
+	if want := "openid email profile " + meetScope + " " + calendarScope; q.Get("scope") != want {
 		t.Errorf("scope = %q, want %q", q.Get("scope"), want)
 	}
 	for k, v := range map[string]string{
@@ -1313,7 +1313,8 @@ func TestMeetConsent_MergesGrantedScope(t *testing.T) {
 	}
 
 	_, scopes, found := f.oauthRow(alice)
-	want := append([]string{meetScope}, baseScopes...) // sorted: https://www.googleapis.com/auth/meetings... < ...userinfo... < openid
+	// Sorted: .../calendar.events < .../meetings.space.created < .../userinfo.email < .../userinfo.profile < openid.
+	want := append([]string{calendarScope, meetScope}, baseScopes...)
 	if !found || !slices.Equal(scopes, want) {
 		t.Fatalf("scopes = %v, want %v merged with the sign-in scopes", scopes, want)
 	}

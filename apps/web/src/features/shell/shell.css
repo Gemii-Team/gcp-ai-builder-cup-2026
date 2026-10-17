@@ -7,6 +7,8 @@
  */
 
 :root {
+  --area-w: 76px;
+  --inner-w: clamp(220px, 15vw, 260px);
   --rail-w: clamp(232px, 16.7vw, 264px);
   --panel-w: clamp(312px, 23.9vw, 380px);
   --pad: 28px;
@@ -40,9 +42,181 @@ html:has(.shell) body {
 
 .app {
   display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-columns: var(--area-w) var(--inner-w) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
+}
+
+/* ===== The thin area rail (Asana-style) ===== */
+.arearail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 6px 16px;
+  background: var(--color-primary);
+}
+
+.arearail-brand {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
+  color: var(--color-on-primary);
+}
+
+.arearail ul {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 60px;
+  padding: 8px 2px;
+  border-radius: var(--radius-md);
+  color: var(--color-rail-sage);
+  line-height: 1.2;
+  text-align: center;
+  transition: background-color .15s, color .15s;
+}
+
+a.area:hover {
+  background: var(--color-rail-hover);
+  color: var(--color-on-primary);
+}
+
+.area[data-active] {
+  background: var(--color-rail-press);
+  color: var(--color-on-primary);
+}
+
+.area-lbl {
+  font-size: 11px;
+}
+
+/* ===== The inner sidebar (light, contextual) ===== */
+.inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 8px 16px 12px;
+  background: var(--color-counter-mint);
+  border-right: 1px solid var(--color-ledger-rule);
+}
+
+.inner-h {
+  padding: 4px 8px 10px;
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  color: var(--color-ledger-ink);
+}
+
+.inner-nav {
+  flex: 1;
+  min-height: 0;
+}
+
+.inner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ich {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  color: var(--color-ledger-ink);
+  transition: background-color .15s, color .15s;
+}
+
+a.ich:hover {
+  background: var(--color-counter-hover);
+}
+
+.ich[aria-current] {
+  background: var(--color-tally-mint);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.ich-h {
+  width: 10px;
+  text-align: center;
+  color: var(--color-carbon-copy);
+}
+
+.ich[data-unread] {
+  font-weight: 600;
+}
+
+.ich-cnt {
+  margin: 0 2px 0 auto;
+  min-width: 22px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font: 600 12px/20px var(--font-mono);
+  text-align: center;
+}
+
+.ich .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--color-presence-green);
+}
+
+.ich-st {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--color-carbon-copy);
+}
+
+/* The account menu sits at the inner sidebar's foot, on its light surface. */
+.inner .mewrap {
+  margin: auto 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-ledger-rule);
+}
+
+.inner .me {
+  color: var(--color-ledger-ink);
+}
+
+.inner .me:hover {
+  background: var(--color-counter-hover);
+}
+
+.inner .me b {
+  color: var(--color-ledger-ink);
+}
+
+.inner .me small,
+.inner .me .chv {
+  color: var(--color-carbon-copy);
+}
+
+.inner .me .av {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
 }
 
 .demo-tag {
@@ -482,7 +656,9 @@ a.ch:active {
     min-height: 0;
   }
 
-  .rail {
+  .rail,
+  .arearail,
+  .inner {
     display: none;
   }
 

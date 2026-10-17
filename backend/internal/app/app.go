@@ -32,6 +32,7 @@ import (
 
 	"kiwi/internal/agents"
 	"kiwi/internal/api"
+	"kiwi/internal/calendar"
 	"kiwi/internal/chat"
 	"kiwi/internal/docs"
 	"kiwi/internal/identity"
@@ -260,9 +261,10 @@ func (a *App) wire(ctx context.Context) error {
 	docSvc := docs.New(docDeps)
 	meetingDeps := meetings.Deps{
 		DB: a.db, Authz: az, Google: a.google, Chat: chatSvc, Summarizer: meetings.NewSummarizer(a.llm),
-		Blob: a.blob, LLM: a.llm, FileChecker: fileChecker(docSvc),
+		Blob: a.blob, LLM: a.llm, FileChecker: fileChecker(docSvc), MemberChannels: chatSvc.MemberChannelIDs,
 	}
 	meetingSvc := meetings.New(meetingDeps)
+	calendarSvc := calendar.New(calendar.Deps{DB: a.db, Authz: az, Google: a.google, Chat: chatSvc, MemberChannels: chatSvc.MemberChannelIDs})
 	taskDeps := tasks.Deps{DB: a.db, Authz: az, MemberChannels: chatSvc.MemberChannelIDs, ChannelMembers: chatSvc.ListMembers}
 	taskSvc := tasks.New(taskDeps)
 	knowledgeDeps := knowledge.Deps{DB: a.db, LLM: a.llm, Authz: az, Chat: chatSvc, Meetings: meetingSvc, Docs: docSvc}
@@ -288,6 +290,9 @@ func (a *App) wire(ctx context.Context) error {
 		}},
 		{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
 			return meetings.Handler(meetingSvc, api.ActorFrom, opts...)
+		}},
+		{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
+			return calendar.Handler(calendarSvc, api.ActorFrom, opts...)
 		}},
 		{Build: func(opts ...connect.HandlerOption) (string, http.Handler) {
 			return tasks.Handler(taskSvc, api.ActorFrom, opts...)

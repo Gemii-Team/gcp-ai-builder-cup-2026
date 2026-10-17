@@ -156,7 +156,8 @@ func newFixture(t *testing.T) *fixture {
 	f.chat = chat.New(chat.Deps{DB: d, Authz: az})
 	f.deps = Deps{
 		DB: d, Authz: az, Google: f.g, Chat: hookedChat{Service: f.chat, hook: &f.chatHook},
-		Summarizer: f.summ, Blob: f.blob, LLM: f.llm, FileChecker: f.checkFile, Clock: func() time.Time { return f.now },
+		Summarizer: f.summ, Blob: f.blob, LLM: f.llm, FileChecker: f.checkFile,
+		MemberChannels: f.chat.MemberChannelIDs, Clock: func() time.Time { return f.now },
 	}
 	f.svc = New(f.deps)
 	jobs := Jobs(f.deps)
@@ -178,6 +179,55 @@ func defaultSummary() Summary {
 		OpenQuestions: []Item{{Text: "Who owns QA?", EntryRefs: []int{0}}},
 		ActionItems:   []ActionItem{{Title: "Write the release notes", OwnerHint: "Alice", DueHint: "+3d", EntryRefs: []int{1}}},
 	}
+}
+
+func TestListMeetings_NewestFirstAndScopedToMembership(t *testing.T) {
+	f := newFixture(t)
+	chA := f.channel("public", f.alice)
+	chB := f.channel("public", f.bob) // Alice is not a member
+
+	older := f.seedMeeting(seed{channel: chA, age: 3 * time.Hour, title: "Older"})
+	newer := f.seedMeeting(seed{channel: chA, age: 1 * time.Hour, title: "Newer"})
+	f.seedMeeting(seed{channel: chB, owner: f.bob, age: 2 * time.Hour, title: "Bob's"})
+
+	// One channel: Alice's, newest first.
+	got, err := f.svc.ListMeetings(t.Context(), f.user(f.alice), &chA)
+	if err != nil {
+		t.Fatalf("ListMeetings(chA): %v", err)
+	}
+	if ids := meetingIDs(got); len(ids) != 2 || ids[0] != newer.String() || ids[1] != older.String() {
+		t.Fatalf("chA meetings = %v, want [Newer, Older] newest first", titlesOf(got))
+	}
+
+	// Workspace-wide for Alice: only her channel's meetings, not Bob's.
+	all, err := f.svc.ListMeetings(t.Context(), f.user(f.alice), nil)
+	if err != nil {
+		t.Fatalf("ListMeetings(all): %v", err)
+	}
+	if ids := meetingIDs(all); len(ids) != 2 || ids[0] != newer.String() {
+		t.Fatalf("workspace-wide meetings = %v, want only Alice's two, newest first", titlesOf(all))
+	}
+
+	// A channel Alice is not in is forbidden, not a silent empty list.
+	if _, err := f.svc.ListMeetings(t.Context(), f.user(f.alice), &chB); !errors.Is(err, errs.ErrForbidden) {
+		t.Fatalf("Alice listing Bob's channel = %v, want forbidden", err)
+	}
+}
+
+func meetingIDs(ms []*meetingsv1.Meeting) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.GetId()
+	}
+	return out
+}
+
+func titlesOf(ms []*meetingsv1.Meeting) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.GetTitle()
+	}
+	return out
 }
 
 // asOwner runs fn as kiwi_owner in a transaction bound to the fixture workspace: the

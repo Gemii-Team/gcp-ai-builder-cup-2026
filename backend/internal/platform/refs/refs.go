@@ -14,8 +14,9 @@ import (
 // first is the number the first REF of a workspace and kind gets.
 const first = 1001
 
-// kinds are the three-letter REF prefixes: meeting, answer, document, task.
-var kinds = map[string]bool{"MTG": true, "ANS": true, "DOC": true, "TSK": true}
+// kinds are the three-letter REF prefixes: meeting, answer, document, task,
+// scheduled event.
+var kinds = map[string]bool{"MTG": true, "ANS": true, "DOC": true, "TSK": true, "EVT": true}
 
 // Next returns the next REF of kind for the workspace tx is bound to
 // (db.InWorkspace). The counter row is locked until tx ends, so concurrent

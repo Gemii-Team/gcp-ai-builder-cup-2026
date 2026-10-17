@@ -1,6 +1,7 @@
 import { createClient, type Client } from '@connectrpc/connect';
 import {
   AgentService,
+  CalendarService,
   ChatService,
   createApiTransport,
   FileService,
@@ -20,6 +21,7 @@ export type Api = {
   tasks: Client<typeof TaskService>;
   files: Client<typeof FileService>;
   meetings: Client<typeof MeetingService>;
+  calendar: Client<typeof CalendarService>;
 };
 
 export function createApi(baseUrl: string = API_BASE_URL): Api {
@@ -31,6 +33,7 @@ export function createApi(baseUrl: string = API_BASE_URL): Api {
     tasks: createClient(TaskService, transport),
     files: createClient(FileService, transport),
     meetings: createClient(MeetingService, transport),
+    calendar: createClient(CalendarService, transport),
   };
 }
 

@@ -10,6 +10,7 @@ export * from './gen/kiwi/chat/v1/chat_pb';
 export * from './gen/kiwi/tasks/v1/tasks_pb';
 export * from './gen/kiwi/files/v1/files_pb';
 export * from './gen/kiwi/meetings/v1/meetings_pb';
+export * from './gen/kiwi/calendar/v1/calendar_pb';
 export * from './gen/kiwi/agents/v1/agents_pb';
 export * from './gen/kiwi/realtime/v1/realtime_pb';
 

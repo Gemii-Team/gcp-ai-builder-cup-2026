@@ -272,6 +272,9 @@ func seedWorkspace(ctx context.Context, conn *pgx.Conn, ws uuid.UUID, domain str
 		{`INSERT INTO meetings.space_subscriptions (id, workspace_id, meeting_id, user_id, subscription_name, expires_at)
 		  VALUES ($1, $2, $3, $4, $5, now() + interval '1 day')`,
 			[]any{v7(), ws, meeting, user, "subscriptions/" + domain}},
+		{`INSERT INTO calendar.events (id, workspace_id, channel_id, owner_user_id, ref, title, gcal_event_id, start_at, end_at)
+		  VALUES ($1, $2, $3, $4, 'EVT-0001', 'Seeded event', 'gcal-' || $5::text, now() + interval '1 day', now() + interval '1 day 30 minutes')`,
+			[]any{v7(), ws, channel, user, domain}},
 		{`INSERT INTO knowledge.chunks
 		    (id, workspace_id, channel_id, source_kind, source_id, source_anchor, lang, content, content_sha256, tsv, embedding_model, embedding)
 		  VALUES ($1, $2, $3, 'meeting', $4, 'entries:0-0', 'en', 'seeded chunk', 'sha', to_tsvector('simple', 'seeded chunk'),

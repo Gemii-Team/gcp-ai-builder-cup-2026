@@ -29,7 +29,7 @@ const insufficientPrivilege = "42501"
 const nullifGuard = `NULLIF(current_setting('kiwi.workspace_id'::text, true), ''::text)`
 
 // kiwiSchemas are the schemas the grant catalog test inspects.
-var kiwiSchemas = []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "platform"}
+var kiwiSchemas = []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "calendar", "platform"}
 
 func connect(t *testing.T, url string) *pgx.Conn {
 	t.Helper()
@@ -164,7 +164,7 @@ func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
 		"chat.channels", "chat.channel_members", "chat.messages", "files.files",
 		"meetings.meetings", "meetings.transcript_entries", "meetings.summaries", "meetings.space_subscriptions",
 		"tasks.tasks", "knowledge.chunks", "agents.runs", "agents.sessions", "agents.session_events",
-		"identity.users", "identity.oauth_tokens", "platform.ref_counters",
+		"calendar.events", "identity.users", "identity.oauth_tokens", "platform.ref_counters",
 	} {
 		if !slices.Contains(tables, want) {
 			t.Errorf("%s has no workspace_id column (catalog query found %v)", want, tables)
@@ -476,7 +476,7 @@ func TestRoles_GrantsAreExact(t *testing.T) {
 		"identity.users", "identity.oauth_tokens", "chat.channels", "chat.channel_members", "chat.messages",
 		"files.files", "meetings.meetings", "meetings.transcript_entries", "meetings.summaries",
 		"meetings.space_subscriptions", "tasks.tasks", "knowledge.chunks", "agents.runs", "agents.sessions",
-		"agents.session_events",
+		"agents.session_events", "calendar.events",
 	} {
 		add("kiwi_app", table, dml...)
 	}
@@ -503,7 +503,7 @@ func TestRoles_GrantsAreExact(t *testing.T) {
 	assertSameSet(t, "relation and sequence privileges", got, want)
 
 	want = nil
-	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "platform"} {
+	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "calendar", "platform"} {
 		add("kiwi_app", schema, "USAGE")
 	}
 	for _, schema := range []string{"identity", "meetings", "platform"} {
@@ -518,7 +518,7 @@ func TestRoles_GrantsAreExact(t *testing.T) {
 
 	// Default privileges: only kiwi_app, only the domain schemas.
 	want = nil
-	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents"} {
+	for _, schema := range []string{"identity", "chat", "files", "meetings", "tasks", "knowledge", "agents", "calendar"} {
 		for _, p := range dml {
 			want = append(want, "kiwi_app "+schema+" r "+p)
 		}
@@ -836,9 +836,24 @@ func TestMigration0011_Down_FailsLoudlyWhileAWorkspaceHasNoDomain(t *testing.T) 
 	if _, err := p.Up(t.Context()); err != nil {
 		t.Fatalf("Up again: %v", err)
 	}
-	if got := version(); got != before+1 || nullable() != "YES" {
-		t.Errorf("after Up again: version %d, google_domain nullable %s; want 11 and YES", got, nullable())
+	// Up reapplies 0011 (google_domain nullable again) and every migration after it,
+	// so the version returns to the latest, not to 0011.
+	latest := latestMigrationVersion(t)
+	if got := version(); got != latest || nullable() != "YES" {
+		t.Errorf("after Up again: version %d, google_domain nullable %s; want %d and YES", got, nullable(), latest)
 	}
+}
+
+// latestMigrationVersion is the number of the last embedded migration (they are
+// numbered 1..N without gaps), so a test that goes down and back up knows where up
+// lands without hard-coding it.
+func latestMigrationVersion(t *testing.T) int {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("embedded migrations: %v (%d files)", err, len(files))
+	}
+	return len(files)
 }
 
 func TestMigrateUp_IsIdempotent(t *testing.T) {

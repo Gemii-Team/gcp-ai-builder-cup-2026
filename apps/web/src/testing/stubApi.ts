@@ -6,10 +6,14 @@ import {
   ListChannelsResponseSchema,
   ListMembersResponseSchema,
   ListMessagesResponseSchema,
+  ListMeetingsResponseSchema,
   ListTasksResponseSchema,
+  ListUpcomingResponseSchema,
   ListUsersResponseSchema,
+  type CalendarEvent,
   type Channel,
   type GetMeResponse,
+  type Meeting,
   type Member,
   type Message,
   type Task,
@@ -48,6 +52,7 @@ export function createStubApi(): StubApi {
     tasks: stubService('tasks'),
     files: stubService('files'),
     meetings: stubService('meetings'),
+    calendar: stubService('calendar'),
   };
 }
 
@@ -58,6 +63,10 @@ export type World = {
   /** The latest page, in the order the server sends it: newest first. */
   messages?: Message[];
   tasks?: Task[];
+  /** The upcoming calendar events `ListUpcoming` answers. */
+  events?: CalendarEvent[];
+  /** The meetings `ListMeetings` answers. */
+  meetings?: Meeting[];
   /** The signed-in user's answer to `GetMe`, when a test needs another (the email, say). */
   me?: GetMeResponse;
   /** `GetMe` never answers: the signed-in user is not loaded yet. */
@@ -72,5 +81,7 @@ export function seedApi(api: StubApi, world: World = {}): StubApi {
   api.chat.listMembers.mockResolvedValue(create(ListMembersResponseSchema, { members: world.members ?? MEMBERS }));
   api.chat.listMessages.mockResolvedValue(create(ListMessagesResponseSchema, { messages: world.messages ?? [] }));
   api.tasks.listTasks.mockResolvedValue(create(ListTasksResponseSchema, { tasks: world.tasks ?? [] }));
+  api.calendar.listUpcoming.mockResolvedValue(create(ListUpcomingResponseSchema, { events: world.events ?? [] }));
+  api.meetings.listMeetings.mockResolvedValue(create(ListMeetingsResponseSchema, { meetings: world.meetings ?? [] }));
   return api;
 }

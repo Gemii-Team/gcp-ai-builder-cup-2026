@@ -30,41 +30,44 @@ function shellWithChannels(path: string) {
   return renderApp({ path, api, routes: [CHANNEL_ROUTE] });
 }
 
+const AREAS = { name: 'Areas' };
+
 describe('Rail', () => {
-  it('Rail_ViewsRowsMarkTheCurrentRoute', async () => {
+  it('lights the active area and marks the current route inside the inner sidebar', async () => {
     const { user } = shellWithChannels('/board');
-    const rail = within(await screen.findByRole('navigation', RAIL));
+    const areas = within(await screen.findByRole('navigation', AREAS));
+    const inner = within(await screen.findByRole('navigation', RAIL));
 
-    const views = within(rail.getByRole('list', { name: 'Views' }));
-    expect(views.getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
-    expect(views.getByRole('link', { name: 'Ask' })).not.toHaveAttribute('aria-current');
-    expect(await rail.findByRole('link', { name: 'q4-launch' })).not.toHaveAttribute('aria-current');
+    // On the Board, the Workspace area is lit and its Board link is the current route.
+    expect(areas.getByRole('link', { name: 'Workspace' })).toHaveAttribute('data-active');
+    expect(inner.getByRole('link', { name: 'Board' })).toHaveAttribute('aria-current', 'page');
 
-    await user.click(views.getByRole('link', { name: 'Ask' }));
-
+    // Switching to the Agents area from the thin rail opens Ask and swaps the inner sidebar.
+    await user.click(areas.getByRole('link', { name: 'Agents' }));
     await waitFor(() => {
-      expect(views.getByRole('link', { name: 'Ask' })).toHaveAttribute('aria-current', 'page');
+      expect(inner.getByRole('link', { name: 'Ask' })).toHaveAttribute('aria-current', 'page');
     });
-    expect(views.getByRole('link', { name: 'Board' })).not.toHaveAttribute('aria-current');
+    expect(inner.queryByRole('link', { name: 'Board' })).not.toBeInTheDocument();
 
-    await user.click(rail.getByRole('link', { name: 'q4-launch' }));
-
+    // And the Chat area opens the channel last open.
+    await user.click(areas.getByRole('link', { name: 'Chat' }));
     await waitFor(() => {
-      expect(rail.getByRole('link', { name: 'q4-launch' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByText('Channel screen')).toBeInTheDocument();
     });
-    expect(views.getByRole('link', { name: 'Ask' })).not.toHaveAttribute('aria-current');
-    expect(screen.getByText('Channel screen')).toBeInTheDocument();
   });
 
-  it('shows the workspace and the agent, and no Board or Ask link looks current on a channel', async () => {
-    shellWithChannels('/c/ch-q4');
-    const rail = within(await screen.findByRole('navigation', RAIL));
+  it('shows the channels in Chat and the agent in Agents, with the workspace on the account', async () => {
+    const { user } = shellWithChannels('/c/ch-q4');
+    const inner = within(await screen.findByRole('navigation', RAIL));
 
-    const brand = within(rail.getByText('K.I.W.I.').parentElement ?? rail.getByText('K.I.W.I.'));
-    expect(await brand.findByText('Siam Riverside Trading')).toBeInTheDocument();
-    expect(rail.getByText('@assistant')).toBeInTheDocument();
-    expect(rail.getByText('online')).toBeInTheDocument();
-    expect(rail.getByRole('link', { name: 'Board' })).not.toHaveAttribute('aria-current');
+    // Chat area: the channels, and the workspace name on the account button at the foot.
+    expect(await inner.findByRole('link', { name: 'q4-launch' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Pimchanok S\./ })).toHaveTextContent('Siam Riverside Trading');
+
+    // Agents area: the assistant, shown online.
+    await user.click(within(screen.getByRole('navigation', AREAS)).getByRole('link', { name: 'Agents' }));
+    expect(await screen.findByText('@assistant')).toBeInTheDocument();
+    expect(screen.getByText('online')).toBeInTheDocument();
   });
 
   it('counts only what arrives after the channel list was first seen as unread, and says so in the pill', async () => {
@@ -84,12 +87,12 @@ describe('Rail', () => {
 
   it('speaks Thai when the language is Thai, and tags the document', async () => {
     useUiStore.getState().setLang('th');
-    shellWithChannels('/c/ch-q4');
+    shellWithChannels('/board');
 
-    const rail = within(await screen.findByRole('navigation', { name: 'มุมมอง ช่องสนทนา และเอเจนต์' }));
+    const inner = within(await screen.findByRole('navigation', { name: 'มุมมอง ช่องสนทนา และเอเจนต์' }));
 
-    expect(rail.getByRole('heading', { name: 'ช่องสนทนา' })).toBeInTheDocument();
-    expect(rail.getByRole('link', { name: 'บอร์ด' })).toBeInTheDocument();
+    expect(inner.getByRole('link', { name: 'บอร์ด' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'พื้นที่งาน' })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe('th');
   });
 
@@ -170,9 +173,9 @@ describe('AccountMenu', () => {
       order.push(`navigate ${url}`);
     });
     const { user } = shellWithChannels('/c/ch-q4');
-    const rail = within(await screen.findByRole('navigation', RAIL));
+    await screen.findByRole('navigation', RAIL);
 
-    await user.click(await rail.findByRole('button', { name: /Pimchanok S\./ }));
+    await user.click(await screen.findByRole('button', { name: /Pimchanok S\./ }));
 
     const menu = await screen.findByRole('menu', { name: 'Account' });
     expect(menu).toHaveTextContent('Signed in as');
@@ -193,12 +196,12 @@ describe('AccountMenu', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))));
     vi.spyOn(hardNavigate, 'to').mockImplementation(() => undefined);
     const { user } = shellWithChannels('/c/ch-q4');
-    const rail = within(await screen.findByRole('navigation', RAIL));
+    await screen.findByRole('navigation', RAIL);
 
-    await user.click(await rail.findByRole('button', { name: /Pimchanok S\./ }));
+    await user.click(await screen.findByRole('button', { name: /Pimchanok S\./ }));
     await user.click(within(await screen.findByRole('menu', { name: 'Account' })).getByRole('menuitem', { name: 'Sign out' }));
 
-    expect(await rail.findByRole('alert')).toHaveTextContent("Couldn't sign out. Try again.");
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't sign out. Try again.");
     expect(hardNavigate.to).not.toHaveBeenCalled();
   });
 });

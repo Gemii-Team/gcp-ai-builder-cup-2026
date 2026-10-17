@@ -704,6 +704,96 @@ func (x *GetMeetingResponse) GetMeeting() *Meeting {
 	return nil
 }
 
+type ListMeetingsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty means every channel the actor is a member of.
+	ChannelId     string `protobuf:"bytes,1,opt,name=channel_id,json=channelId,proto3" json:"channel_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMeetingsRequest) Reset() {
+	*x = ListMeetingsRequest{}
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMeetingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMeetingsRequest) ProtoMessage() {}
+
+func (x *ListMeetingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMeetingsRequest.ProtoReflect.Descriptor instead.
+func (*ListMeetingsRequest) Descriptor() ([]byte, []int) {
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListMeetingsRequest) GetChannelId() string {
+	if x != nil {
+		return x.ChannelId
+	}
+	return ""
+}
+
+type ListMeetingsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Newest first. Each carries metadata and status, no summary body.
+	Meetings      []*Meeting `protobuf:"bytes,1,rep,name=meetings,proto3" json:"meetings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListMeetingsResponse) Reset() {
+	*x = ListMeetingsResponse{}
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListMeetingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListMeetingsResponse) ProtoMessage() {}
+
+func (x *ListMeetingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListMeetingsResponse.ProtoReflect.Descriptor instead.
+func (*ListMeetingsResponse) Descriptor() ([]byte, []int) {
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ListMeetingsResponse) GetMeetings() []*Meeting {
+	if x != nil {
+		return x.Meetings
+	}
+	return nil
+}
+
 type GetTranscriptExcerptRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MeetingId     string                 `protobuf:"bytes,1,opt,name=meeting_id,json=meetingId,proto3" json:"meeting_id,omitempty"`
@@ -715,7 +805,7 @@ type GetTranscriptExcerptRequest struct {
 
 func (x *GetTranscriptExcerptRequest) Reset() {
 	*x = GetTranscriptExcerptRequest{}
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[10]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -727,7 +817,7 @@ func (x *GetTranscriptExcerptRequest) String() string {
 func (*GetTranscriptExcerptRequest) ProtoMessage() {}
 
 func (x *GetTranscriptExcerptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[10]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -740,7 +830,7 @@ func (x *GetTranscriptExcerptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTranscriptExcerptRequest.ProtoReflect.Descriptor instead.
 func (*GetTranscriptExcerptRequest) Descriptor() ([]byte, []int) {
-	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{10}
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetTranscriptExcerptRequest) GetMeetingId() string {
@@ -773,7 +863,7 @@ type GetTranscriptExcerptResponse struct {
 
 func (x *GetTranscriptExcerptResponse) Reset() {
 	*x = GetTranscriptExcerptResponse{}
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[11]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -785,7 +875,7 @@ func (x *GetTranscriptExcerptResponse) String() string {
 func (*GetTranscriptExcerptResponse) ProtoMessage() {}
 
 func (x *GetTranscriptExcerptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[11]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -798,7 +888,7 @@ func (x *GetTranscriptExcerptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTranscriptExcerptResponse.ProtoReflect.Descriptor instead.
 func (*GetTranscriptExcerptResponse) Descriptor() ([]byte, []int) {
-	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{11}
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetTranscriptExcerptResponse) GetExcerpt() *Excerpt {
@@ -817,7 +907,7 @@ type RetrySummaryRequest struct {
 
 func (x *RetrySummaryRequest) Reset() {
 	*x = RetrySummaryRequest{}
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[12]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -829,7 +919,7 @@ func (x *RetrySummaryRequest) String() string {
 func (*RetrySummaryRequest) ProtoMessage() {}
 
 func (x *RetrySummaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[12]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -842,7 +932,7 @@ func (x *RetrySummaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetrySummaryRequest.ProtoReflect.Descriptor instead.
 func (*RetrySummaryRequest) Descriptor() ([]byte, []int) {
-	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{12}
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RetrySummaryRequest) GetMeetingId() string {
@@ -860,7 +950,7 @@ type RetrySummaryResponse struct {
 
 func (x *RetrySummaryResponse) Reset() {
 	*x = RetrySummaryResponse{}
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[13]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +962,7 @@ func (x *RetrySummaryResponse) String() string {
 func (*RetrySummaryResponse) ProtoMessage() {}
 
 func (x *RetrySummaryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[13]
+	mi := &file_kiwi_meetings_v1_meetings_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +975,7 @@ func (x *RetrySummaryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetrySummaryResponse.ProtoReflect.Descriptor instead.
 func (*RetrySummaryResponse) Descriptor() ([]byte, []int) {
-	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{13}
+	return file_kiwi_meetings_v1_meetings_proto_rawDescGZIP(), []int{15}
 }
 
 var File_kiwi_meetings_v1_meetings_proto protoreflect.FileDescriptor
@@ -946,7 +1036,12 @@ const file_kiwi_meetings_v1_meetings_proto_rawDesc = "" +
 	"\n" +
 	"meeting_id\x18\x01 \x01(\tR\tmeetingId\"I\n" +
 	"\x12GetMeetingResponse\x123\n" +
-	"\ameeting\x18\x01 \x01(\v2\x19.kiwi.meetings.v1.MeetingR\ameeting\"q\n" +
+	"\ameeting\x18\x01 \x01(\v2\x19.kiwi.meetings.v1.MeetingR\ameeting\"4\n" +
+	"\x13ListMeetingsRequest\x12\x1d\n" +
+	"\n" +
+	"channel_id\x18\x01 \x01(\tR\tchannelId\"M\n" +
+	"\x14ListMeetingsResponse\x125\n" +
+	"\bmeetings\x18\x01 \x03(\v2\x19.kiwi.meetings.v1.MeetingR\bmeetings\"q\n" +
 	"\x1bGetTranscriptExcerptRequest\x12\x1d\n" +
 	"\n" +
 	"meeting_id\x18\x01 \x01(\tR\tmeetingId\x12\x1b\n" +
@@ -964,12 +1059,13 @@ const file_kiwi_meetings_v1_meetings_proto_rawDesc = "" +
 	"\x18MEETING_STATUS_INGESTING\x10\x02\x12\x18\n" +
 	"\x14MEETING_STATUS_READY\x10\x03\x12\x19\n" +
 	"\x15MEETING_STATUS_FAILED\x10\x04\x12 \n" +
-	"\x1cMEETING_STATUS_NO_TRANSCRIPT\x10\x052\x92\x04\n" +
+	"\x1cMEETING_STATUS_NO_TRANSCRIPT\x10\x052\xf1\x04\n" +
 	"\x0eMeetingService\x12]\n" +
 	"\fStartMeeting\x12%.kiwi.meetings.v1.StartMeetingRequest\x1a&.kiwi.meetings.v1.StartMeetingResponse\x12r\n" +
 	"\x13CreateFromRecording\x12,.kiwi.meetings.v1.CreateFromRecordingRequest\x1a-.kiwi.meetings.v1.CreateFromRecordingResponse\x12W\n" +
 	"\n" +
-	"GetMeeting\x12#.kiwi.meetings.v1.GetMeetingRequest\x1a$.kiwi.meetings.v1.GetMeetingResponse\x12u\n" +
+	"GetMeeting\x12#.kiwi.meetings.v1.GetMeetingRequest\x1a$.kiwi.meetings.v1.GetMeetingResponse\x12]\n" +
+	"\fListMeetings\x12%.kiwi.meetings.v1.ListMeetingsRequest\x1a&.kiwi.meetings.v1.ListMeetingsResponse\x12u\n" +
 	"\x14GetTranscriptExcerpt\x12-.kiwi.meetings.v1.GetTranscriptExcerptRequest\x1a..kiwi.meetings.v1.GetTranscriptExcerptResponse\x12]\n" +
 	"\fRetrySummary\x12%.kiwi.meetings.v1.RetrySummaryRequest\x1a&.kiwi.meetings.v1.RetrySummaryResponseB\xad\x01\n" +
 	"\x14com.kiwi.meetings.v1B\rMeetingsProtoP\x01Z$kiwi/gen/kiwi/meetings/v1;meetingsv1\xa2\x02\x03KMX\xaa\x02\x10Kiwi.Meetings.V1\xca\x02\x10Kiwi\\Meetings\\V1\xe2\x02\x1cKiwi\\Meetings\\V1\\GPBMetadata\xea\x02\x12Kiwi::Meetings::V1b\x06proto3"
@@ -987,7 +1083,7 @@ func file_kiwi_meetings_v1_meetings_proto_rawDescGZIP() []byte {
 }
 
 var file_kiwi_meetings_v1_meetings_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kiwi_meetings_v1_meetings_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_kiwi_meetings_v1_meetings_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_kiwi_meetings_v1_meetings_proto_goTypes = []any{
 	(MeetingStatus)(0),                   // 0: kiwi.meetings.v1.MeetingStatus
 	(*Meeting)(nil),                      // 1: kiwi.meetings.v1.Meeting
@@ -1000,38 +1096,43 @@ var file_kiwi_meetings_v1_meetings_proto_goTypes = []any{
 	(*CreateFromRecordingResponse)(nil),  // 8: kiwi.meetings.v1.CreateFromRecordingResponse
 	(*GetMeetingRequest)(nil),            // 9: kiwi.meetings.v1.GetMeetingRequest
 	(*GetMeetingResponse)(nil),           // 10: kiwi.meetings.v1.GetMeetingResponse
-	(*GetTranscriptExcerptRequest)(nil),  // 11: kiwi.meetings.v1.GetTranscriptExcerptRequest
-	(*GetTranscriptExcerptResponse)(nil), // 12: kiwi.meetings.v1.GetTranscriptExcerptResponse
-	(*RetrySummaryRequest)(nil),          // 13: kiwi.meetings.v1.RetrySummaryRequest
-	(*RetrySummaryResponse)(nil),         // 14: kiwi.meetings.v1.RetrySummaryResponse
-	(*timestamppb.Timestamp)(nil),        // 15: google.protobuf.Timestamp
+	(*ListMeetingsRequest)(nil),          // 11: kiwi.meetings.v1.ListMeetingsRequest
+	(*ListMeetingsResponse)(nil),         // 12: kiwi.meetings.v1.ListMeetingsResponse
+	(*GetTranscriptExcerptRequest)(nil),  // 13: kiwi.meetings.v1.GetTranscriptExcerptRequest
+	(*GetTranscriptExcerptResponse)(nil), // 14: kiwi.meetings.v1.GetTranscriptExcerptResponse
+	(*RetrySummaryRequest)(nil),          // 15: kiwi.meetings.v1.RetrySummaryRequest
+	(*RetrySummaryResponse)(nil),         // 16: kiwi.meetings.v1.RetrySummaryResponse
+	(*timestamppb.Timestamp)(nil),        // 17: google.protobuf.Timestamp
 }
 var file_kiwi_meetings_v1_meetings_proto_depIdxs = []int32{
 	0,  // 0: kiwi.meetings.v1.Meeting.status:type_name -> kiwi.meetings.v1.MeetingStatus
-	15, // 1: kiwi.meetings.v1.Meeting.started_at:type_name -> google.protobuf.Timestamp
-	15, // 2: kiwi.meetings.v1.Meeting.ended_at:type_name -> google.protobuf.Timestamp
+	17, // 1: kiwi.meetings.v1.Meeting.started_at:type_name -> google.protobuf.Timestamp
+	17, // 2: kiwi.meetings.v1.Meeting.ended_at:type_name -> google.protobuf.Timestamp
 	2,  // 3: kiwi.meetings.v1.Meeting.decisions:type_name -> kiwi.meetings.v1.SummaryItem
 	2,  // 4: kiwi.meetings.v1.Meeting.open_questions:type_name -> kiwi.meetings.v1.SummaryItem
 	3,  // 5: kiwi.meetings.v1.Excerpt.entries:type_name -> kiwi.meetings.v1.Entry
 	1,  // 6: kiwi.meetings.v1.StartMeetingResponse.meeting:type_name -> kiwi.meetings.v1.Meeting
 	1,  // 7: kiwi.meetings.v1.CreateFromRecordingResponse.meeting:type_name -> kiwi.meetings.v1.Meeting
 	1,  // 8: kiwi.meetings.v1.GetMeetingResponse.meeting:type_name -> kiwi.meetings.v1.Meeting
-	4,  // 9: kiwi.meetings.v1.GetTranscriptExcerptResponse.excerpt:type_name -> kiwi.meetings.v1.Excerpt
-	5,  // 10: kiwi.meetings.v1.MeetingService.StartMeeting:input_type -> kiwi.meetings.v1.StartMeetingRequest
-	7,  // 11: kiwi.meetings.v1.MeetingService.CreateFromRecording:input_type -> kiwi.meetings.v1.CreateFromRecordingRequest
-	9,  // 12: kiwi.meetings.v1.MeetingService.GetMeeting:input_type -> kiwi.meetings.v1.GetMeetingRequest
-	11, // 13: kiwi.meetings.v1.MeetingService.GetTranscriptExcerpt:input_type -> kiwi.meetings.v1.GetTranscriptExcerptRequest
-	13, // 14: kiwi.meetings.v1.MeetingService.RetrySummary:input_type -> kiwi.meetings.v1.RetrySummaryRequest
-	6,  // 15: kiwi.meetings.v1.MeetingService.StartMeeting:output_type -> kiwi.meetings.v1.StartMeetingResponse
-	8,  // 16: kiwi.meetings.v1.MeetingService.CreateFromRecording:output_type -> kiwi.meetings.v1.CreateFromRecordingResponse
-	10, // 17: kiwi.meetings.v1.MeetingService.GetMeeting:output_type -> kiwi.meetings.v1.GetMeetingResponse
-	12, // 18: kiwi.meetings.v1.MeetingService.GetTranscriptExcerpt:output_type -> kiwi.meetings.v1.GetTranscriptExcerptResponse
-	14, // 19: kiwi.meetings.v1.MeetingService.RetrySummary:output_type -> kiwi.meetings.v1.RetrySummaryResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	1,  // 9: kiwi.meetings.v1.ListMeetingsResponse.meetings:type_name -> kiwi.meetings.v1.Meeting
+	4,  // 10: kiwi.meetings.v1.GetTranscriptExcerptResponse.excerpt:type_name -> kiwi.meetings.v1.Excerpt
+	5,  // 11: kiwi.meetings.v1.MeetingService.StartMeeting:input_type -> kiwi.meetings.v1.StartMeetingRequest
+	7,  // 12: kiwi.meetings.v1.MeetingService.CreateFromRecording:input_type -> kiwi.meetings.v1.CreateFromRecordingRequest
+	9,  // 13: kiwi.meetings.v1.MeetingService.GetMeeting:input_type -> kiwi.meetings.v1.GetMeetingRequest
+	11, // 14: kiwi.meetings.v1.MeetingService.ListMeetings:input_type -> kiwi.meetings.v1.ListMeetingsRequest
+	13, // 15: kiwi.meetings.v1.MeetingService.GetTranscriptExcerpt:input_type -> kiwi.meetings.v1.GetTranscriptExcerptRequest
+	15, // 16: kiwi.meetings.v1.MeetingService.RetrySummary:input_type -> kiwi.meetings.v1.RetrySummaryRequest
+	6,  // 17: kiwi.meetings.v1.MeetingService.StartMeeting:output_type -> kiwi.meetings.v1.StartMeetingResponse
+	8,  // 18: kiwi.meetings.v1.MeetingService.CreateFromRecording:output_type -> kiwi.meetings.v1.CreateFromRecordingResponse
+	10, // 19: kiwi.meetings.v1.MeetingService.GetMeeting:output_type -> kiwi.meetings.v1.GetMeetingResponse
+	12, // 20: kiwi.meetings.v1.MeetingService.ListMeetings:output_type -> kiwi.meetings.v1.ListMeetingsResponse
+	14, // 21: kiwi.meetings.v1.MeetingService.GetTranscriptExcerpt:output_type -> kiwi.meetings.v1.GetTranscriptExcerptResponse
+	16, // 22: kiwi.meetings.v1.MeetingService.RetrySummary:output_type -> kiwi.meetings.v1.RetrySummaryResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_kiwi_meetings_v1_meetings_proto_init() }
@@ -1046,7 +1147,7 @@ func file_kiwi_meetings_v1_meetings_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kiwi_meetings_v1_meetings_proto_rawDesc), len(file_kiwi_meetings_v1_meetings_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -42,6 +42,9 @@ const (
 	// MeetingServiceGetMeetingProcedure is the fully-qualified name of the MeetingService's GetMeeting
 	// RPC.
 	MeetingServiceGetMeetingProcedure = "/kiwi.meetings.v1.MeetingService/GetMeeting"
+	// MeetingServiceListMeetingsProcedure is the fully-qualified name of the MeetingService's
+	// ListMeetings RPC.
+	MeetingServiceListMeetingsProcedure = "/kiwi.meetings.v1.MeetingService/ListMeetings"
 	// MeetingServiceGetTranscriptExcerptProcedure is the fully-qualified name of the MeetingService's
 	// GetTranscriptExcerpt RPC.
 	MeetingServiceGetTranscriptExcerptProcedure = "/kiwi.meetings.v1.MeetingService/GetTranscriptExcerpt"
@@ -57,6 +60,10 @@ type MeetingServiceClient interface {
 	// CreateFromRecording makes a meeting from an uploaded RECORDING file.
 	CreateFromRecording(context.Context, *connect.Request[v1.CreateFromRecordingRequest]) (*connect.Response[v1.CreateFromRecordingResponse], error)
 	GetMeeting(context.Context, *connect.Request[v1.GetMeetingRequest]) (*connect.Response[v1.GetMeetingResponse], error)
+	// ListMeetings returns the meetings of one channel, or — with no channel — of every
+	// channel the actor is a member of, newest first. The list carries each meeting's
+	// metadata and status; the full summary is read with GetMeeting.
+	ListMeetings(context.Context, *connect.Request[v1.ListMeetingsRequest]) (*connect.Response[v1.ListMeetingsResponse], error)
 	// GetTranscriptExcerpt returns the entries within radius of entry_idx.
 	GetTranscriptExcerpt(context.Context, *connect.Request[v1.GetTranscriptExcerptRequest]) (*connect.Response[v1.GetTranscriptExcerptResponse], error)
 	// RetrySummary re-enqueues the right job for a FAILED meeting.
@@ -92,6 +99,12 @@ func NewMeetingServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(meetingServiceMethods.ByName("GetMeeting")),
 			connect.WithClientOptions(opts...),
 		),
+		listMeetings: connect.NewClient[v1.ListMeetingsRequest, v1.ListMeetingsResponse](
+			httpClient,
+			baseURL+MeetingServiceListMeetingsProcedure,
+			connect.WithSchema(meetingServiceMethods.ByName("ListMeetings")),
+			connect.WithClientOptions(opts...),
+		),
 		getTranscriptExcerpt: connect.NewClient[v1.GetTranscriptExcerptRequest, v1.GetTranscriptExcerptResponse](
 			httpClient,
 			baseURL+MeetingServiceGetTranscriptExcerptProcedure,
@@ -112,6 +125,7 @@ type meetingServiceClient struct {
 	startMeeting         *connect.Client[v1.StartMeetingRequest, v1.StartMeetingResponse]
 	createFromRecording  *connect.Client[v1.CreateFromRecordingRequest, v1.CreateFromRecordingResponse]
 	getMeeting           *connect.Client[v1.GetMeetingRequest, v1.GetMeetingResponse]
+	listMeetings         *connect.Client[v1.ListMeetingsRequest, v1.ListMeetingsResponse]
 	getTranscriptExcerpt *connect.Client[v1.GetTranscriptExcerptRequest, v1.GetTranscriptExcerptResponse]
 	retrySummary         *connect.Client[v1.RetrySummaryRequest, v1.RetrySummaryResponse]
 }
@@ -131,6 +145,11 @@ func (c *meetingServiceClient) GetMeeting(ctx context.Context, req *connect.Requ
 	return c.getMeeting.CallUnary(ctx, req)
 }
 
+// ListMeetings calls kiwi.meetings.v1.MeetingService.ListMeetings.
+func (c *meetingServiceClient) ListMeetings(ctx context.Context, req *connect.Request[v1.ListMeetingsRequest]) (*connect.Response[v1.ListMeetingsResponse], error) {
+	return c.listMeetings.CallUnary(ctx, req)
+}
+
 // GetTranscriptExcerpt calls kiwi.meetings.v1.MeetingService.GetTranscriptExcerpt.
 func (c *meetingServiceClient) GetTranscriptExcerpt(ctx context.Context, req *connect.Request[v1.GetTranscriptExcerptRequest]) (*connect.Response[v1.GetTranscriptExcerptResponse], error) {
 	return c.getTranscriptExcerpt.CallUnary(ctx, req)
@@ -148,6 +167,10 @@ type MeetingServiceHandler interface {
 	// CreateFromRecording makes a meeting from an uploaded RECORDING file.
 	CreateFromRecording(context.Context, *connect.Request[v1.CreateFromRecordingRequest]) (*connect.Response[v1.CreateFromRecordingResponse], error)
 	GetMeeting(context.Context, *connect.Request[v1.GetMeetingRequest]) (*connect.Response[v1.GetMeetingResponse], error)
+	// ListMeetings returns the meetings of one channel, or — with no channel — of every
+	// channel the actor is a member of, newest first. The list carries each meeting's
+	// metadata and status; the full summary is read with GetMeeting.
+	ListMeetings(context.Context, *connect.Request[v1.ListMeetingsRequest]) (*connect.Response[v1.ListMeetingsResponse], error)
 	// GetTranscriptExcerpt returns the entries within radius of entry_idx.
 	GetTranscriptExcerpt(context.Context, *connect.Request[v1.GetTranscriptExcerptRequest]) (*connect.Response[v1.GetTranscriptExcerptResponse], error)
 	// RetrySummary re-enqueues the right job for a FAILED meeting.
@@ -179,6 +202,12 @@ func NewMeetingServiceHandler(svc MeetingServiceHandler, opts ...connect.Handler
 		connect.WithSchema(meetingServiceMethods.ByName("GetMeeting")),
 		connect.WithHandlerOptions(opts...),
 	)
+	meetingServiceListMeetingsHandler := connect.NewUnaryHandler(
+		MeetingServiceListMeetingsProcedure,
+		svc.ListMeetings,
+		connect.WithSchema(meetingServiceMethods.ByName("ListMeetings")),
+		connect.WithHandlerOptions(opts...),
+	)
 	meetingServiceGetTranscriptExcerptHandler := connect.NewUnaryHandler(
 		MeetingServiceGetTranscriptExcerptProcedure,
 		svc.GetTranscriptExcerpt,
@@ -199,6 +228,8 @@ func NewMeetingServiceHandler(svc MeetingServiceHandler, opts ...connect.Handler
 			meetingServiceCreateFromRecordingHandler.ServeHTTP(w, r)
 		case MeetingServiceGetMeetingProcedure:
 			meetingServiceGetMeetingHandler.ServeHTTP(w, r)
+		case MeetingServiceListMeetingsProcedure:
+			meetingServiceListMeetingsHandler.ServeHTTP(w, r)
 		case MeetingServiceGetTranscriptExcerptProcedure:
 			meetingServiceGetTranscriptExcerptHandler.ServeHTTP(w, r)
 		case MeetingServiceRetrySummaryProcedure:
@@ -222,6 +253,10 @@ func (UnimplementedMeetingServiceHandler) CreateFromRecording(context.Context, *
 
 func (UnimplementedMeetingServiceHandler) GetMeeting(context.Context, *connect.Request[v1.GetMeetingRequest]) (*connect.Response[v1.GetMeetingResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kiwi.meetings.v1.MeetingService.GetMeeting is not implemented"))
+}
+
+func (UnimplementedMeetingServiceHandler) ListMeetings(context.Context, *connect.Request[v1.ListMeetingsRequest]) (*connect.Response[v1.ListMeetingsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kiwi.meetings.v1.MeetingService.ListMeetings is not implemented"))
 }
 
 func (UnimplementedMeetingServiceHandler) GetTranscriptExcerpt(context.Context, *connect.Request[v1.GetTranscriptExcerptRequest]) (*connect.Response[v1.GetTranscriptExcerptResponse], error) {
