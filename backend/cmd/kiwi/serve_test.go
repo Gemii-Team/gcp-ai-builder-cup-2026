@@ -6,12 +6,20 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"kiwi/internal/testkit/fakeoidc/fakeoidctest"
 )
 
 // localEnv is a complete local environment for every role whose Valkey is a port
@@ -137,4 +145,117 @@ func TestManifestsNeverSetThePDFChildVariable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
 	}
+}
+
+// TestServe_MemoryCache_ListensOnPORTAndServesTheWebAppWithoutValkey runs the built binary
+// the way the all-in-one image does on Cloud Run: PORT names the port, KIWI_WEB_DIR the
+// web app, the cache is the process's own and there is no Valkey address at all. The
+// database is a port where nothing listens, so the process is alive and serves the app
+// but is not ready, which is what the platform's probes should see.
+func TestServe_MemoryCache_ListensOnPORTAndServesTheWebAppWithoutValkey(t *testing.T) {
+	bin := buildKiwi(t)
+	idp := fakeoidctest.New(t)
+	web := t.TempDir()
+	if err := os.WriteFile(filepath.Join(web, "index.html"), []byte("<title>shell of the all-in-one image</title>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+
+	env := []string{}
+	for _, kv := range localEnv() {
+		if !strings.HasPrefix(kv, "KIWI_VALKEY_URL=") && !strings.HasPrefix(kv, "KIWI_BLOB_URL=") &&
+			!strings.HasPrefix(kv, "KIWI_OAUTH_CLIENT_") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env,
+		"KIWI_CACHE_PROVIDER=memory",
+		"KIWI_WEB_DIR="+web,
+		"KIWI_BLOB_URL=file://"+t.TempDir(),
+		"KIWI_OIDC_ISSUER="+idp.Issuer(),
+		"KIWI_OAUTH_CLIENT_ID="+idp.ClientID(),
+		"KIWI_OAUTH_CLIENT_SECRET="+idp.ClientSecret(),
+		"PORT="+port,
+	)
+
+	var stderr lockedBuffer // the process writes while the test reads
+	cmd := exec.Command(bin, "serve")
+	cmd.Env = env
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+
+	get := func(path string) (int, string) {
+		resp, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://127.0.0.1:" + port + path)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		select {
+		case err := <-exited:
+			t.Fatalf("kiwi serve exited early (%v)\nstderr: %s", err, stderr.String())
+		default:
+		}
+		if code, _ := get("/healthz"); code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("nothing answered /healthz on PORT=%s within 60 s\nstderr: %s", port, stderr.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if code, body := get("/"); code != http.StatusOK || !strings.Contains(body, "shell of the all-in-one image") {
+		t.Errorf("GET / = %d %q, want the web app from KIWI_WEB_DIR", code, body)
+	}
+	if code, _ := get("/readyz"); code != http.StatusServiceUnavailable {
+		t.Errorf("GET /readyz = %d, want 503: the database is unreachable", code)
+	}
+	if code, _ := get("/api/auth/config"); code != http.StatusOK {
+		t.Errorf("GET /api/auth/config = %d, want 200: the API is on the same port", code)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(stderr.String(), secret) {
+			t.Errorf("stderr shows the secret %q", secret)
+		}
+	}
+	if strings.Contains(stderr.String(), "KIWI_VALKEY_URL") {
+		t.Errorf("the process mentioned KIWI_VALKEY_URL with the memory cache:\n%s", stderr.String())
+	}
+}
+
+// lockedBuffer is a bytes.Buffer that may be written by the process under test while the
+// test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

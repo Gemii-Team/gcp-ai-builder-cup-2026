@@ -137,45 +137,99 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// fixture is one gateway behind an httptest server, on the shared Valkey and a
-// private migrated Postgres with one workspace.
+// backend is a cache adapter the gateway runs on. The gateway's behaviour does not
+// depend on the adapter, so the tests run on every one of them; what only one adapter
+// can show is guarded by the fields below or kept in a Valkey-only test.
+type backend struct {
+	name string
+	// open returns the adapter, closed when the test ends. rdb is the Valkey it runs
+	// on, to observe it directly, and nil for another adapter.
+	open func(t *testing.T) (c cache.Cache, rdb *redis.Client)
+	// subscribers is how many subscriptions follow topic in the store, as the store
+	// confirms it: PUBSUB SHARDNUMSUB, since Valkey's SSUBSCRIBE is asynchronous, and the
+	// broker's own count for the memory cache, which confirms in Add.
+	subscribers func(f *fixture, topic string) int64
+	// cachesMembers is whether the adapter keeps members:{channel}. The memory cache
+	// does not, so a revocation never has a stale set to invalidate.
+	cachesMembers bool
+}
+
+var valkeyBackend = backend{
+	name: "valkey",
+	open: func(t *testing.T) (cache.Cache, *redis.Client) {
+		valkeyOnce.Do(func() { valkeyURL, valkeyErr = bootValkey() })
+		if valkeyErr != nil {
+			t.Fatalf("valkey: %v", valkeyErr)
+		}
+		c, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
+		if err != nil {
+			t.Fatalf("cache.OpenValkey: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		ro, err := redis.ParseURL(valkeyURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rdb := redis.NewClient(ro)
+		t.Cleanup(func() { _ = rdb.Close() })
+		return c, rdb
+	},
+	subscribers: func(f *fixture, topic string) int64 {
+		m, err := f.rdb.PubSubShardNumSub(f.t.Context(), topic).Result()
+		if err != nil {
+			f.t.Fatalf("PUBSUB SHARDNUMSUB %s: %v", topic, err)
+		}
+		return m[topic]
+	},
+	cachesMembers: true,
+}
+
+var memoryBackend = backend{
+	name: "memory",
+	open: func(t *testing.T) (cache.Cache, *redis.Client) {
+		c := cache.NewMemory(cache.Options{})
+		t.Cleanup(func() { _ = c.Close() })
+		return c, nil
+	},
+	subscribers: func(f *fixture, topic string) int64 {
+		return int64(f.cache.(*cache.Memory).Subscribers(topic))
+	},
+}
+
+// eachBackend runs fn on every cache adapter, as subtests named after it.
+func eachBackend(t *testing.T, fn func(t *testing.T, be backend)) {
+	t.Helper()
+	for _, be := range []backend{valkeyBackend, memoryBackend} {
+		t.Run(be.name, func(t *testing.T) { fn(t, be) })
+	}
+}
+
+// fixture is one gateway behind an httptest server, on a cache adapter and a private
+// migrated Postgres with one workspace.
 type fixture struct {
 	t     *testing.T
+	be    backend
 	ws    uuid.UUID
 	env   *dbtest.Env
 	db    *db.DB
-	cache *cache.Cache
-	rdb   *redis.Client // observes Valkey directly: PUBSUB SHARDNUMSUB, EXISTS, CLIENT KILL
+	cache cache.Cache
+	rdb   *redis.Client // Valkey, observed directly; nil on another adapter
 	gw    *Gateway
 	srv   *httptest.Server
 }
 
-// newFixture starts a gateway. membership nil means the cache-aside lookup over
+// newFixture starts a gateway on the adapter be. membership nil means the cache-aside lookup over
 // Postgres that chat.NewMembership will be: members:{channel} first, then
 // channel_members inside the workspace.
-func newFixture(t *testing.T, opt Options, membership func(*fixture) authz.Membership) *fixture {
+func newFixture(t *testing.T, be backend, opt Options, membership func(*fixture) authz.Membership) *fixture {
 	t.Helper()
-	valkeyOnce.Do(func() { valkeyURL, valkeyErr = bootValkey() })
-	if valkeyErr != nil {
-		t.Fatalf("valkey: %v", valkeyErr)
-	}
-
-	f := &fixture{t: t, ws: uuid.Must(uuid.NewV7()), env: dbtest.Start(t)}
+	f := &fixture{t: t, be: be, ws: uuid.Must(uuid.NewV7()), env: dbtest.Start(t)}
 	var err error
 	if f.db, err = db.Open(t.Context(), config.Config{DatabaseURL: f.env.AppURL}); err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(f.db.Close)
-	if f.cache, err = cache.Open(t.Context(), valkeyURL, cache.Options{}); err != nil {
-		t.Fatalf("cache.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = f.cache.Close() })
-	ro, err := redis.ParseURL(valkeyURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.rdb = redis.NewClient(ro)
-	t.Cleanup(func() { _ = f.rdb.Close() })
+	f.cache, f.rdb = be.open(t)
 
 	f.seed(`INSERT INTO identity.workspaces (id, name, google_domain) VALUES ($1, 'ws', $2)`, f.ws, f.ws.String()+".example")
 
@@ -200,7 +254,7 @@ func newFixture(t *testing.T, opt Options, membership func(*fixture) authz.Membe
 // written against the real tables so the tests exercise the real invalidation.
 type cacheAside struct {
 	d *db.DB
-	c *cache.Cache
+	c cache.Members
 }
 
 func (m cacheAside) IsMember(ctx context.Context, channelID, userID uuid.UUID) (bool, error) {
@@ -439,29 +493,29 @@ func (f *fixture) publishMembership(channel, user uuid.UUID, change chatv1.Membe
 	}
 }
 
-func (f *fixture) shardNumSub(topic string) int64 {
+// confirmed is how many subscriptions of the gateway follow topic in the store: the
+// gateway holds one per topic, however many connections follow it.
+func (f *fixture) confirmed(topic string) int64 {
 	f.t.Helper()
-	m, err := f.rdb.PubSubShardNumSub(f.t.Context(), topic).Result()
-	if err != nil {
-		f.t.Fatalf("PUBSUB SHARDNUMSUB %s: %v", topic, err)
-	}
-	return m[topic]
+	return f.be.subscribers(f, topic)
 }
 
-// live waits until n local connections follow topic and Valkey has confirmed the
-// gateway's SSUBSCRIBE: cache.Subscription.Add returns when the command is sent,
-// so a frame published earlier could be lost.
+// live waits until n local connections follow topic and the store has confirmed the
+// gateway's subscription: cache.Subscription.Add returns when the request is made, so
+// on Valkey a frame published earlier could be lost.
 func (f *fixture) live(topic string, n int) {
 	f.t.Helper()
 	eventually(f.t, fmt.Sprintf("%d local subscribers of %s", n, topic), func() bool { return f.gw.subscribers(topic) == n })
-	eventually(f.t, "Valkey to confirm the SSUBSCRIBE of "+topic, func() bool { return f.shardNumSub(topic) == 1 })
+	eventually(f.t, "the store to confirm the subscription of "+topic, func() bool { return f.confirmed(topic) == 1 })
 }
 
 func ch(id uuid.UUID) string  { return "ch:" + id.String() }
 func usr(id uuid.UUID) string { return "u:" + id.String() }
 
-func TestTicket_SingleUse(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+func TestTicket_SingleUse(t *testing.T) { eachBackend(t, testTicket_SingleUse) }
+
+func testTicket_SingleUse(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana := f.newUser()
 	ticket := f.ticket(ana)
 
@@ -485,8 +539,10 @@ func TestTicket_SingleUse(t *testing.T) {
 	}
 }
 
-func TestSubscribe_OnlyMemberChannels(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+func TestSubscribe_OnlyMemberChannels(t *testing.T) { eachBackend(t, testSubscribe_OnlyMemberChannels) }
+
+func testSubscribe_OnlyMemberChannels(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana := f.newUser()
 	member := f.newChannel(ana)
 	other := f.newChannel(f.newUser()) // ana is not in it
@@ -500,7 +556,7 @@ func TestSubscribe_OnlyMemberChannels(t *testing.T) {
 	if n := f.gw.subscribers(ch(other)); n != 0 {
 		t.Fatalf("the gateway subscribed a non-member to %s (%d local subscribers)", ch(other), n)
 	}
-	if n := f.shardNumSub(ch(other)); n != 0 {
+	if n := f.confirmed(ch(other)); n != 0 {
 		t.Fatalf("the gateway SSUBSCRIBEd %s for a non-member (%d subscribers)", ch(other), n)
 	}
 	f.publish(ch(other), messageFrame(other, 1, "secret"))
@@ -509,7 +565,11 @@ func TestSubscribe_OnlyMemberChannels(t *testing.T) {
 }
 
 func TestFanout_OnlyToSubscribedConnections(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	eachBackend(t, testFanout_OnlyToSubscribedConnections)
+}
+
+func testFanout_OnlyToSubscribedConnections(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana, ben, cho := f.newUser(), f.newUser(), f.newUser()
 	x := f.newChannel(ana, ben, cho)
 	y := f.newChannel(ana, ben, cho)
@@ -537,9 +597,13 @@ func TestFanout_OnlyToSubscribedConnections(t *testing.T) {
 }
 
 func TestBackpressure_SlowConsumerClosed(t *testing.T) {
+	eachBackend(t, testBackpressure_SlowConsumerClosed)
+}
+
+func testBackpressure_SlowConsumerClosed(t *testing.T, be backend) {
 	const sendBuffer = 256
 	logs := captureLogs(t)
-	f := newFixture(t, Options{SendBuffer: sendBuffer}, nil)
+	f := newFixture(t, be, Options{SendBuffer: sendBuffer}, nil)
 	slowUser, fastUser := f.newUser(), f.newUser()
 	x := f.newChannel(slowUser, fastUser)
 
@@ -553,7 +617,7 @@ func TestBackpressure_SlowConsumerClosed(t *testing.T) {
 	// before the next is published, so it can never fall behind itself.
 	body := strings.Repeat("x", 16<<10)
 	published := 0
-	for f.shardNumSub(usr(slowUser)) != 0 {
+	for f.confirmed(usr(slowUser)) != 0 {
 		if published >= 5000 {
 			t.Fatalf("%d frames published and the slow consumer is still connected", published)
 		}
@@ -578,9 +642,11 @@ func TestBackpressure_SlowConsumerClosed(t *testing.T) {
 	fast.nextSeq(9999) // the other connection was unaffected
 }
 
-func TestIdleClose_AfterNoFrame(t *testing.T) {
+func TestIdleClose_AfterNoFrame(t *testing.T) { eachBackend(t, testIdleClose_AfterNoFrame) }
+
+func testIdleClose_AfterNoFrame(t *testing.T, be backend) {
 	const idle = 200 * time.Millisecond
-	f := newFixture(t, Options{IdleTimeout: idle}, nil)
+	f := newFixture(t, be, Options{IdleTimeout: idle}, nil)
 	ana := f.newUser()
 
 	start := time.Now() // before the dial: the gateway's clock starts after this
@@ -593,12 +659,14 @@ func TestIdleClose_AfterNoFrame(t *testing.T) {
 		t.Errorf("closed after %v, before the %v idle timeout", elapsed, idle)
 	}
 	eventually(t, "the idle connection to be unregistered", func() bool { return f.gw.subscribers(usr(ana)) == 0 })
-	eventually(t, "Valkey to drop u:{user}", func() bool { return f.shardNumSub(usr(ana)) == 0 })
+	eventually(t, "the store to drop u:{user}", func() bool { return f.confirmed(usr(ana)) == 0 })
 }
 
-func TestPing_KeepsConnectionAlive(t *testing.T) {
+func TestPing_KeepsConnectionAlive(t *testing.T) { eachBackend(t, testPing_KeepsConnectionAlive) }
+
+func testPing_KeepsConnectionAlive(t *testing.T, be backend) {
 	const idle = 800 * time.Millisecond
-	f := newFixture(t, Options{IdleTimeout: idle}, nil)
+	f := newFixture(t, be, Options{IdleTimeout: idle}, nil)
 	ana := f.newUser()
 	x := f.newChannel(ana)
 
@@ -625,7 +693,11 @@ func TestPing_KeepsConnectionAlive(t *testing.T) {
 }
 
 func TestMembershipRevoked_StopsFrames(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	eachBackend(t, testMembershipRevoked_StopsFrames)
+}
+
+func testMembershipRevoked_StopsFrames(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana, ben := f.newUser(), f.newUser()
 	x := f.newChannel(ana, ben)
 	z := f.newChannel(ana) // for the sentinel frames on ana's own topic
@@ -637,12 +709,15 @@ func TestMembershipRevoked_StopsFrames(t *testing.T) {
 	f.publish(ch(x), messageFrame(x, 1, "before"))
 	a.nextSeq(1)
 	b.nextSeq(1)
-	if _, hit, err := f.cache.Members(t.Context(), x); err != nil || !hit {
-		t.Fatalf("members:{channel} = hit %v, err %v; the subscribe check should have filled it", hit, err)
+	if be.cachesMembers {
+		if _, hit, err := f.cache.Members(t.Context(), x); err != nil || !hit {
+			t.Fatalf("members:{channel} = hit %v, err %v; the subscribe check should have filled it", hit, err)
+		}
 	}
 
-	// chat.RemoveMember commits the delete and publishes membership.changed. The
-	// stale members:{channel} set still lists ana, which is the case to survive.
+	// chat.RemoveMember commits the delete and publishes membership.changed. Where
+	// members:{channel} is cached, the stale set still lists ana, which is the case to
+	// survive.
 	f.removeMember(x, ana)
 	f.publishMembership(x, ana, chatv1.MembershipChange_MEMBERSHIP_CHANGE_REMOVED)
 
@@ -652,8 +727,10 @@ func TestMembershipRevoked_StopsFrames(t *testing.T) {
 		t.Fatalf("ana's u: frame = %v, want membership_changed REMOVED for the channel", got)
 	}
 	// The frame reaches ana only after the gateway has acted on it.
-	if _, hit, err := f.cache.Members(t.Context(), x); err != nil || hit {
-		t.Errorf("members:{channel} = hit %v, err %v after the revocation, want it invalidated", hit, err)
+	if be.cachesMembers {
+		if _, hit, err := f.cache.Members(t.Context(), x); err != nil || hit {
+			t.Errorf("members:{channel} = hit %v, err %v after the revocation, want it invalidated", hit, err)
+		}
 	}
 	if n := f.gw.subscribers(ch(x)); n != 1 {
 		t.Fatalf("%d connections still follow the channel, want only ben's", n)
@@ -666,32 +743,74 @@ func TestMembershipRevoked_StopsFrames(t *testing.T) {
 		t.Fatalf("ana's next frame = %v, want the sentinel: the channel frame must not reach her", ev)
 	}
 
-	// Subscribing again asks Postgres, since the stale set is gone, and is refused.
-	a.subscribe(x.String())
+	// Subscribing again asks Postgres, since there is no stale set to answer from, and
+	// is refused. Subscribe is handled in order: once z is live, the refusal for x has
+	// been decided.
+	a.subscribe(x.String(), z.String())
+	f.live(ch(z), 1)
 	f.publish(ch(x), messageFrame(x, 3, "still after"))
-	f.publishMembership(z, ana, chatv1.MembershipChange_MEMBERSHIP_CHANGE_ADDED)
+	f.publish(ch(z), messageFrame(z, 4, "sentinel"))
 	b.nextSeq(3)
-	eventually(t, "ana's second subscribe to be decided", func() bool {
-		_, hit, _ := f.cache.Members(t.Context(), x) // the refusal re-reads Postgres and refills the set
-		return hit
-	})
+	if be.cachesMembers {
+		if _, hit, _ := f.cache.Members(t.Context(), x); !hit {
+			t.Error("the refused subscribe did not re-read Postgres and refill the set")
+		}
+	}
 	if n := f.gw.subscribers(ch(x)); n != 1 {
 		t.Fatalf("ana re-subscribed to a channel she was removed from (%d local subscribers)", n)
 	}
-	if ev := a.next(); ev.GetMessageCreated() != nil {
-		t.Fatalf("ana received %v after the revocation", ev)
+	// ana's next frame is z's sentinel, not x's: the frame on x never reached her.
+	a.nextSeq(4)
+}
+
+// With no members cache there is nothing stale to survive: a removal that committed is
+// effective at once, with no REMOVED frame to act on. This is what lets the minimal
+// profile run without one, and what keeps a second process that overlaps it during a
+// rollout from answering with a set older than the removal.
+func TestMemoryCache_RemovalNeedsNoFrameToTakeEffect(t *testing.T) {
+	f := newFixture(t, memoryBackend, Options{}, nil)
+	ana, ben := f.newUser(), f.newUser()
+	x := f.newChannel(ana, ben)
+	z := f.newChannel(ana)
+
+	a, b := f.connect(ana), f.connect(ben)
+	a.subscribe(x.String())
+	b.subscribe(x.String())
+	f.live(ch(x), 2)
+
+	// Committed in Postgres and announced nowhere: no frame reaches the gateway.
+	f.removeMember(x, ana)
+
+	// A fresh connection of ana is refused the channel straight away.
+	a2 := f.connect(ana)
+	a2.subscribe(x.String(), z.String())
+	f.live(ch(z), 1)
+	if n := f.gw.subscribers(ch(x)); n != 2 {
+		t.Fatalf("%d connections follow the channel, want ana's first (it has not been told) and ben's, and not her second", n)
 	}
+	f.publish(ch(x), messageFrame(x, 1, "after the removal"))
+	f.publish(ch(z), messageFrame(z, 2, "sentinel"))
+	b.nextSeq(1)
+	a2.nextSeq(2) // the frame on x never reached the connection that asked after the removal
 }
 
 // A membership check that started before the revocation can return the stale
 // answer after it. The subscription must not survive that.
 func TestSubscribe_RevocationDuringMembershipCheck_DoesNotSubscribe(t *testing.T) {
+	eachBackend(t, testSubscribe_RevocationDuringMembershipCheck_DoesNotSubscribe)
+}
+
+func testSubscribe_RevocationDuringMembershipCheck_DoesNotSubscribe(t *testing.T, be backend) {
 	m := &racingMembership{entered: make(chan struct{}), release: make(chan struct{}), rechecked: make(chan struct{})}
-	f := newFixture(t, Options{}, func(*fixture) authz.Membership { return m })
+	f := newFixture(t, be, Options{}, func(*fixture) authz.Membership { return m })
 	ana := uuid.Must(uuid.NewV7())
 	x := uuid.Must(uuid.NewV7())
 
 	a := f.connect(ana)
+	// connect returns once the gateway has registered the connection, not once Valkey has
+	// confirmed the SSUBSCRIBE of u:{ana}; a frame published before that is lost and the
+	// REMOVED frame below never arrives.
+	f.live(usr(ana), 1)
 	a.subscribe(x.String())
 	<-m.entered // the check is running and will answer "member"
 
@@ -735,21 +854,25 @@ func (m *racingMembership) IsMember(ctx context.Context, _, _ uuid.UUID) (bool, 
 }
 
 func TestSharded_SubscribeOnFirstAndUnsubscribeOnLast(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	eachBackend(t, testSharded_SubscribeOnFirstAndUnsubscribeOnLast)
+}
+
+func testSharded_SubscribeOnFirstAndUnsubscribeOnLast(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana, ben := f.newUser(), f.newUser()
 	x := f.newChannel(ana, ben)
 
 	a := f.connect(ana)
 	a.subscribe(x.String())
 	f.live(ch(x), 1)
-	if n := f.shardNumSub(ch(x)); n != 1 {
+	if n := f.confirmed(ch(x)); n != 1 {
 		t.Fatalf("SHARDNUMSUB after the first subscriber = %d, want 1", n)
 	}
 
 	b := f.connect(ben)
 	b.subscribe(x.String())
 	f.live(ch(x), 2)
-	if n := f.shardNumSub(ch(x)); n != 1 {
+	if n := f.confirmed(ch(x)); n != 1 {
 		t.Fatalf("SHARDNUMSUB with two local subscribers = %d, want the gateway's single subscription", n)
 	}
 
@@ -763,17 +886,21 @@ func TestSharded_SubscribeOnFirstAndUnsubscribeOnLast(t *testing.T) {
 	if err := b.ws.Close(websocket.StatusNormalClosure, ""); err != nil {
 		t.Fatalf("close ben: %v", err)
 	}
-	eventually(t, "the last unsubscribe of the channel", func() bool { return f.shardNumSub(ch(x)) == 0 })
-	eventually(t, "the last unsubscribe of u:{ana}", func() bool { return f.shardNumSub(usr(ana)) == 0 })
-	eventually(t, "the last unsubscribe of u:{ben}", func() bool { return f.shardNumSub(usr(ben)) == 0 })
+	eventually(t, "the last unsubscribe of the channel", func() bool { return f.confirmed(ch(x)) == 0 })
+	eventually(t, "the last unsubscribe of u:{ana}", func() bool { return f.confirmed(usr(ana)) == 0 })
+	eventually(t, "the last unsubscribe of u:{ben}", func() bool { return f.confirmed(usr(ben)) == 0 })
 	if n := f.gw.subscribers(ch(x)); n != 0 {
 		t.Errorf("%d local subscribers remain after every connection closed", n)
 	}
 }
 
 func TestShutdown_ReadinessFlipsThenGoingAway(t *testing.T) {
+	eachBackend(t, testShutdown_ReadinessFlipsThenGoingAway)
+}
+
+func testShutdown_ReadinessFlipsThenGoingAway(t *testing.T, be backend) {
 	const drain = 1500 * time.Millisecond
-	f := newFixture(t, Options{DrainTimeout: drain}, nil)
+	f := newFixture(t, be, Options{DrainTimeout: drain}, nil)
 	ana := f.newUser()
 	x := f.newChannel(ana)
 	c := f.connect(ana)
@@ -810,8 +937,8 @@ func TestShutdown_ReadinessFlipsThenGoingAway(t *testing.T) {
 	if f.gw.Ready() {
 		t.Error("Ready() = true after Shutdown")
 	}
-	eventually(t, "Valkey to drop every subscription", func() bool {
-		return f.shardNumSub(ch(x)) == 0 && f.shardNumSub(usr(ana)) == 0
+	eventually(t, "the store to drop every subscription", func() bool {
+		return f.confirmed(ch(x)) == 0 && f.confirmed(usr(ana)) == 0
 	})
 
 	_, resp, err := f.dial(f.ticket(ana))
@@ -821,7 +948,11 @@ func TestShutdown_ReadinessFlipsThenGoingAway(t *testing.T) {
 }
 
 func TestShutdown_ContextEndsTheDrainEarly(t *testing.T) {
-	f := newFixture(t, Options{DrainTimeout: time.Hour}, nil)
+	eachBackend(t, testShutdown_ContextEndsTheDrainEarly)
+}
+
+func testShutdown_ContextEndsTheDrainEarly(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{DrainTimeout: time.Hour}, nil)
 	c := f.connect(f.newUser())
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -844,7 +975,7 @@ func TestShutdown_ContextEndsTheDrainEarly(t *testing.T) {
 }
 
 func TestSubscription_SurvivesValkeyDroppingPubSubConnections(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	f := newFixture(t, valkeyBackend, Options{}, nil)
 	ana := f.newUser()
 	x := f.newChannel(ana)
 	c := f.connect(ana)
@@ -870,7 +1001,11 @@ func TestSubscription_SurvivesValkeyDroppingPubSubConnections(t *testing.T) {
 }
 
 func TestClientFrames_TypingAndPingAreNotRelayed(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	eachBackend(t, testClientFrames_TypingAndPingAreNotRelayed)
+}
+
+func testClientFrames_TypingAndPingAreNotRelayed(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ana, ben := f.newUser(), f.newUser()
 	x, z := f.newChannel(ana, ben), f.newChannel(ana)
 	a, b := f.connect(ana), f.connect(ben)
@@ -891,7 +1026,11 @@ func TestClientFrames_TypingAndPingAreNotRelayed(t *testing.T) {
 }
 
 func TestClientFrames_MalformedOrTextFramesCloseTheConnection(t *testing.T) {
-	f := newFixture(t, Options{}, nil)
+	eachBackend(t, testClientFrames_MalformedOrTextFramesCloseTheConnection)
+}
+
+func testClientFrames_MalformedOrTextFramesCloseTheConnection(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{}, nil)
 	ctx := t.Context()
 
 	bad := f.connect(f.newUser())
@@ -919,8 +1058,12 @@ func (m onlyChannel) IsMember(_ context.Context, channelID, _ uuid.UUID) (bool, 
 }
 
 func TestClientFrames_FrameSizeIsBounded(t *testing.T) {
+	eachBackend(t, testClientFrames_FrameSizeIsBounded)
+}
+
+func testClientFrames_FrameSizeIsBounded(t *testing.T, be backend) {
 	member := uuid.Must(uuid.NewV7())
-	f := newFixture(t, Options{}, func(*fixture) authz.Membership { return onlyChannel{member} })
+	f := newFixture(t, be, Options{}, func(*fixture) authz.Membership { return onlyChannel{member} })
 
 	// A Subscribe of 400 channel ids is about 15 KB: inside the bound, served in full.
 	big := f.connect(uuid.Must(uuid.NewV7()))
@@ -944,6 +1087,10 @@ func TestClientFrames_FrameSizeIsBounded(t *testing.T) {
 }
 
 func TestOrigin_SameOriginByDefault_ConfiguredPatternsAdded(t *testing.T) {
+	eachBackend(t, testOrigin_SameOriginByDefault_ConfiguredPatternsAdded)
+}
+
+func testOrigin_SameOriginByDefault_ConfiguredPatternsAdded(t *testing.T, be backend) {
 	const dev = "localhost:5173"
 	for _, tc := range []struct {
 		name     string
@@ -961,7 +1108,7 @@ func TestOrigin_SameOriginByDefault_ConfiguredPatternsAdded(t *testing.T) {
 		{"scheme-qualified pattern for another scheme", []string{"https://" + dev}, func(*fixture) string { return "http://" + dev }, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t, Options{OriginPatterns: tc.patterns}, nil)
+			f := newFixture(t, be, Options{OriginPatterns: tc.patterns}, nil)
 			_, resp, err := f.dialWith(f.ticket(f.newUser()), tc.origin(f))
 			if resp == nil || resp.StatusCode != tc.want {
 				t.Fatalf("dial with Origin %q: response %v, err %v; want status %d", tc.origin(f), resp, err, tc.want)
@@ -971,7 +1118,11 @@ func TestOrigin_SameOriginByDefault_ConfiguredPatternsAdded(t *testing.T) {
 }
 
 func TestShutdown_ExpiredContext_CutsConnectionsWithoutWaitingForHandshakes(t *testing.T) {
-	f := newFixture(t, Options{DrainTimeout: time.Hour}, nil)
+	eachBackend(t, testShutdown_ExpiredContext_CutsConnectionsWithoutWaitingForHandshakes)
+}
+
+func testShutdown_ExpiredContext_CutsConnectionsWithoutWaitingForHandshakes(t *testing.T, be backend) {
+	f := newFixture(t, be, Options{DrainTimeout: time.Hour}, nil)
 	ana := f.newUser()
 	c := f.connect(ana) // never reads, so it never answers the close frame
 
@@ -991,13 +1142,17 @@ func TestShutdown_ExpiredContext_CutsConnectionsWithoutWaitingForHandshakes(t *t
 	if n := f.gw.subscribers(usr(ana)); n != 0 {
 		t.Errorf("%d connections still registered after Shutdown", n)
 	}
-	eventually(t, "Valkey to drop u:{user}", func() bool { return f.shardNumSub(usr(ana)) == 0 })
+	eventually(t, "the store to drop u:{user}", func() bool { return f.confirmed(usr(ana)) == 0 })
 }
 
 func TestSubscribe_MembershipLookupFailureFailsClosed(t *testing.T) {
+	eachBackend(t, testSubscribe_MembershipLookupFailureFailsClosed)
+}
+
+func testSubscribe_MembershipLookupFailureFailsClosed(t *testing.T, be backend) {
 	logs := captureLogs(t)
 	broken, fine := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
-	f := newFixture(t, Options{}, func(*fixture) authz.Membership { return failingFor{channel: broken} })
+	f := newFixture(t, be, Options{}, func(*fixture) authz.Membership { return failingFor{channel: broken} })
 	ana := uuid.Must(uuid.NewV7())
 	c := f.connect(ana)
 

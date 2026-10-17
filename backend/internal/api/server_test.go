@@ -230,7 +230,7 @@ func probeHandler(cases map[string]probeCase) Handler {
 type fixture struct {
 	t         *testing.T
 	env       *dbtest.Env
-	cache     *cache.Cache
+	cache     *cache.Valkey
 	store     blob.Store
 	logs      *syncBuffer
 	handler   http.Handler
@@ -276,7 +276,7 @@ func newFixture(t *testing.T, probe map[string]probeCase) *fixture {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(d.Close)
-	c, err := cache.Open(t.Context(), valkeyURL, cache.Options{})
+	c, err := cache.OpenValkey(t.Context(), valkeyURL, cache.Options{})
 	if err != nil {
 		t.Fatalf("cache.Open: %v", err)
 	}
@@ -285,7 +285,7 @@ func newFixture(t *testing.T, probe map[string]probeCase) *fixture {
 	logs := &syncBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 
-	ident, err := identity.New(t.Context(), identity.Deps{Config: cfg, DB: d, Cache: c, Logger: slog.New(slog.DiscardHandler)})
+	ident, err := identity.New(t.Context(), identity.Deps{Config: cfg, DB: d, Cache: c, Sessions: c, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatalf("identity.New: %v", err)
 	}

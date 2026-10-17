@@ -47,8 +47,8 @@ type fixture struct {
 	svc  Service
 	now  time.Time
 
-	ws          uuid.UUID
-	alice, bob  uuid.UUID
+	ws         uuid.UUID
+	alice, bob uuid.UUID
 }
 
 func newFixture(t *testing.T) *fixture {

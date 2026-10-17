@@ -32,6 +32,10 @@ client_secret*.json
 tfplan
 *.tfvars
 crash.log
+# Terragrunt's working copies of the modules and its per-environment values (project id, bucket
+# name, repository, domain, billing account: the committed example lists the names).
+.terragrunt-cache/
+/deploy/terraform/live/env.hcl
 
 # Build and tool output
 node_modules/

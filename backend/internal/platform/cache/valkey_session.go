@@ -7,40 +7,20 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"kiwi/internal/platform/errs"
 )
 
-// SessionRecord is what a session id resolves to.
-type SessionRecord struct {
-	UserID      uuid.UUID `json:"user_id"`
-	WorkspaceID uuid.UUID `json:"workspace_id"`
-	// CreatedAt starts the absolute lifetime; PutSession fills a zero value.
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// OAuthState is what the login callback needs to finish the flow it started.
-type OAuthState struct {
-	Verifier string `json:"verifier"`
-	ReturnTo string `json:"return_to"`
-	// Nonce is sent in the authorization request and must come back in the ID token.
-	Nonce string `json:"nonce"`
-	// Consent marks the flow of the Meet consent route: its callback tells the person
-	// when no Meet grant came out of it, which a plain sign-in never does.
-	Consent bool `json:"consent,omitempty"`
-}
-
 func sessionKey(id string) string   { return "sess:" + id }
 func oauthStateKey(s string) string { return "oauth:" + s }
-func (c *Cache) sessionTTL(createdAt time.Time) time.Duration {
+func (c *Valkey) sessionTTL(createdAt time.Time) time.Duration {
 	return min(c.opt.SessionSliding, c.opt.SessionAbsolute-c.now().Sub(createdAt))
 }
 
 // PutSession stores the session under id for the sliding lifetime, shortened to
 // what is left of the absolute one.
-func (c *Cache) PutSession(ctx context.Context, id string, s SessionRecord) error {
+func (c *Valkey) PutSession(ctx context.Context, id string, s SessionRecord) error {
 	if id == "" {
 		return fmt.Errorf("cache: empty session id: %w", errs.ErrInvalid)
 	}
@@ -64,7 +44,7 @@ func (c *Cache) PutSession(ctx context.Context, id string, s SessionRecord) erro
 
 // GetSession returns the session and slides its lifetime forward, never past
 // the absolute cap. A missing, expired or capped session is ErrNotFound.
-func (c *Cache) GetSession(ctx context.Context, id string) (SessionRecord, error) {
+func (c *Valkey) GetSession(ctx context.Context, id string) (SessionRecord, error) {
 	key := sessionKey(id)
 	raw, err := c.rdb.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
@@ -97,7 +77,7 @@ func (c *Cache) GetSession(ctx context.Context, id string) (SessionRecord, error
 }
 
 // DeleteSession removes the session; removing an absent one is not an error.
-func (c *Cache) DeleteSession(ctx context.Context, id string) error {
+func (c *Valkey) DeleteSession(ctx context.Context, id string) error {
 	if err := c.rdb.Del(ctx, sessionKey(id)).Err(); err != nil {
 		return fmt.Errorf("cache: delete session: %w", err)
 	}
@@ -105,7 +85,7 @@ func (c *Cache) DeleteSession(ctx context.Context, id string) error {
 }
 
 // PutOAuthState stores the login state for ten minutes.
-func (c *Cache) PutOAuthState(ctx context.Context, state string, v OAuthState) error {
+func (c *Valkey) PutOAuthState(ctx context.Context, state string, v OAuthState) error {
 	if state == "" {
 		return fmt.Errorf("cache: empty oauth state: %w", errs.ErrInvalid)
 	}
@@ -121,7 +101,7 @@ func (c *Cache) PutOAuthState(ctx context.Context, state string, v OAuthState) e
 
 // TakeOAuthState returns the state and deletes it in one step (GETDEL), so a
 // replayed callback finds nothing: ErrNotFound.
-func (c *Cache) TakeOAuthState(ctx context.Context, state string) (OAuthState, error) {
+func (c *Valkey) TakeOAuthState(ctx context.Context, state string) (OAuthState, error) {
 	raw, err := c.rdb.GetDel(ctx, oauthStateKey(state)).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return OAuthState{}, fmt.Errorf("cache: oauth state: %w", errs.ErrNotFound)

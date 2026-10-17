@@ -148,6 +148,17 @@ func tenantTables(t *testing.T, conn *pgx.Conn) []string {
 	return append(workspaceTables(t, conn), "identity.workspaces")
 }
 
+// systemOnlyTables are the tenant tables kiwi_app has no grant on: only db.System
+// reaches them. The tests that go through kiwi_app skip them, and
+// TestSessions_RowLevelSecurityBindsTheOwnerToo proves their policy through the owner.
+var systemOnlyTables = []string{"identity.sessions"}
+
+// appTenantTables is tenantTables without the system-only ones: what kiwi_app can read.
+func appTenantTables(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+	return slices.DeleteFunc(tenantTables(t, conn), func(table string) bool { return slices.Contains(systemOnlyTables, table) })
+}
+
 func tenantColumn(table string) string {
 	if table == "identity.workspaces" {
 		return "id"
@@ -164,7 +175,7 @@ func TestEveryWorkspaceTableHasForcedRLS(t *testing.T) {
 		"chat.channels", "chat.channel_members", "chat.messages", "files.files",
 		"meetings.meetings", "meetings.transcript_entries", "meetings.summaries", "meetings.space_subscriptions",
 		"tasks.tasks", "knowledge.chunks", "agents.runs", "agents.sessions", "agents.session_events",
-		"calendar.events", "identity.users", "identity.oauth_tokens", "platform.ref_counters",
+		"calendar.events", "identity.users", "identity.oauth_tokens", "identity.sessions", "platform.ref_counters",
 	} {
 		if !slices.Contains(tables, want) {
 			t.Errorf("%s has no workspace_id column (catalog query found %v)", want, tables)
@@ -249,9 +260,9 @@ func TestIsolation_AcrossDomainTables(t *testing.T) {
 	env := dbtest.Start(t)
 	a, b := dbtest.SeedTwoWorkspaces(t, env)
 
-	// The seven tables of the brief, and every other table RLS binds: the seed
-	// puts exactly one row of each in each workspace.
-	tenant := tenantTables(t, connect(t, env.OwnerURL))
+	// The seven tables of the brief, and every other table RLS binds that kiwi_app
+	// can read: the seed puts exactly one row of each in each workspace.
+	tenant := appTenantTables(t, connect(t, env.OwnerURL))
 	for _, named := range []string{"chat.channels", "chat.messages", "tasks.tasks", "files.files", "meetings.meetings", "knowledge.chunks", "agents.runs"} {
 		if !slices.Contains(tenant, named) {
 			t.Fatalf("%s is not a tenant table", named)
@@ -290,11 +301,12 @@ func TestIsolation_WithCheckRejectsRowsOfAnotherWorkspace(t *testing.T) {
 
 	// Moving A's row to B must fail on the policy, not on a missing privilege:
 	// every table through kiwi_app, except identity.workspaces, which kiwi_app
-	// cannot update at all, so the owner (bound by FORCE) proves its policy.
+	// cannot update at all, and the system-only tables, which it cannot touch, so
+	// the owner (bound by FORCE) proves their policy.
 	for _, table := range tenantTables(t, connect(t, env.OwnerURL)) {
 		t.Run(table, func(t *testing.T) {
 			url := env.AppURL
-			if table == "identity.workspaces" {
+			if table == "identity.workspaces" || slices.Contains(systemOnlyTables, table) {
 				url = env.OwnerURL
 			}
 			pgErr := execErrIn(t, url, &a, fmt.Sprintf(`UPDATE %s SET %s = $1`, table, tenantColumn(table)), b)
@@ -308,7 +320,7 @@ func TestIsolation_WithCheckRejectsRowsOfAnotherWorkspace(t *testing.T) {
 func TestFailClosed_NoGUC_ReturnsZeroRows(t *testing.T) {
 	env := dbtest.Start(t)
 	dbtest.SeedTwoWorkspaces(t, env)
-	tenant := tenantTables(t, connect(t, env.OwnerURL))
+	tenant := appTenantTables(t, connect(t, env.OwnerURL))
 
 	inWorkspace(t, env.AppURL, nil, func(tx pgx.Tx) {
 		for _, table := range tenant {
@@ -409,6 +421,11 @@ func TestRoles_PlatformGrants(t *testing.T) {
 		{"system can update users", env.SystemURL, `UPDATE identity.users SET name = 'x'`, ""},
 		{"system cannot delete users", env.SystemURL, `DELETE FROM identity.users`, insufficientPrivilege},
 		{"system cannot read oauth tokens", env.SystemURL, `SELECT count(*) FROM identity.oauth_tokens`, insufficientPrivilege},
+		{"system can read sessions", env.SystemURL, `SELECT count(*) FROM identity.sessions`, ""},
+		{"system can delete sessions", env.SystemURL, `DELETE FROM identity.sessions`, ""},
+		{"app cannot read sessions", env.AppURL, `SELECT count(*) FROM identity.sessions`, insufficientPrivilege},
+		{"app cannot write sessions", env.AppURL, `DELETE FROM identity.sessions`, insufficientPrivilege},
+		{"ro cannot read sessions", env.ROURL, `SELECT count(*) FROM identity.sessions`, insufficientPrivilege},
 		{"system can read meetings", env.SystemURL, `SELECT count(*) FROM meetings.meetings`, ""},
 		{"system cannot update meetings", env.SystemURL, `UPDATE meetings.meetings SET title = 'x'`, insufficientPrivilege},
 		{"system cannot delete meetings", env.SystemURL, `DELETE FROM meetings.meetings`, insufficientPrivilege},
@@ -486,9 +503,12 @@ func TestRoles_GrantsAreExact(t *testing.T) {
 	add("kiwi_app", "platform.processed_events", "INSERT", "SELECT")
 	add("kiwi_app", "agents.session_events_id_seq", "USAGE")
 	add("kiwi_app", "platform.outbox_id_seq", "USAGE")
-	// kiwi_system: the three db.System callers and nothing else. No DELETE.
+	// kiwi_system: the three db.System callers and nothing else. DELETE only on
+	// identity.sessions, which the Postgres session store of the sign-in file needs;
+	// kiwi_app has no grant on that table at all, whatever its default privileges say.
 	add("kiwi_system", "identity.workspaces", "INSERT", "SELECT")
 	add("kiwi_system", "identity.users", "INSERT", "SELECT", "UPDATE")
+	add("kiwi_system", "identity.sessions", dml...)
 	add("kiwi_system", "meetings.meetings", "SELECT")
 	add("kiwi_system", "platform.outbox", "SELECT", "UPDATE")
 	add("kiwi_ro", "chat.channels", "SELECT")
@@ -840,7 +860,7 @@ func TestMigration0011_Down_FailsLoudlyWhileAWorkspaceHasNoDomain(t *testing.T) 
 	// so the version returns to the latest, not to 0011.
 	latest := latestMigrationVersion(t)
 	if got := version(); got != latest || nullable() != "YES" {
-		t.Errorf("after Up again: version %d, google_domain nullable %s; want %d and YES", got, nullable(), latest)
+		t.Errorf("after Up again: version %d, google_domain nullable %s; want the latest (%d) and YES", got, nullable(), latest)
 	}
 }
 
@@ -895,4 +915,108 @@ func TestMigrateUp_IsIdempotent(t *testing.T) {
 		t.Errorf("second Up changed the database: applied %d→%d, latest %d→%d, tables %d→%d",
 			applied, applied2, latest, latest2, tables, tables2)
 	}
+}
+
+// identity.sessions is reached only through db.System (kiwi_system bypasses row-level
+// security) and kiwi_app has no grant on it, so the usual tests through kiwi_app cannot
+// show its policy. It is a tenant table all the same, and if a later migration ever
+// grants kiwi_app access, the policy must already hold: the owner, which FORCE binds,
+// proves it.
+func TestSessions_RowLevelSecurityBindsTheOwnerToo(t *testing.T) {
+	env := dbtest.Start(t)
+	a, b := dbtest.SeedTwoWorkspaces(t, env)
+
+	for _, tc := range []struct {
+		name       string
+		own, other uuid.UUID
+	}{{"A", a, b}, {"B", b, a}} {
+		inWorkspace(t, env.OwnerURL, &tc.own, func(tx pgx.Tx) {
+			if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions`); got != 1 {
+				t.Errorf("as workspace %s: %d sessions, want its own one (does dbtest.SeedTwoWorkspaces seed one?)", tc.name, got)
+			}
+			if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions WHERE workspace_id = $1`, tc.other); got != 0 {
+				t.Errorf("as workspace %s: %d of the other workspace's sessions visible, want 0", tc.name, got)
+			}
+		})
+	}
+	inWorkspace(t, env.OwnerURL, nil, func(tx pgx.Tx) {
+		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions`); got != 0 {
+			t.Errorf("without kiwi.workspace_id: %d sessions visible, want 0", got)
+		}
+	})
+
+	// kiwi_system bypasses the policy, which is how the session store finds a session
+	// before it knows the workspace.
+	inWorkspace(t, env.SystemURL, nil, func(tx pgx.Tx) {
+		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions`); got != 2 {
+			t.Errorf("kiwi_system sees %d sessions without a workspace, want both", got)
+		}
+	})
+}
+
+// The session key is a hash of the id, 32 bytes: a column that could hold the id
+// itself is refused.
+func TestSessions_KeyMustBeA32ByteHash(t *testing.T) {
+	env := dbtest.Start(t)
+	a, _ := dbtest.SeedTwoWorkspaces(t, env)
+	user := scalar[uuid.UUID](t, connect(t, env.SystemURL), `SELECT id FROM identity.users WHERE workspace_id = $1`, a)
+
+	for name, key := range map[string]string{
+		"a raw 43-character session id": `convert_to('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde', 'UTF8')`,
+		"an empty key":                  `''::bytea`,
+		"16 bytes":                      `substring(sha256('x') from 1 for 16)`,
+	} {
+		sql := `INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+			VALUES (` + key + `, $1, $2, now(), now() + interval '1 hour')`
+		pgErr := execErrIn(t, env.SystemURL, nil, sql, user, a)
+		if pgErr == nil || pgErr.Code != "23514" { // check_violation
+			t.Errorf("%s: err = %v, want a check violation", name, pgErr)
+		}
+	}
+	good := `INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+		VALUES (sha256('fine'), $1, $2, now(), now() + interval '1 hour')`
+	if pgErr := execErrIn(t, env.SystemURL, nil, good, user, a); pgErr != nil {
+		t.Errorf("a SHA-256 key: %v", pgErr)
+	}
+}
+
+// Deleting a user ends their sessions.
+func TestSessions_DieWithTheirUser(t *testing.T) {
+	env := dbtest.Start(t)
+	a, _ := dbtest.SeedTwoWorkspaces(t, env)
+	user := uuid.New()
+
+	seedIn(t, env, a, func(tx pgx.Tx) {
+		for _, stmt := range []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO identity.users (id, workspace_id, google_sub, email, name) VALUES ($1, $2, 'sub-leaver', 'leaver@a.example', 'Leaver')`, []any{user, a}},
+			{`INSERT INTO identity.sessions (id_hash, user_id, workspace_id, created_at, expires_at)
+				VALUES (sha256('leaver'), $1, $2, now(), now() + interval '1 hour')`, []any{user, a}},
+		} {
+			if _, err := tx.Exec(t.Context(), stmt.sql, stmt.args...); err != nil {
+				t.Fatalf("%s: %v", stmt.sql, err)
+			}
+		}
+	})
+	inWorkspace(t, env.SystemURL, nil, func(tx pgx.Tx) {
+		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions WHERE user_id = $1`, user); got != 1 {
+			t.Fatalf("%d sessions of the new user, want 1", got)
+		}
+	})
+
+	seedIn(t, env, a, func(tx pgx.Tx) {
+		if _, err := tx.Exec(t.Context(), `DELETE FROM identity.users WHERE id = $1`, user); err != nil {
+			t.Fatalf("delete the user: %v", err)
+		}
+	})
+	inWorkspace(t, env.SystemURL, nil, func(tx pgx.Tx) {
+		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions WHERE user_id = $1`, user); got != 0 {
+			t.Errorf("%d sessions of a deleted user remain, want 0", got)
+		}
+		if got := scalar[int](t, tx, `SELECT count(*) FROM identity.sessions`); got != 2 {
+			t.Errorf("%d sessions in all, want the two workspaces' seeded ones", got)
+		}
+	})
 }

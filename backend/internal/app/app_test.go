@@ -33,6 +33,8 @@ import (
 
 	agentsv1 "kiwi/gen/kiwi/agents/v1"
 	"kiwi/gen/kiwi/agents/v1/agentsv1connect"
+	calendarv1 "kiwi/gen/kiwi/calendar/v1"
+	"kiwi/gen/kiwi/calendar/v1/calendarv1connect"
 	chatv1 "kiwi/gen/kiwi/chat/v1"
 	"kiwi/gen/kiwi/chat/v1/chatv1connect"
 	eventsv1 "kiwi/gen/kiwi/events/v1"
@@ -49,6 +51,7 @@ import (
 	"kiwi/internal/identity"
 	"kiwi/internal/platform/authz"
 	"kiwi/internal/platform/bus"
+	"kiwi/internal/platform/cache"
 	"kiwi/internal/platform/config"
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/events"
@@ -347,6 +350,27 @@ func withRoles(roles ...config.Role) func(*setup) {
 
 func withValkey(u string) func(*setup) { return func(s *setup) { s.cfg.ValkeyURL = u } }
 
+// withMemoryCache runs the minimal profile's cache: in the process, with the sessions in
+// Postgres. The Valkey address points at nothing, so a test that passes proves the app
+// never dials it.
+func withMemoryCache() func(*setup) {
+	return func(s *setup) {
+		s.cfg.CacheProvider = config.CacheMemory
+		s.cfg.ValkeyURL = "redis://127.0.0.1:1"
+	}
+}
+
+// withWebDir has the app serve the built web app found in dir (KIWI_WEB_DIR).
+func withWebDir(dir string) func(*setup) { return func(s *setup) { s.cfg.WebDir = dir } }
+
+// eachCache runs fn once per cache provider, as subtests: what the app does must not
+// depend on whether the cache is Valkey or the process's own.
+func eachCache(t *testing.T, fn func(t *testing.T, mods ...func(*setup))) {
+	t.Helper()
+	t.Run("valkey", func(t *testing.T) { fn(t) })
+	t.Run("memory", func(t *testing.T) { fn(t, withMemoryCache()) })
+}
+
 // withDatabaseVia points both pools at addr, a proxy in front of the test's Postgres.
 func withDatabaseVia(addr string) func(*setup) {
 	return func(s *setup) {
@@ -369,6 +393,8 @@ func viaProxy(raw, addr string) string {
 // OpenID provider.
 type rig struct {
 	t      *testing.T
+	setup  *setup
+	ln     net.Listener // the listener of the running app
 	app    *App
 	env    *dbtest.Env
 	db     *db.DB
@@ -462,7 +488,34 @@ func newRig(t *testing.T, mods ...func(*setup)) *rig {
 	rdb := redis.NewClient(ro)
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	return &rig{t: t, app: a, env: env, db: d, rdb: rdb, llm: s.llm, google: s.google, URL: publicURL, logs: logs, ws: ws}
+	return &rig{t: t, setup: s, ln: ln, app: a, env: env, db: d, rdb: rdb, llm: s.llm, google: s.google, URL: publicURL, logs: logs, ws: ws}
+}
+
+// restart stops the app and starts a new one on the same address, over the same
+// database, as a redeploy does: nothing but Postgres (and Valkey, if it is the cache)
+// carries over. It returns once /readyz says 200.
+func (r *rig) restart() {
+	r.t.Helper()
+	if err := r.stop(); err != nil {
+		r.t.Fatalf("stopping the app: %v", err)
+	}
+	r.app.Close()
+	ln, err := net.Listen("tcp", strings.TrimPrefix(r.URL, "http://"))
+	if err != nil {
+		r.t.Fatalf("listen again on %s: %v", r.URL, err)
+	}
+	opts := append([]Option{
+		WithLLM(r.setup.llm), WithGoogle(r.setup.google), WithListener(ln),
+		WithDrainTimeout(0), WithPollInterval(time.Hour),
+	}, r.setup.opts...)
+	a, err := New(r.t.Context(), r.setup.cfg, opts...)
+	if err != nil {
+		_ = ln.Close()
+		r.t.Fatalf("New after the restart: %v", err)
+	}
+	r.t.Cleanup(a.Close)
+	r.ln, r.app, r.once, r.runErr = ln, a, sync.Once{}, nil
+	r.start()
 }
 
 // start runs the app and returns once /readyz says 200.
@@ -672,6 +725,9 @@ func (s *session) chat() chatv1connect.ChatServiceClient {
 func (s *session) files() filesv1connect.FileServiceClient {
 	return filesv1connect.NewFileServiceClient(s.http, s.base())
 }
+func (s *session) calendar() calendarv1connect.CalendarServiceClient {
+	return calendarv1connect.NewCalendarServiceClient(s.http, s.base())
+}
 func (s *session) meetings() meetingsv1connect.MeetingServiceClient {
 	return meetingsv1connect.NewMeetingServiceClient(s.http, s.base())
 }
@@ -780,10 +836,13 @@ func (w *socket) next(d time.Duration) (*realtimev1.ServerEvent, error) {
 	return &ev, nil
 }
 
-// followers is how many connections follow topic in Valkey, which is how a test knows a
-// Subscribe frame, which has no acknowledgement, has taken effect.
+// followers is how many connections follow topic in the cache, which is how a test knows
+// a Subscribe frame, which has no acknowledgement, has taken effect.
 func (r *rig) followers(topic string) int64 {
 	r.t.Helper()
+	if mem, ok := r.app.cache.(*cache.Memory); ok {
+		return int64(mem.Subscribers(topic))
+	}
 	m, err := r.rdb.PubSubShardNumSub(r.t.Context(), topic).Result()
 	if err != nil {
 		r.t.Fatalf("SHARDNUMSUB %s: %v", topic, err)
@@ -1135,7 +1194,11 @@ func (w *socket) nextMessage(d time.Duration) (*chatv1.Message, error) {
 }
 
 func TestApp_EndToEnd_SendMessageReachesSubscribedMemberOverWebSocket(t *testing.T) {
-	r := newRig(t)
+	eachCache(t, testEndToEndSendMessageReachesSubscribedMemberOverWebSocket)
+}
+
+func testEndToEndSendMessageReachesSubscribedMemberOverWebSocket(t *testing.T, mods ...func(*setup)) {
+	r := newRig(t, mods...)
 	r.start()
 
 	// Signed in through the fake provider: the login route, its authorization endpoint
@@ -1148,7 +1211,7 @@ func TestApp_EndToEnd_SendMessageReachesSubscribedMemberOverWebSocket(t *testing
 	danWS.subscribe(channel) // dan is in the workspace but not in the channel: refused
 	bobWS := bob.socket()
 	bobWS.subscribe(channel)
-	eventually(t, "bob's subscription to reach Valkey", func() bool { return r.followers("ch:"+channel) >= 1 })
+	eventually(t, "bob's subscription to reach the cache", func() bool { return r.followers("ch:"+channel) >= 1 })
 
 	sent := alice.send(channel, "hello bob, the plan is ready")
 
@@ -1187,6 +1250,10 @@ func TestApp_EveryMountedHandlerMapsASentinelToItsConnectCode(t *testing.T) {
 			_, err := alice.meetings().GetMeeting(ctx, connect.NewRequest(&meetingsv1.GetMeetingRequest{MeetingId: missing}))
 			return err
 		},
+		"/kiwi.calendar.v1.CalendarService/": func() error {
+			_, err := alice.calendar().CancelEvent(ctx, connect.NewRequest(&calendarv1.CancelEventRequest{EventId: missing}))
+			return err
+		},
 		"/kiwi.tasks.v1.TaskService/": func() error {
 			_, err := alice.tasks().DiscardDraft(ctx, connect.NewRequest(&tasksv1.DiscardDraftRequest{Id: missing}))
 			return err
@@ -1201,7 +1268,7 @@ func TestApp_EveryMountedHandlerMapsASentinelToItsConnectCode(t *testing.T) {
 		},
 	}
 
-	// Every handler the app mounts is covered, so a seventh one without a case fails here.
+	// Every handler the app mounts is covered, so an eighth one without a case fails here.
 	var mounted []string
 	for _, h := range r.app.handlers {
 		path, _ := h.Build()

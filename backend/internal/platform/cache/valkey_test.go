@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -70,13 +69,13 @@ func bootValkey() (string, error) {
 }
 
 // open returns a Cache on the shared Valkey, closed when the test ends.
-func open(t *testing.T, opt Options) *Cache {
+func open(t *testing.T, opt Options) *Valkey {
 	t.Helper()
 	valkeyOnce.Do(func() { valkeyURL, valkeyErr = bootValkey() })
 	if valkeyErr != nil {
 		t.Fatalf("valkey: %v", valkeyErr)
 	}
-	c, err := Open(context.Background(), valkeyURL, opt)
+	c, err := OpenValkey(context.Background(), valkeyURL, opt)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -88,7 +87,7 @@ func open(t *testing.T, opt Options) *Cache {
 	return c
 }
 
-func pttl(t *testing.T, c *Cache, key string) time.Duration {
+func pttl(t *testing.T, c *Valkey, key string) time.Duration {
 	t.Helper()
 	d, err := c.rdb.PTTL(context.Background(), key).Result()
 	if err != nil {
@@ -97,7 +96,7 @@ func pttl(t *testing.T, c *Cache, key string) time.Duration {
 	return d
 }
 
-func exists(t *testing.T, c *Cache, key string) bool {
+func exists(t *testing.T, c *Valkey, key string) bool {
 	t.Helper()
 	n, err := c.rdb.Exists(context.Background(), key).Result()
 	if err != nil {
@@ -135,7 +134,7 @@ func TestOpen_DefaultsAndFailures(t *testing.T) {
 	}
 
 	// A URL that does not parse never echoes its password.
-	_, err := Open(context.Background(), "redis://:hunter2@host:notaport/0", Options{})
+	_, err := OpenValkey(context.Background(), "redis://:hunter2@host:notaport/0", Options{})
 	if err == nil {
 		t.Fatal("Open accepted a malformed URL")
 	}
@@ -146,7 +145,7 @@ func TestOpen_DefaultsAndFailures(t *testing.T) {
 	// A failed ping surfaces as an Open error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Open(ctx, valkeyURL, Options{}); err == nil {
+	if _, err := OpenValkey(ctx, valkeyURL, Options{}); err == nil {
 		t.Error("Open succeeded with a cancelled context")
 	}
 }
@@ -384,7 +383,7 @@ func sorted(ids []uuid.UUID) []string {
 	return out
 }
 
-func requireMembers(t *testing.T, c *Cache, channel uuid.UUID, wantHit bool, want ...uuid.UUID) {
+func requireMembers(t *testing.T, c *Valkey, channel uuid.UUID, wantHit bool, want ...uuid.UUID) {
 	t.Helper()
 	ids, hit, err := c.Members(context.Background(), channel)
 	if err != nil {
@@ -500,123 +499,11 @@ func TestMembersCache_StaleFillIsRefusedAfterInvalidate(t *testing.T) {
 	requireMembers(t, c, other, false)
 }
 
-func recv(t *testing.T, sub *Subscription) Frame {
-	t.Helper()
-	select {
-	case f, ok := <-sub.C():
-		if !ok {
-			t.Fatal("subscription channel closed while waiting for a frame")
-		}
-		return f
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for a frame")
-		return Frame{}
-	}
-}
-
-func shardSubscribers(t *testing.T, c *Cache, topic string) int64 {
+func shardSubscribers(t *testing.T, c *Valkey, topic string) int64 {
 	t.Helper()
 	m, err := c.rdb.PubSubShardNumSub(context.Background(), topic).Result()
 	if err != nil {
 		t.Fatalf("PUBSUB SHARDNUMSUB: %v", err)
 	}
 	return m[topic]
-}
-
-func TestSharded_SPublishReachesSubscriber_AndRemoveStops(t *testing.T) {
-	c := open(t, Options{})
-	ctx := context.Background()
-	topicA, topicB := "ch:"+uuid.NewString(), "u:"+uuid.NewString()
-
-	sub, err := c.SSubscribe(ctx)
-	if err != nil {
-		t.Fatalf("SSubscribe: %v", err)
-	}
-	defer sub.Close()
-	sub.Add(topicA, topicB)
-	sub.Add() // no topics: a no-op, never "subscribe to everything"
-	for _, topic := range []string{topicA, topicB} {
-		eventually(t, "SSUBSCRIBE "+topic, func() bool { return shardSubscribers(t, c, topic) == 1 })
-	}
-
-	// Frames are binary protobuf: bytes that are not valid UTF-8 survive.
-	payload := []byte{0x00, 0xff, 0xfe, '\n', 0x08, 0x96, 0x01}
-	if err := c.SPublish(ctx, topicA, payload); err != nil {
-		t.Fatalf("SPublish: %v", err)
-	}
-	if f := recv(t, sub); f.Topic != topicA || !bytes.Equal(f.Data, payload) {
-		t.Fatalf("frame = %q %x, want %q %x", f.Topic, f.Data, topicA, payload)
-	}
-
-	// After Remove a later publish is not received. A is published before B on
-	// one connection, so had A been delivered it would arrive ahead of B.
-	sub.Remove(topicA)
-	sub.Remove() // no topics: a no-op, never "unsubscribe from everything"
-	eventually(t, "SUNSUBSCRIBE "+topicA, func() bool { return shardSubscribers(t, c, topicA) == 0 })
-	if err := c.SPublish(ctx, topicA, []byte("late")); err != nil {
-		t.Fatalf("SPublish: %v", err)
-	}
-	if err := c.SPublish(ctx, topicB, []byte("marker")); err != nil {
-		t.Fatalf("SPublish: %v", err)
-	}
-	if f := recv(t, sub); f.Topic != topicB || string(f.Data) != "marker" {
-		t.Fatalf("after Remove got frame %q %q, want only %q %q", f.Topic, f.Data, topicB, "marker")
-	}
-	select {
-	case f := <-sub.C():
-		t.Fatalf("unexpected extra frame %q %q", f.Topic, f.Data)
-	default:
-	}
-
-	// Close releases the server-side subscription, ends C, and may be repeated.
-	sub.Close()
-	sub.Close()
-	eventually(t, "SUNSUBSCRIBE on Close", func() bool { return shardSubscribers(t, c, topicB) == 0 })
-	deadline := time.After(10 * time.Second)
-	for more := true; more; {
-		select {
-		case _, more = <-sub.C():
-		case <-deadline:
-			t.Fatal("C was not closed by Close")
-		}
-	}
-}
-
-func TestSharded_SubscriptionsAreIndependent(t *testing.T) {
-	c := open(t, Options{})
-	ctx := context.Background()
-	shared, onlyOne := "ch:"+uuid.NewString(), "ch:"+uuid.NewString()
-
-	s1, err := c.SSubscribe(ctx)
-	if err != nil {
-		t.Fatalf("SSubscribe: %v", err)
-	}
-	defer s1.Close()
-	s2, err := c.SSubscribe(ctx)
-	if err != nil {
-		t.Fatalf("SSubscribe: %v", err)
-	}
-	defer s2.Close()
-	s1.Add(shared, onlyOne)
-	s2.Add(shared)
-	eventually(t, "both subscribed", func() bool {
-		return shardSubscribers(t, c, shared) == 2 && shardSubscribers(t, c, onlyOne) == 1
-	})
-
-	if err := c.SPublish(ctx, onlyOne, []byte("one")); err != nil {
-		t.Fatalf("SPublish: %v", err)
-	}
-	if err := c.SPublish(ctx, shared, []byte("all")); err != nil {
-		t.Fatalf("SPublish: %v", err)
-	}
-	if f := recv(t, s1); f.Topic != onlyOne {
-		t.Errorf("s1 first frame on %q, want %q", f.Topic, onlyOne)
-	}
-	if f := recv(t, s1); f.Topic != shared {
-		t.Errorf("s1 second frame on %q, want %q", f.Topic, shared)
-	}
-	// s2 never subscribed to onlyOne: its first frame is the shared one.
-	if f := recv(t, s2); f.Topic != shared || string(f.Data) != "all" {
-		t.Errorf("s2 frame = %q %q, want %q %q", f.Topic, f.Data, shared, "all")
-	}
 }

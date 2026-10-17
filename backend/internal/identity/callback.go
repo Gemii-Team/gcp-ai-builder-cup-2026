@@ -3,17 +3,21 @@ package identity
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/mail"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"kiwi/internal/identity/internal/store"
+	"kiwi/internal/platform/cache"
 	"kiwi/internal/platform/db"
 	"kiwi/internal/platform/errs"
 	"kiwi/internal/platform/oidc"
@@ -21,9 +25,14 @@ import (
 
 // This file is the identity domain's only db.System caller (see the allowlist in
 // platform/db). kiwi_system bypasses row-level security but holds just SELECT and
-// INSERT on identity.workspaces and SELECT, INSERT and UPDATE on identity.users, so
-// nothing here can read or change another table. Everything that can run inside a
-// workspace does, as kiwi_app.
+// INSERT on identity.workspaces, SELECT, INSERT and UPDATE on identity.users and
+// SELECT, INSERT, UPDATE and DELETE on identity.sessions, so nothing here can read or
+// change another table. Everything that can run inside a workspace does, as kiwi_app.
+//
+// The session store (see Sessions below) is here and not in a file of its own because
+// of that rule: a session is found by its id alone, before any workspace is known, so
+// it can only be read as kiwi_system, and keeping every System caller of the domain in
+// one file keeps the allowlist at one line for it.
 
 // The codes of the sign-in page's error parameter.
 const (
@@ -422,4 +431,124 @@ func normalizeDomain(s string) string { return strings.ToLower(strings.TrimSpace
 func localPart(email string) string {
 	local, _, _ := strings.Cut(email, "@")
 	return local
+}
+
+// Sessions is the Postgres implementation of cache.Sessions, for a deployment whose
+// cache is in the process and so cannot hold them (KIWI_CACHE_PROVIDER=memory): a
+// redeploy must not sign everyone out. It keeps the behaviour of the Valkey one: a
+// session lives for the sliding lifetime after its last read, never past the absolute
+// lifetime after its creation, and a read slides it.
+//
+// The row is keyed by the SHA-256 of the session id, never the id itself: the id is a
+// bearer credential, and a copy of the table or a read-only SQL injection must not be
+// able to sign anyone in. Every statement runs as kiwi_system, which is granted
+// SELECT, INSERT, UPDATE and DELETE on identity.sessions alone for this (migration
+// 0012); kiwi_app has nothing on the table.
+//
+// Expired rows are deleted by the next PutSession, that is by the next sign-in, which
+// is the only thing that adds rows; reads ignore them in the meantime. So the table
+// never holds more than the live sessions plus those that expired since the last
+// sign-in, and no background job exists to start, stop or monitor.
+type Sessions struct {
+	db  *db.DB
+	opt cache.Options
+	now func() time.Time // replaced by tests to move time
+}
+
+var _ cache.Sessions = (*Sessions)(nil)
+
+// NewSessions returns the Postgres session store. Only the session fields of opt apply;
+// a zero one takes its default.
+func NewSessions(d *db.DB, opt cache.Options) *Sessions {
+	return &Sessions{db: d, opt: opt.WithDefaults(), now: time.Now}
+}
+
+// sessionHash is the key of a session id: the SHA-256 of the id as it is in the cookie.
+func sessionHash(id string) []byte {
+	sum := sha256.Sum256([]byte(id))
+	return sum[:]
+}
+
+func timestamptz(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
+
+// wellFormedSessionID reports whether id has the shape newSessionID produces: 256 random
+// bits as 43 unpadded base64url characters.
+func wellFormedSessionID(id string) bool {
+	if len(id) != 43 {
+		return false
+	}
+	for i := range len(id) {
+		switch c := id[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// PutSession implements cache.Sessions.
+func (s *Sessions) PutSession(ctx context.Context, id string, rec cache.SessionRecord) error {
+	if id == "" {
+		return fmt.Errorf("identity: empty session id: %w", errs.ErrInvalid)
+	}
+	now := s.now()
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = now
+	}
+	rec.CreatedAt = rec.CreatedAt.UTC()
+	ttl := min(s.opt.SessionSliding, s.opt.SessionAbsolute-now.Sub(rec.CreatedAt))
+	if ttl < time.Millisecond {
+		return fmt.Errorf("identity: session created at %s is past its absolute lifetime: %w", rec.CreatedAt.Format(time.RFC3339), errs.ErrInvalid)
+	}
+	err := s.db.System(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		q := store.New(tx)
+		if err := q.DeleteExpiredSessions(ctx, timestamptz(now)); err != nil {
+			return fmt.Errorf("delete expired sessions: %w", err)
+		}
+		return q.UpsertSession(ctx, store.UpsertSessionParams{
+			IDHash: sessionHash(id), UserID: rec.UserID, WorkspaceID: rec.WorkspaceID,
+			CreatedAt: timestamptz(rec.CreatedAt), ExpiresAt: timestamptz(now.Add(ttl)),
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("identity: put session: %w", err)
+	}
+	return nil
+}
+
+// GetSession implements cache.Sessions: one UPDATE that matches a live session and slides it.
+func (s *Sessions) GetSession(ctx context.Context, id string) (cache.SessionRecord, error) {
+	// A cookie that cannot be a session id of ours (newSessionID makes 43 base64url
+	// characters) is answered without a transaction on the system pool, which anyone
+	// can send. It does not stop a flood of well-formed junk, only the cheap kind.
+	if !wellFormedSessionID(id) {
+		return cache.SessionRecord{}, fmt.Errorf("identity: session: %w", errs.ErrNotFound)
+	}
+	var row store.TouchSessionRow
+	err := s.db.System(ctx, func(ctx context.Context, tx pgx.Tx) (err error) {
+		row, err = store.New(tx).TouchSession(ctx, store.TouchSessionParams{
+			Now: timestamptz(s.now()), SlidingSecs: s.opt.SessionSliding.Seconds(),
+			AbsoluteSecs: s.opt.SessionAbsolute.Seconds(), IDHash: sessionHash(id),
+		})
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cache.SessionRecord{}, fmt.Errorf("identity: session: %w", errs.ErrNotFound)
+	}
+	if err != nil {
+		return cache.SessionRecord{}, fmt.Errorf("identity: get session: %w", err)
+	}
+	return cache.SessionRecord{UserID: row.UserID, WorkspaceID: row.WorkspaceID, CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// DeleteSession implements cache.Sessions; deleting an absent session is not an error.
+func (s *Sessions) DeleteSession(ctx context.Context, id string) error {
+	err := s.db.System(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return store.New(tx).DeleteSession(ctx, sessionHash(id))
+	})
+	if err != nil {
+		return fmt.Errorf("identity: delete session: %w", err)
+	}
+	return nil
 }

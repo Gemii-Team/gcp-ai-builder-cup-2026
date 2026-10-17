@@ -1,0 +1,20 @@
+# One rule: everything goes to kiwi, which serves the web app on / and the API and the
+# WebSocket on /api and /ws on the same port. A list of rules is replaced as a whole by
+# this patch, so the /api, /ws and / -> web rules of ../local/ingress.yaml are gone.
+# The Ingress mockoidc (/mockoidc -> the mock) is the one of ../mockauth, untouched:
+# Traefik takes the most specific prefix.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kiwi
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kiwi
+                port:
+                  number: 8080

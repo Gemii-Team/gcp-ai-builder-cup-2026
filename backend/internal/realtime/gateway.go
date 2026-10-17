@@ -54,7 +54,7 @@ const closeGrace = 500 * time.Millisecond
 type Deps struct {
 	// Cache redeems tickets, carries the pub/sub subscription and holds the
 	// members:{channel} sets.
-	Cache *cache.Cache
+	Cache cache.Cache
 	// Membership decides which channels a user may follow. chat.NewMembership is
 	// the production implementation.
 	Membership authz.Membership
@@ -81,7 +81,7 @@ type Options struct {
 
 // Gateway serves GET /ws?ticket=… as an http.Handler.
 type Gateway struct {
-	cache   *cache.Cache
+	cache   cache.Cache
 	members authz.Membership
 	opt     Options
 	hub     *hub

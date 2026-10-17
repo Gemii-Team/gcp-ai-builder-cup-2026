@@ -45,7 +45,7 @@ var calUser = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 func TestScheduleCalendarEvent_AttachesMeetAndReturnsTheLink(t *testing.T) {
 	var gotPath, gotConfVersion string
 	var gotBody struct {
-		Summary        string `json:"summary"`
+		Summary        string                    `json:"summary"`
 		Start          struct{ DateTime string } `json:"start"`
 		End            struct{ DateTime string } `json:"end"`
 		ConferenceData struct {
