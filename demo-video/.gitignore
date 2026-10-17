@@ -1,9 +1,0 @@
-node_modules/
-out/
-public/frames/
-public/scenes.json
-auth/
-*.log
-# HeyGen clips (public/voice/<scene>.mp4 and friends): large, and yours to keep or not
-public/voice/*
-!public/voice/.gitkeep
