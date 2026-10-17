@@ -66,7 +66,10 @@ test('flow 1: sign in and chat', { tag: '@phone' }, async ({ browser }, testInfo
   const notice = carolPage.getByRole('alert');
   await expect(notice).toContainText(account('carol').email);
   await expect(notice).toContainText('has not been invited to this workspace');
+  // Signed out, the start page is the landing page, and its Sign in leads back to sign-in.
   await carolPage.goto('/');
+  await expect(carolPage).toHaveURL(/\/welcome$/);
+  await carolPage.getByRole('link', { name: 'Sign in', exact: true }).click();
   await expect(carolPage).toHaveURL(/\/signin/);
   await expect(carolPage.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
   await carol.close();

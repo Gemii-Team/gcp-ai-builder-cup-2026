@@ -46,6 +46,7 @@ const (
 // when the two lists disagree: change them together.
 var spaNavigations = []*regexp.Regexp{
 	regexp.MustCompile(`^/$`),
+	regexp.MustCompile(`^/welcome$`),
 	regexp.MustCompile(`^/signin$`),
 	regexp.MustCompile(`^/c/[^/?#]+$`),
 	regexp.MustCompile(`^/board$`),

@@ -13,6 +13,7 @@
  */
 export const SPA_NAVIGATION_ALLOWLIST: RegExp[] = [
   /^\/(?:\?.*)?$/,
+  /^\/welcome(?:\?.*)?$/,
   /^\/signin(?:\?.*)?$/,
   /^\/c\/[^/?#]+(?:\?.*)?$/,
   /^\/board(?:\?.*)?$/,

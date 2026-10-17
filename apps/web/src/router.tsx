@@ -10,10 +10,12 @@ import { indexRoute } from './routes/index';
 import { meetingRoute } from './routes/meeting';
 import { meetingsRoute } from './routes/meetings';
 import { signinRoute } from './routes/signin';
+import { welcomeRoute } from './routes/welcome';
 
-// Every route added here is also added to the service worker's navigation allowlist (`pwaRoutes.ts`). `/signin` sits under
-// the root and the rest under the signed-in layout, whose `beforeLoad` is the session guard.
+// Every route added here is also added to the service worker's navigation allowlist (`pwaRoutes.ts`). `/welcome` and
+// `/signin` sit under the root and the rest under the signed-in layout, whose `beforeLoad` is the session guard.
 const routeTree = rootRoute.addChildren([
+  welcomeRoute,
   signinRoute,
   appRoute.addChildren([indexRoute, boardRoute, channelRoute, askRoute, calendarRoute, meetingsRoute, meetingRoute]),
 ]);

@@ -71,7 +71,7 @@ func TestSPANavigations_AgreeWithPwaRoutes(t *testing.T) {
 	// Paths and a query for each, as the service worker sees them (pathname plus search). None
 	// is a file of the fixture, so a 200 is the shell.
 	paths := []string{
-		"/", "/signin", "/signin/", "/Signin", "/signin.html", "/signin2",
+		"/", "/welcome", "/welcome/", "/welcomes", "/signin", "/signin/", "/Signin", "/signin.html", "/signin2",
 		"/c", "/c/", "/c/abc", "/c/3f2a9c-uuid", "/c/abc/def", "/c/abc/", "/cx/abc",
 		"/board", "/board/", "/boards", "/ask", "/ask/", "/asked", "/ask/more",
 		"/calendar", "/calendar/", "/calendars", "/meetings", "/meetings/", "/meetings/x",

@@ -1,0 +1,557 @@
+/*
+ * The landing page, /welcome: what K.I.W.I. is, before sign-in. Every colour, radius and type size is a theme token
+ * (`var(--color-*)`, `var(--radius-*)`); the page draws on the app's own Proof Slip vocabulary (slips, perforations, REF
+ * codes, the CONFIRMED seal) and keeps its rules: flat colour, no gradients, no shadows, Seal Green for what is
+ * confirmed and Draft Amber for what waits on a person.
+ *
+ * Every class starts with `lp-`: shell.css and channel.css name theirs short and app-wide and Vite ships all of them to
+ * every route, so a bare name would meet one of theirs. landing/css.test.ts pins the prefix.
+ */
+
+.lp-page {
+  --lp-max: 1160px;
+  --lp-pad: 28px;
+  min-height: 100dvh;
+  background: var(--color-counter-mint);
+  color: var(--color-ledger-ink);
+  font-family: var(--font-sans);
+}
+
+.lp-wrap {
+  width: 100%;
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: 0 var(--lp-pad);
+}
+
+/* ===== Top bar ===== */
+.lp-top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--color-counter-mint);
+  border-bottom: 1px solid var(--color-ledger-rule);
+}
+.lp-top-in {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 68px;
+}
+.lp-lock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+.lp-lock strong {
+  font-size: var(--text-wordmark);
+  font-weight: var(--text-wordmark--font-weight);
+  letter-spacing: var(--text-wordmark--letter-spacing);
+}
+.lp-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+.lp-nav a {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  color: var(--color-carbon-copy);
+  font-size: var(--text-label);
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s;
+}
+.lp-nav a:hover {
+  background: var(--color-counter-hover);
+  color: var(--color-ledger-ink);
+}
+.lp-top-acts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* ===== Hero ===== */
+.lp-hero {
+  padding: 72px 0 64px;
+}
+.lp-hero-in {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  align-items: center;
+  gap: 56px;
+}
+.lp-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border: 1px solid var(--color-chip-edge);
+  border-radius: 999px;
+  background: var(--color-chip-fill);
+  color: var(--color-citation-teal);
+  font-size: var(--text-meta);
+  font-weight: 600;
+}
+.lp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-presence-green);
+}
+.lp-h1 {
+  margin: 22px 0 0;
+  color: var(--color-primary);
+  font-size: clamp(36px, 4.6vw, 56px);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.lp-lede {
+  max-width: 56ch;
+  margin: 22px 0 0;
+  color: var(--color-carbon-copy);
+  font-size: 18px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+.lp-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 34px;
+}
+.lp-cta {
+  height: 48px;
+  padding: 0 22px;
+  gap: 10px;
+  font-size: 16px;
+}
+.lp-ghost {
+  display: inline-flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 18px;
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--color-perforation-sage);
+  text-underline-offset: 5px;
+}
+.lp-ghost:hover {
+  text-decoration-color: var(--color-primary);
+}
+
+/* The product preview: three slips, overlapped like papers on a desk. */
+.lp-preview {
+  position: relative;
+  display: grid;
+  gap: 16px;
+}
+.lp-slip {
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-tile);
+  background: var(--color-slip-paper);
+  padding: 18px 20px;
+  animation: lp-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.lp-slip-minutes {
+  animation-delay: 0.05s;
+}
+.lp-slip-draft {
+  margin-left: 48px;
+  border-color: var(--color-draft-amber);
+  background: var(--color-draft-wash);
+  animation-delay: 0.2s;
+}
+.lp-slip-answer {
+  margin-right: 40px;
+  animation-delay: 0.35s;
+}
+.lp-slip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.lp-slip-head strong {
+  font-size: var(--text-item-title);
+  font-weight: var(--text-item-title--font-weight);
+}
+.lp-slip-ic {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--color-citation-wash);
+  color: var(--color-citation-teal);
+}
+.lp-ref {
+  margin-left: auto;
+  color: var(--color-carbon-copy);
+  font-family: var(--font-mono);
+  font-size: var(--text-reference);
+  font-weight: var(--text-reference--font-weight);
+  letter-spacing: var(--text-reference--letter-spacing);
+  white-space: nowrap;
+}
+.lp-slip-body {
+  margin: 10px 0 0;
+  color: var(--color-ledger-ink);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+.lp-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-perforation-sage);
+  font-size: var(--text-meta);
+}
+.lp-row-k {
+  color: var(--color-citation-teal);
+  font-weight: 600;
+}
+.lp-row-q {
+  color: var(--color-draft-ink);
+}
+.lp-time,
+.lp-cite {
+  color: var(--color-citation-teal);
+  font-family: var(--font-mono);
+  font-size: var(--text-citation);
+  font-weight: var(--text-citation--font-weight);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.lp-cite {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--color-citation-wash);
+  text-decoration: none;
+}
+.lp-tag {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--color-draft-amber);
+  border-radius: 999px;
+  background: var(--color-draft-tag);
+  color: var(--color-draft-ink);
+  font-size: var(--text-citation);
+  font-weight: 600;
+}
+.lp-perf {
+  margin: 14px -20px 12px;
+  border-top: 1px dashed var(--color-draft-amber);
+}
+.lp-slip-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lp-slip-foot .lp-ref {
+  margin-left: 0;
+}
+.lp-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: var(--text-label);
+  font-weight: 600;
+}
+
+/* ===== Trust strip ===== */
+.lp-trust {
+  border-top: 1px solid var(--color-ledger-rule);
+  border-bottom: 1px solid var(--color-ledger-rule);
+  background: var(--color-slip-paper);
+}
+.lp-trust-in {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 14px 28px;
+  margin: 0 auto;
+  padding-top: 20px;
+  padding-bottom: 20px;
+  list-style: none;
+}
+.lp-trust-in li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-primary);
+  font-size: var(--text-label);
+  font-weight: 600;
+}
+.lp-trust-in svg {
+  color: var(--color-seal-green);
+}
+
+/* ===== Sections ===== */
+.lp-section {
+  padding: 96px 0;
+}
+.lp-head {
+  max-width: 680px;
+  margin: 0 auto 48px;
+  text-align: center;
+}
+.lp-h2 {
+  margin: 0;
+  color: var(--color-primary);
+  font-size: clamp(28px, 3.2vw, 38px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+.lp-sub {
+  margin: 14px 0 0;
+  color: var(--color-carbon-copy);
+  font-size: 17px;
+  line-height: 1.6;
+}
+.lp-h3 {
+  margin: 0;
+  color: var(--color-ledger-ink);
+  font-size: var(--text-title);
+  font-weight: var(--text-title--font-weight);
+  line-height: 1.4;
+}
+.lp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 26px;
+  border: 1px solid var(--color-slip-edge);
+  border-radius: var(--radius-tile);
+  background: var(--color-slip-paper);
+  transition: border-color 0.2s;
+}
+.lp-card:hover {
+  border-color: var(--color-control-line);
+}
+.lp-card p,
+.lp-step p {
+  margin: 0;
+  color: var(--color-carbon-copy);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+.lp-card-ic {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+/* ===== How it works ===== */
+.lp-how {
+  border-top: 1px solid var(--color-ledger-rule);
+  background: var(--color-slip-paper);
+}
+.lp-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+.lp-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 28px;
+  border-left: 1px dashed var(--color-perforation-sage);
+}
+.lp-step:first-child {
+  border-left: 0;
+}
+.lp-step-n {
+  color: var(--color-perforation-sage);
+  font-family: var(--font-mono);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+}
+.lp-principle {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  max-width: 820px;
+  margin: 64px auto 0;
+  padding: 28px 32px;
+  border: 1px solid var(--color-seal-green);
+  border-radius: var(--radius-tile);
+  background: var(--color-seal-wash);
+}
+.lp-seal {
+  flex: none;
+}
+.lp-principle-t {
+  margin: 0 0 6px;
+  color: var(--color-seal-ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.lp-principle p:not(.lp-principle-t) {
+  margin: 0;
+  color: var(--color-carbon-copy);
+}
+
+/* ===== Final call ===== */
+.lp-final {
+  padding: 72px 0;
+  background: var(--color-primary);
+}
+.lp-final-in {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 36px;
+}
+.lp-on-ink {
+  color: var(--color-on-primary);
+}
+.lp-final-sub {
+  margin: 10px 0 0;
+  color: var(--color-rail-sage);
+  font-size: 17px;
+}
+.lp-final-cta {
+  height: 48px;
+  padding: 0 22px;
+  gap: 10px;
+  font-size: 16px;
+  white-space: nowrap;
+}
+/* The kiwi is drawn in Ink Teal, so on the Ink Teal band it stands on a paper tile, like the app's own mark. */
+.lp-final-kiwi {
+  display: grid;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  border-radius: 28px;
+  background: var(--color-slip-paper);
+}
+
+/* ===== Footer ===== */
+.lp-foot {
+  padding: 22px 0;
+  background: var(--color-primary-press);
+  color: var(--color-rail-sage);
+  font-size: var(--text-meta);
+}
+.lp-foot-in {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 24px;
+}
+
+@keyframes lp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-slip {
+    animation: none;
+  }
+}
+
+/* ===== Narrow screens ===== */
+@media (max-width: 960px) {
+  .lp-hero {
+    padding: 48px 0;
+  }
+  .lp-hero-in {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+  .lp-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .lp-final-in {
+    grid-template-columns: 1fr;
+    justify-items: start;
+    gap: 24px;
+  }
+}
+@media (max-width: 680px) {
+  .lp-page {
+    --lp-pad: 16px;
+  }
+  .lp-nav {
+    display: none;
+  }
+  .lp-section {
+    padding: 64px 0;
+  }
+  .lp-grid,
+  .lp-steps {
+    grid-template-columns: 1fr;
+  }
+  .lp-step {
+    padding: 20px 0;
+    border-left: 0;
+    border-top: 1px dashed var(--color-perforation-sage);
+  }
+  .lp-step:first-child {
+    border-top: 0;
+  }
+  .lp-slip-draft,
+  .lp-slip-answer {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .lp-row {
+    grid-template-columns: 1fr auto;
+  }
+  .lp-row-v {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .lp-principle {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

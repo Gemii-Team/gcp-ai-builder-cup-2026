@@ -111,11 +111,12 @@ describe('Guard', () => {
     expect(router.state.location.pathname).toBe('/');
   });
 
-  it('guards every route of the signed-in layout, the start page included', async () => {
+  it('guards every route of the signed-in layout, the start page included: a signed-out visit to / lands on the landing page', async () => {
     const { router } = renderRoutes('/', signedOutApi());
 
-    expect(await screen.findByRole('heading', HEADING)).toBeInTheDocument();
-    expect(router.state.location.search).toEqual({ return_to: '/' });
+    expect(await screen.findByRole('heading', { level: 1, name: 'The AI workspace where conversations become decisions.' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/welcome');
+    expect(screen.queryByRole('navigation', RAIL)).not.toBeInTheDocument();
   });
 
   it('lets a person sign in when the server cannot answer GetMe: the page shows, the button works', async () => {

@@ -11,7 +11,7 @@ export type SessionContext = { queryClient: QueryClient; api: Api };
 
 /**
  * The `beforeLoad` of the signed-in layout, so every route under it is guarded. A person the server does not know goes to
- * sign-in, which brings them back to this page (path and query) afterwards; any other failure is thrown to the layout's
+ * the landing page from `/`, and from any other page to sign-in, which brings them back to it (path and query) afterwards; any other failure is thrown to the layout's
  * error state, which offers Retry. A session already in the cache is not asked again on every navigation: a call that is
  * refused later sends the person to sign-in (`useSession`). The redirect throws itself (`throw: true`): it is a router
  * signal, not an `Error`.
@@ -22,6 +22,11 @@ export async function requireSession({ context, location }: { context: SessionCo
   } catch (error) {
     if (!hasCode(error, Code.Unauthenticated)) {
       throw error;
+    }
+    // The bare start page is where a newcomer arrives: they see what K.I.W.I. is first. Any deeper link goes straight to
+    // sign-in and comes back to that page.
+    if (location.pathname === '/') {
+      redirect({ href: '/welcome', throw: true });
     }
     redirect({ href: signInHref(location.href), throw: true });
   }
