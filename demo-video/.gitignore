@@ -1,0 +1,6 @@
+node_modules/
+out/
+public/frames/
+public/scenes.json
+auth/
+*.log

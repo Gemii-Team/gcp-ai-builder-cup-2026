@@ -1,0 +1,23 @@
+# A LiteLLM gateway beside the k3d cluster that serves Gemini for the demo recording. It joins the cluster's Docker
+# network (k3d-kiwi), so the pods reach it as http://kiwi-demo-litellm:4000 (no /v1 suffix in KIWI_LLM_BASE_URL).
+#   cp .env.example .env   # then put your Gemini API key in .env (never committed)
+#   docker compose up -d
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: kiwi-demo-litellm
+    ports:
+      # Loopback only: Docker Desktop lets the k3d cluster reach it through host.k3d.internal all the same.
+      - "127.0.0.1:4000:4000"
+    env_file:
+      - .env
+    volumes:
+      - ./litellm.config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
+    networks:
+      - k3d-kiwi
+
+networks:
+  k3d-kiwi:
+    external: true
