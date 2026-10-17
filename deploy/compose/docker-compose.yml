@@ -1,0 +1,150 @@
+# K.I.W.I. on one server with Docker Compose: the minimal profile of the app (one kiwi process serves the web app, the
+# API and the WebSocket, cache in memory), Postgres with pgvector, Ollama for embeddings, Gemini through LiteLLM and the
+# mock sign-in provider. Every value comes from the environment (.env.example lists them).
+#
+# On Dokploy: deploy this file from the repository; in Domains, route PUBLIC_HOST path /mockoidc to service mockoidc
+# port 8090 and path / to service kiwi port 8080 (HTTPS on). On a plain server: `docker compose --profile standalone up`
+# adds Caddy for HTTPS on ports 80 and 443.
+name: kiwi
+
+x-kiwi-env: &kiwi-env
+  KIWI_ENV: local
+  KIWI_ROLES: api,realtime,worker,agents
+  KIWI_PUBLIC_URL: "${PUBLIC_URL:?set PUBLIC_URL such as https://kiwi.example.com}"
+  KIWI_BUS_PROVIDER: memory
+  KIWI_CACHE_PROVIDER: memory
+  KIWI_WEB_DIR: /app/web
+  KIWI_BLOB_URL: file:///data/blobs
+  KIWI_DB_APP_MAX_CONNS: "6"
+  KIWI_DB_SYSTEM_MAX_CONNS: "6"
+  KIWI_DB_MAX_CONN_IDLE: 5m
+  KIWI_LLM_PROVIDER: openai
+  KIWI_LLM_BASE_URL: http://litellm:4000
+  KIWI_LLM_API_KEY: ${LITELLM_MASTER_KEY:?}
+  KIWI_LLM_MODEL_FLASH: gemini-flash
+  KIWI_LLM_MODEL_PRO: gemini-pro
+  KIWI_ASR_MODEL: whisper-1
+  KIWI_EMBED_BASE_URL: http://ollama:11434
+  KIWI_EMBED_MODEL: embeddinggemma
+  KIWI_OIDC_ISSUER: ${PUBLIC_URL}/mockoidc
+  KIWI_OIDC_INTERNAL_URL: http://mockoidc:8090/mockoidc
+  KIWI_OAUTH_CLIENT_ID: mock
+  KIWI_OAUTH_CLIENT_SECRET: mock
+  KIWI_WORKSPACE_NAME: Demo workspace
+  KIWI_WORKSPACE_DOMAIN: demo.example
+  KIWI_TOKEN_ENC_KEY: ${KIWI_TOKEN_ENC_KEY:?}
+  KIWI_BLOB_SIGNING_KEY: ${KIWI_BLOB_SIGNING_KEY:?}
+  KIWI_DATABASE_URL: postgres://kiwi_app:${KIWI_DB_PASSWORD}@postgres:5432/kiwi?sslmode=disable
+  KIWI_DATABASE_SYSTEM_URL: postgres://kiwi_system:${KIWI_DB_PASSWORD}@postgres:5432/kiwi?sslmode=disable
+  KIWI_MIGRATE_DATABASE_URL: postgres://kiwi_owner:${KIWI_DB_PASSWORD}@postgres:5432/kiwi?sslmode=disable
+
+services:
+  postgres:
+    build: ./postgres
+    image: kiwi-postgres:local
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?}
+      KIWI_DB_PASSWORD: "${KIWI_DB_PASSWORD:?use hex only, it goes into connection URLs unescaped}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Healthy only once the bootstrap has made the kiwi database and its owner, not merely when the server answers.
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$KIWI_DB_PASSWORD\" psql -h 127.0.0.1 -U kiwi_owner -d kiwi -tAc 'select 1' | grep -q 1"]
+      interval: 3s
+      retries: 60
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.40.3
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama:0.40.3
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; exec ollama pull embeddinggemma"]
+    depends_on: [ollama]
+    restart: "no"
+
+  litellm:
+    build: ./litellm
+    image: kiwi-litellm:local
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    # LiteLLM takes about half a minute to load its router; kiwi waits for it so the first model call does not fail.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)\""]
+      interval: 5s
+      retries: 40
+      start_period: 20s
+    restart: unless-stopped
+
+  mockoidc:
+    build: { context: ../../backend, target: tools }
+    image: kiwi-tools:local
+    command: ["/app/mockoidc"]
+    environment:
+      KIWI_ENV: local
+      MOCKOIDC_ISSUER: ${PUBLIC_URL}/mockoidc
+      MOCKOIDC_HD: demo.example
+      MOCKOIDC_USERS: alice@demo.example,bob@demo.example:no-hd
+      MOCKOIDC_OUTSIDER: carol@elsewhere.example
+      MOCKOIDC_REDIRECT_URIS: ${PUBLIC_URL}/api/auth/callback
+    restart: unless-stopped
+
+  # kiwi runs as 65532 with /data on a volume: this gives the volume to that user once.
+  data-perms:
+    image: busybox:1.37
+    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 65532:65532 /data"]
+    volumes:
+      - kiwidata:/data
+    restart: "no"
+
+  migrate:
+    build: { context: ../.., dockerfile: deploy/minimal/Dockerfile }
+    image: kiwi-app:local
+    command: ["migrate"]
+    environment:
+      KIWI_MIGRATE_DATABASE_URL: postgres://kiwi_owner:${KIWI_DB_PASSWORD}@postgres:5432/kiwi?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  kiwi:
+    image: kiwi-app:local
+    environment: *kiwi-env
+    volumes:
+      - kiwidata:/data
+    tmpfs: [/tmp]
+    read_only: true
+    expose: ["8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      data-perms: { condition: service_completed_successfully }
+      mockoidc: { condition: service_started }
+      litellm: { condition: service_healthy }
+      ollama: { condition: service_started }
+    restart: unless-stopped
+
+  caddy:
+    profiles: [standalone]
+    build: ./caddy
+    image: kiwi-caddy:local
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
+    environment:
+      SITE: ${PUBLIC_HOST:?}
+    volumes:
+      - caddydata:/data
+    depends_on: [kiwi]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama:
+  kiwidata:
+  caddydata:

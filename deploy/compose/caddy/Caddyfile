@@ -1,0 +1,10 @@
+# HTTPS for the one public name; Caddy gets and renews the certificate itself.
+{$SITE} {
+	encode zstd gzip
+	handle /mockoidc/* {
+		reverse_proxy mockoidc:8090
+	}
+	handle {
+		reverse_proxy kiwi:8080
+	}
+}
