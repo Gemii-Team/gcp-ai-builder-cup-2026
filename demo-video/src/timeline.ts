@@ -18,6 +18,10 @@ export type VoiceClips = Record<string, VoiceClip>;
 const MIN_CARD_SECONDS = 6;
 /** A breath after a voice clip ends, before the next scene starts. */
 const AFTER_VOICE = 0.5;
+/** How much faster than real time a recording may play when its scene needs to be shorter (typing, waiting). */
+const MAX_SPEED = 1.5;
+/** The mocked call never gets shorter than this: its transcript needs the time to unfold. */
+const MIN_CALL_SECONDS = 13;
 
 /**
  * Lays the scenes out one after another and lands on TARGET_SECONDS.
@@ -33,20 +37,22 @@ export function buildTimeline(scenes: readonly SceneRec[] | null, fps: number, v
   const planned: Planned[] = [];
   for (const spec of SCENES) {
     let rec: Segment['rec'] = null;
-    let floor = spec.kind === 'screen' ? 1 : MIN_CARD_SECONDS;
+    let floor = spec.kind === 'screen' ? 1 : spec.kind === 'call' ? MIN_CALL_SECONDS : MIN_CARD_SECONDS;
     if (spec.kind === 'screen' && scenes !== null) {
       const scene = scenes.find((candidate) => candidate.id === spec.id);
       if (scene === undefined) {
         continue;
       }
       rec = { t0: scene.t0, t1: scene.t1 };
-      floor = Math.max(floor, scene.t1 - scene.t0 + 0.4);
+      floor = Math.max(floor, (scene.t1 - scene.t0) / MAX_SPEED + 0.4);
     }
     const clip = voice[spec.id];
     if (clip !== undefined) {
       floor = Math.max(floor, clip.seconds + AFTER_VOICE);
     }
-    planned.push({ spec, rec, floor, preferred: Math.max(spec.seconds, floor) });
+    // A recording prefers to play at real speed; only when time is short does it give up the difference down to its floor.
+    const natural = rec === null ? 0 : rec.t1 - rec.t0 + 0.4;
+    planned.push({ spec, rec, floor, preferred: Math.max(spec.seconds, floor, natural) });
   }
 
   // The close card absorbs the difference; the scenes before it give back spare time if they leave it too little.
@@ -93,7 +99,8 @@ export function recordingTime(segment: Segment, localFrame: number, fps: number)
   const t = localFrame / fps;
   const slot = segment.duration / fps;
   const length = segment.rec.t1 - segment.rec.t0;
-  if (segment.hold === 'stretch') {
+  if (segment.hold === 'stretch' || slot < length) {
+    // Slower or faster than real time, so the whole recording fits its slot.
     // Slower than real time, so the moments of the recording line up with the narration across the whole scene.
     return segment.rec.t0 + Math.min(length, (t * length) / slot);
   }
@@ -114,7 +121,8 @@ export function frameOfRecording(segment: Segment, t: number, fps: number): numb
   const slot = segment.duration / fps;
   const length = segment.rec.t1 - segment.rec.t0;
   const into = t - segment.rec.t0;
-  const seconds = segment.hold === 'stretch' ? (into * slot) / Math.max(length, 1e-6) : segment.hold === 'start' ? into + Math.max(0, slot - length) : into;
+  const scaled = segment.hold === 'stretch' || slot < length;
+  const seconds = scaled ? (into * slot) / Math.max(length, 1e-6) : segment.hold === 'start' ? into + Math.max(0, slot - length) : into;
   const frame = Math.round(seconds * fps);
   return frame < segment.duration ? frame : null;
 }

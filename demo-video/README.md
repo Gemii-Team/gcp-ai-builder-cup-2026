@@ -35,6 +35,18 @@ are the real app; Ask is answered live by Gemini through `llm/`.
 The soundtrack (`public/audio`, made by `python3 -I scripts/make-audio.py`) is a quiet music bed with clicks, whooshes and
 chimes, kept low under the voice. Render without it with `--props='{"sound":false}'`.
 
+## Voice-over without HeyGen
+
+```bash
+npm run voice                        # one clip per scene into public/voice/*.wav (Gemini TTS, the Mac's voice as fallback)
+npm run render
+```
+
+It reads the narration from `src/script.ts`, voices it with Gemini text-to-speech (key in `llm/.env`; it moves to the next
+TTS model when one is out of free quota) and falls back to the Mac's Samantha voice. Existing clips are kept; `npm run voice
+-- --force` redoes them, `-- --voice Kore` picks another Gemini voice. Recorded scenes may play up to 1.5x faster so the
+voiced video still lands on 4:00.
+
 ## Adding the HeyGen voice
 
 Make one clip per scene from NARRATION.md and drop it in `public/voice/` named after the scene (`title.mp4`,
